@@ -32,6 +32,8 @@
 (require 'url)
 (require 'json)
 (require 'cl-macs)
+(require 'comint)
+
 
 (defgroup ai-chat nil
   "Use AI or AGI API."
@@ -56,8 +58,19 @@
 (defcustom ai--chat--buffer-context-size 1
   ""
   :type 'integer
-  :group 'ai-chat
-  )
+  :group 'ai-chat)
+
+(defcustom ai-chat-query-backend 'ai--openai--chat-async-send-context
+  ""
+  :type 'symbol
+  :group 'ai-chat)
+
+(defcustom ai-chat-query-backends
+  '(("OpenAI ChatGPT" . ai--openai--chat-async-send-context))
+  "An association list that maps query backend to function."
+  :type '(alist :key-type (string :tag "Backend name")
+                :value-type (symbol :tag "Backend function"))
+  :group 'ai-chat)
 
 (defvar ai--chat-header
   "*** Welcome to AI BUDDY chat ***  \n"
@@ -81,16 +94,18 @@ Objective-C -> (\"objective-c\" . \"objc\")"
 
 
 (defvaralias 'inferior-ai-chat-mode-map 'ai--chat-map)
+
 (defvar ai--chat-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "<C-return>") 'ai--chat-return)
+    (define-key map (kbd "<C-return>") 'ai--chat--return)
     (define-key map (kbd "C-c C-c") 'ai--chat--interrupt)
     (define-key map (kbd "RET") 'ai--chat--insert-new-line)
     (define-key map (kbd "C-c e") 'ai--chat--clear-buffer)
+    (define-key map (kbd "C-c +") 'ai--chat--increase-context-size)
+    (define-key map (kbd "C-c -") 'ai--chat--decrease-context-size)
+    (define-key map (kbd "C-c b") 'ai-change-chat-backend)
     map)
   "Keymap for AI Chat mode.")
-
-
 
 
 (defconst ai--chat--font-lock-keywords
@@ -188,6 +203,20 @@ Objective-C -> (\"objective-c\" . \"objc\")"
     (setq-local ai--chat--buffer-history '()))
   )
 
+(defun ai--chat--increase-context-size ()
+  ""
+  (interactive)
+  (setq ai--chat--buffer-context-size (+ ai--chat--buffer-context-size 1))
+  (message (format "Current context size: %d" ai--chat--buffer-context-size))
+  )
+
+(defun ai--chat--decrease-context-size ()
+  ""
+  (interactive)
+  (if (> ai--chat--buffer-context-size 1)
+      ((setq ai--chat--buffer-context-size (- ai--chat--buffer-context-size 1))))
+  (message (format "Current context size: %d" ai--chat--buffer-context-size)))
+
 
 (defun ai--chat--input-sender (_proc input)
   ""
@@ -274,7 +303,7 @@ Uses the interface provided by `comint-mode'"
   )
 
 
-(defun ai--chat-return ()
+(defun ai--chat--return ()
   "RET binding."
   (interactive)
   (ai--chat--send-input))
@@ -302,11 +331,10 @@ Uses the interface provided by `comint-mode'"
                                 (propertize "<ai--chat-end-of-prompt>"
                                             'invisible (not ai--chat--show-invisible-markers)))
 
-
           (setq-local ai--chat--buffer-history (append ai--chat--buffer-history `((("role" . "user") ("content" . ,input-string)))))
 
           (condition-case processing-error
-              (ai--openai--async-chat-request (ai--chat--get-buffer-history-context) 'ai--chat--request-callback)
+              (funcall ai-chat-query-backend (ai--chat--get-buffer-history-context) 'ai--chat--request-callback)
             (error (error  "Evaluation input error: %s" (error-message-string processing-error) )))
           )
          ))
@@ -314,28 +342,22 @@ Uses the interface provided by `comint-mode'"
     )
   )
 
-(defun ai--chat--request-callback (response)
+(defun ai--chat--request-callback (messages)
   ""
-  (condition-case processing-error
-
-      (let* ((response-content (ai--openai--extract-response-or-error response))
-             (message (ai--openai--chat-get-choice response-content))
-             (content (cdr (assoc 'content message)))
-             (role (cdr (assoc 'role message))))
+  (condition-case-unless-debug processing-error
+      (let* ((message (elt messages 0))
+             (content (cdr (assoc "content" message)))
+             (role (cdr (assoc "role" message))))
 
         (setq ai--chat--busy nil)
         (with-current-buffer (ai--chat--buffer)
-          (setq-local ai--chat--buffer-history (append ai--chat--buffer-history `((("role" . ,role) ("content" . ,content)))))
-          )
-        (ai--chat--write-reply content)
-        )
+          (setq-local ai--chat--buffer-history (append ai--chat--buffer-history `(,message)))
+        (ai--chat--write-reply content)))
     (error  (progn
               (setq ai--chat--busy nil)
               (ai--chat--write-reply "EMACS: Invalid request. Please, try again.")
               (error "Process chat request error: %s" (error-message-string processing-error))
-              ))
-    )
-  )
+              ))))
 
 (defun ai--chat--buffer ()
   ""
@@ -376,6 +398,14 @@ Uses the interface provided by `comint-mode'"
                                   "")
                                 "\n\n"
                                 ai--chat--prompt-internal)))
+
+(defun ai-change-chat-backend ()
+  ""
+  (interactive)
+  (let* ((value (completing-read ai--change-backend-prompt (mapcar #'car ai-chat-query-backends))))
+    (setq ai-chat-query-backend (cdr (assoc value ai-chat-query-backends)))
+    (message (format "AI chat query backend changed to \"%s\"" value))))
+
 
 (provide 'ai-chat)
 

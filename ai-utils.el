@@ -36,6 +36,12 @@
   :group 'ai
   )
 
+(defcustom ai-debug-mode nil
+  "Enable or disable AI debug mode."
+  :type 'boolean
+  :group 'ai
+  )
+
 (defvar ai--log-buffer-name "*AI-request-log*")
 
 (defun ai--write-log (output)
@@ -86,6 +92,14 @@
     )
   )
 
+
+(defun ai--get-query-content ()
+  ""
+  (if (region-active-p)
+      (ai--get-region-content)
+    (ai--get-buffer-content)))
+
+
 (defun ai--get-region-content ()
   ""
   (buffer-substring-no-properties (region-beginning) (region-end))
@@ -123,21 +137,69 @@
   (ai--get-buffer-content-before-point)
   )
 
-
-(defun ai--replace-region (text)
+(cl-defun ai--replace-or-insert (text &optional beginning end)
   ""
-  (when (region-active-p)
+  (cond
+   ((region-active-p)
     (delete-region (region-beginning) (region-end))
-    (insert text)))
+    (insert text))
+   ((and beginning end)
+    (delete-region beginning end)
+    (insert text)
+    )
+   (t (insert text)))
+  )
+
+(cl-defun ai--replace-region (text &optional beginning end)
+  ""
+  (cond
+   ((region-active-p)
+    (delete-region (region-beginning) (region-end))
+    (insert text))
+   ((and beginning end)
+    (delete-region (region-beginning) (region-end))
+    (insert text)
+    )
+   (t (insert text))))
 
 (defun ai--replace-tag-in-region (tag text)
   ""
   (when (region-active-p)
     (let ((region-content (ai--get-region-content)))
       (delete-region (region-beginning) (region-end))
-      (insert (replace-regexp-in-string tag text region-content)))
-    )
-  )
+      (insert (replace-regexp-in-string tag text region-content)))))
+
+
+(cl-defun ai--with-current-buffer-callback (callback &optional (trim t))
+  ""
+  (let ((buffer (current-buffer)))
+    (lambda (content)
+      (with-current-buffer buffer
+        (if trim
+            (funcall callback (string-trim-left content))
+          (funcall callback content))))))
+
+
+(cl-defun ai--replace-region-or-insert-in-current-buffer (&optional (trim t))
+  ""
+  (let ((buffer (current-buffer))
+        (beginning (if (region-active-p) (region-beginning) (point)))
+        (end (if (region-active-p) (region-end) (point))))
+    (lambda (content)
+      (with-current-buffer buffer
+        (if trim
+            (funcall 'ai--replace-or-insert (string-trim-left content) beginning end)
+          (funcall 'ai--replace-or-insert content beginning end))))))
+
+
+(cl-defun ai--with-current-buffer-tagged-callback (callback tag &optional (trim t))
+  ""
+  (let ((buffer (current-buffer)))
+    (lambda (content)
+      (with-current-buffer buffer
+        (if trim
+            (funcall callback tag (string-trim-left content))
+          (funcall callback tag content))))))
 
 
 (defun ai--get-random-uuid ()

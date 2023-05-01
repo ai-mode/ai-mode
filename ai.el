@@ -34,6 +34,7 @@
 ;; - Code improvement
 ;; - Code elaboration
 ;; - Code explanation
+;; - Chatting with AI
 
 ;;; Code:
 
@@ -82,37 +83,72 @@
   :type 'string
   :group 'ai-mode)
 
+(defcustom ai--change-backend-prompt "Select query backend: "
+  ""
+  :type 'string
+  :group 'ai-mode)
+
 
 (defcustom ai--doc-tag "{{__ai_doc__}}"
   ""
   :type 'string
   :group 'ai-mode)
 
-(defcustom ai-explanation-backend 'ai--openai--chat-explain-text
+(defcustom ai-async-query-backend 'ai--openai--chat-async-send-query
   ""
   :group 'ai-mode
   )
 
-(defcustom ai-async-query-backend 'ai--openai--chat-explain-text
+(defcustom ai-async-query-backends
+  '(("OpenAI ChatGPT" . ai--openai--chat-async-send-query)
+    ("OpenAI completions" . ai--openai--completions-async-send-query))
+  "An association list that maps query backend to function."
+  :type '(alist :key-type (string :tag "Backend name")
+                :value-type (symbol :tag "Backend function"))
+  :group 'ai-mode)
+
+
+
+(defcustom ai--human-lang "english"
   ""
+  :type 'string
   :group 'ai-mode
   )
+
+(defcustom ai--query-type-map
+  '(("spellcheck" . "Spellcheck this text: %s")
+    ("elaborate" . "Elaborate on this text: %s")
+    ("explain" . "Explain the following: %s")
+    ("document" . "Please add the documentation for the following code: %s")
+    ("fix" . "Here is a bug in the following function, please help me fix it: %s")
+    ("improve" . "Improve and extend the following code: %s")
+    ("optimize" . "Optimize the following code: %s")
+    ("refactor" . "Refactor the following code: %s"))
+  "An association list that maps query types to their corresponding format strings."
+  :type '(alist :key-type (string :tag "Query Type")
+                :value-type (string :tag "Format String"))
+  :group 'ai-mode)
 
 
 (defvar ai-command-map
   (let ((keymap (make-sparse-keymap)))
 
-    (define-key keymap (kbd "<tab>") 'ai-insert-doc-marker)
+    (define-key keymap (kbd "m") 'ai-insert-doc-marker)
     (define-key keymap (kbd "o") 'ai-optimize-code-region)
     (define-key keymap (kbd "i") 'ai-improve-code-region)
     (define-key keymap (kbd "f") 'ai-fix-code-region)
     (define-key keymap (kbd "d") 'ai-document-code-region)
     (define-key keymap (kbd "e b") 'ai-elaborate-code-region)
-    (define-key keymap (kbd "s") 'ai-spellcheck-code-region)
+    (define-key keymap (kbd "s c") 'ai-spellcheck-code-region)
     (define-key keymap (kbd "e") 'ai-explain-code-region)
+    (define-key keymap (kbd "c c") 'ai-chat)
+    (define-key keymap (kbd "b q") 'ai-change-query-backend)
+    (define-key keymap (kbd "b c") 'ai-change-completion-backend)
+    (define-key keymap (kbd "p") 'ai-perform)
+    (define-key keymap (kbd "s") 'ai-show)
     keymap)
-  "Keymap for ai commands."
-  )
+  "Keymap for ai commands.")
+
 
 (defvar ai-mode-map
   (let ((keymap (make-sparse-keymap)))
@@ -120,8 +156,7 @@
       (define-key keymap (kbd ai-keymap-prefix) ai-command-map)
       )
     keymap)
-  "Keymap used by `ai-mode`."
-  )
+  "Keymap used by `ai-mode`.")
 
 
 (define-minor-mode ai-mode
@@ -135,9 +170,7 @@
         (add-hook 'post-command-hook 'ai-mode-post-command)
         )
     (remove-hook 'pre-command-hook 'ai-mode-pre-command)
-    (remove-hook 'post-command-hook 'ai-mode-post-command)
-    )
-  )
+    (remove-hook 'post-command-hook 'ai-mode-post-command)))
 
 
 (define-globalized-minor-mode global-ai-mode ai-mode ai-mode-on
@@ -146,6 +179,7 @@
 
 (defun ai-mode-on ()
   ""
+  (interactive)
   (ai-mode 1)
   )
 
@@ -169,65 +203,46 @@
   (interactive)
 
   (with-current-buffer (current-buffer)
-    (insert ai--doc-tag)
-  ) )
+    (insert ai--doc-tag)))
 
-(cl-defun ai--with-current-buffer-callback (callback &optional (trim t))
-  ""
-  (let ((buffer (current-buffer)))
-    (lambda (success-response)
-      (with-current-buffer buffer
-        (if trim
-            (funcall callback (string-trim-left (ai--openai--completions-get-choice success-response)))
-          (funcall callback (ai--openai--completions-get-choice success-response))
-          )
-        ))))
-
-(cl-defun ai--with-current-buffer-tagged-callback (callback tag &optional (trim t))
-  ""
-  (let ((buffer (current-buffer)))
-    (lambda (success-response)
-      (with-current-buffer buffer
-        (if trim
-            (funcall callback tag (string-trim-left (ai--openai--completions-get-choice success-response)))
-          (funcall callback tag (ai--openai--completions-get-choice success-response)))))))
 
 (defun ai-optimize-code-region ()
   ""
   (interactive)
-  (ai--openai--completions-async-query-by-type "optimize" (ai--get-region-content) (ai--with-current-buffer-callback 'ai--replace-region))
+  (ai--async-query-by-type "optimize" (ai--get-region-content) (ai--replace-region-or-insert-in-current-buffer))
   )
 
 (defun ai-improve-code-region ()
   ""
   (interactive)
-  (ai--openai--completions-async-query-by-type "improve" (ai--get-region-content) (ai--with-current-buffer-callback 'ai--replace-region))
+  (ai--async-query-by-type "improve" (ai--get-region-content) (ai--replace-region-or-insert-in-current-buffer))
   )
 
 (defun ai-fix-code-region ()
   ""
   (interactive)
-  (ai--openai--completions-async-query-by-type "fix" (ai--get-region-content) (ai--with-current-buffer-callback 'ai--replace-region))
+  (ai--async-query-by-type "fix" (ai--get-region-content) (ai--replace-region-or-insert-in-current-buffer))
   )
 
 (defun ai-document-code-region ()
   ""
   (interactive)
-  (ai--openai--completions-async-query-by-type "document" (ai--get-region-content) ( ai--with-current-buffer-tagged-callback ai--doc-tag 'ai--replace-tag-in-region))
+  (ai--async-query-by-type
+   "document"
+   (ai--get-region-content)
+   (ai--with-current-buffer-callback (lambda (text) (ai--replace-tag-in-region ai--doc-tag text))))
   )
 
 (defun ai-elaborate-code-region ()
   ""
   (interactive)
-  (ai--async-query-by-type "elaborate" (ai--get-region-content) (ai--with-current-buffer-callback 'ai--replace-region))
-  ;; (ai--openai--completions-async-query-by-type "elaborate" (ai--get-region-content) (ai--with-current-buffer-callback 'ai--replace-region))
+  (ai--async-query-by-type "elaborate" (ai--get-region-content) (ai--replace-region-or-insert-in-current-buffer))
   )
 
 (defun ai-spellcheck-code-region ()
   ""
   (interactive)
-  (ai--async-query-by-type "spellcheck" (ai--get-region-content) (ai--with-current-buffer-callback 'ai--replace-region))
-  ;; (ai--openai--completions-async-query-by-type "spellcheck" (ai--get-region-content) (ai--with-current-buffer-callback 'ai--replace-region))
+  (ai--async-query-by-type "spellcheck" (ai--get-region-content) (ai--replace-region-or-insert-in-current-buffer))
   )
 
 
@@ -237,7 +252,7 @@
   (ai--explain-text (ai--get-region-content))
   )
 
-(defun ai--get-explain-help-buffer ()
+(defun ai--get-explaination-help-buffer ()
   ""
   (get-buffer-create ai--explain-buffer-name)
 )
@@ -251,10 +266,10 @@
 (defun ai--show-explain-help-buffer (text)
   ""
   (save-excursion
-    (with-help-window (ai--get-explain-help-buffer)
+    (with-help-window (ai--get-explaination-help-buffer)
       (princ "AI Explanation below: \n")
       (princ text)
-      (switch-to-buffer (ai--get-explain-help-buffer))
+      (switch-to-buffer (ai--get-explaination-help-buffer))
       )
     )
   )
@@ -264,33 +279,52 @@
   (save-excursion
     (with-help-window (ai--get-response-buffer)
       (princ text)
-      (switch-to-buffer (ai--get-response-buffer))
-      )
-    )
-  )
+      (switch-to-buffer (ai--get-response-buffer)))))
 
 (defun ai--explain-text (text)
   ""
-  (funcall ai-explanation-backend text 'ai--show-explain-help-buffer))
+  (ai--async-query-by-type "explain" text 'ai--show-explain-help-buffer))
 
 
 (defun ai--async-query-by-type (query-type input callback)
   ""
-  (let ((query  (if-let (format-string (cdr (assoc query-type ai--openai--query-type-map)))
-                    (format format-string query)
-                  (format "%s\n\n%s" query-type query))))
-    (funcall ai-async-query-backend query callback)
-    )
-  )
+  (let ((query (ai--format-query query-type input)))
+    (funcall ai-async-query-backend query callback)))
+
+
+(defun ai--format-query (query-type query)
+  ""
+  (if-let (format-string (cdr (assoc query-type ai--query-type-map)))
+      (format format-string query)
+    (format "%s\n\n%s" query-type query)))
+
+
+(defun ai--get-query-type ()
+  ""
+  (interactive)
+  (completing-read ai--query-type-prompt (mapcar #'car ai--query-type-map)))
 
 
 (defun ai-show ()
   ""
   (interactive)
-  (ai--region-or-buffer-query-by-type
-   (lambda (success-response)
-     (ai--show-response-buffer (ai--openai--completions-get-choice success-response)))))
+  (ai--async-query-by-type (ai--get-query-type) (ai--get-region-content) 'ai--show-response-buffe))
 
+
+(defun ai-perform ()
+  ""
+  (interactive)
+  (if (region-active-p)
+      (ai--async-query-by-type (ai--get-query-type) (ai--get-region-content) (ai--replace-region-or-insert-in-current-buffer))
+    (message "You must select region for this command")))
+
+
+(defun ai-change-query-backend ()
+  ""
+  (interactive)
+  (let* ((value (completing-read ai--change-backend-prompt (mapcar #'car ai-async-query-backends))))
+    (setq ai-async-query-backend (cdr (assoc value ai-async-query-backends)))
+    (message (format "AI query backend is changed to \"%s\"" value))))
 
 (provide 'ai)
 

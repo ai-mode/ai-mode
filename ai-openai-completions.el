@@ -31,8 +31,8 @@
 
 (require 'ai-utils)
 (require 'ai-openai)
+(require 'map)
 
-(defvar ai--openai--completions-url "https://api.openai.com/v1/completions")
 (defcustom ai--openai--completions-model-version "text-davinci-003"
   "The used OpenAI model.
 
@@ -43,144 +43,116 @@ https://platform.openai.com/docs/models/model-endpoint-compatibility."
   :group 'ai-openai)
 
 
-(cl-defun ai--openai--completions-async-request (input callback &optional
+(defvar ai--openai--completions-url "https://api.openai.com/v1/completions")
+
+
+(cl-defun ai--openai--completions-async-request (input callback &key
                                                        (api-url ai--openai--completions-url)
                                                        (model ai--openai--completions-model-version)
                                                        (temperature ai--openai--model-temperature)
                                                        (max-tokens ai--openai--default-max-tokens)
                                                        (timeout ai--openai-request-timeout)
-                                                       )
-  ""
-
-  (when (null ai--openai--api-key)
-    (error "OpenAI API key is not set"))
-
-  (let* ((request-data (encode-coding-string (json-encode `(("model" . ,model)
-                                                            ("prompt" . ,input)
-                                                            ("temperature" . ,temperature)
-                                                            ("max_tokens" . ,max-tokens)))
-                                             'utf-8
-                                             ))
-
-         (headers  `(("Content-Type" . "application/json")
-                     ("Authorization" . ,(format "Bearer %s" ai--openai--api-key))))
-         )
-
-    (ai--openai-async-request api-url "POST" request-data headers callback timeout)
-    )
-  )
-
-
-(cl-defun ai--openai--completions-sync-request (input &optional
-                                               (api-url ai--openai--completions-url)
-                                               (model ai--openai--completions-model-version)
-                                               (temperature ai--openai--model-temperature)
-                                               (max-tokens ai--openai--default-max-tokens)
-                                               (timeout ai--openai-request-timeout)
-                                               )
+                                                       (extra-params nil))
   ""
   (when (null ai--openai--api-key)
     (error "OpenAI API key is not set"))
 
-  (let* ((request-data (encode-coding-string (json-encode `(("model" . ,model)
-                                                            ("prompt" . ,input)
-                                                            ("temperature" . ,temperature)
-                                                            ("max_tokens" . ,max-tokens)))
-                                             'utf-8
-                                             ))
+  (let* ((request-data `(("model" . ,model)
+                         ("prompt" . ,input)
+                         ("temperature" . ,temperature)
+                         ("max_tokens" . ,max-tokens)))
+         (encoded-request-data (encode-coding-string (json-encode request-data) 'utf-8))
+         (headers  `(("Content-Type" . "application/json")
+                     ("Authorization" . ,(format "Bearer %s" ai--openai--api-key)))))
+    (ai--openai-async-request api-url "POST" encoded-request-data headers callback :timeout timeout)))
+
+
+(cl-defun ai--openai--completions-sync-request (input &key
+                                                      (api-url ai--openai--completions-url)
+                                                      (model ai--openai--completions-model-version)
+                                                      (temperature ai--openai--model-temperature)
+                                                      (max-tokens ai--openai--default-max-tokens)
+                                                      (timeout ai--openai-request-timeout)
+                                                      (extra-params nil))
+  ""
+  (when (null ai--openai--api-key)
+    (error "OpenAI API key is not set"))
+
+  (let* ((request-data `(("model" . ,model)
+                         ("prompt" . ,input)
+                         ("temperature" . ,temperature)
+                         ("max_tokens" . ,max-tokens)))
+         (encoded-request-data (encode-coding-string (json-encode request-data)
+                                                     'utf-8))
 
          (headers  `(("Content-Type" . "application/json")
-                     ("Authorization" . ,(format "Bearer %s" ai--openai--api-key))))
-         )
-
-    (condition-case processing-error
-        (let ((response (ai--openai-request api-url "POST" request-data headers timeout)))
-          (ai--openai--extract-response-or-error response)
-          )
+                     ("Authorization" . ,(format "Bearer %s" ai--openai--api-key)))))
+    (condition-case-unless-debug processing-error
+        (let ((response (ai--openai--sync-request api-url "POST" encoded-request-data headers :timeout timeout)))
+          (ai--openai--extract-response-or-error response))
       (error  (progn
-                (ai--log-and-error  (format "Process chat request error: %s" (error-message-string processing-error)))
-                ))
-      )
-    )
-  )
+                (ai--log-and-error  (format "Process chat request error: %s" (error-message-string processing-error))))))))
 
 
-(cl-defun ai--openai--completions-async-send-query (input callback)
+(cl-defun ai--openai--completions-async-send-query (input callback &key
+                                                          (api-url ai--openai--completions-url)
+                                                          (model ai--openai--completions-model-version)
+                                                          (temperature ai--openai--model-temperature)
+                                                          (max-tokens ai--openai--default-max-tokens)
+                                                          (timeout ai--openai-request-timeout)
+                                                          (extra-params nil))
   ""
   (ai--openai--completions-async-request
    input
    (lambda (response)
-     (progn
-       (funcall callback (ai--openai--extract-response-or-error response))))))
+     (let* ((success-response (ai--openai--extract-response-or-error response))
+            (choice  (ai--openai--completions-get-choice success-response)))
+       (funcall callback choice)))
+   :api-url api-url
+   :model model
+   :temperature temperature
+   :max-tokens max-tokens
+   :timeout timeout
+   :extra-params extra-params))
+
+
+(cl-defun ai--openai--completions-sync-send-query (input &key
+                                                         (api-url ai--openai--completions-url)
+                                                         (model ai--openai--completions-model-version)
+                                                         (temperature ai--openai--model-temperature)
+                                                         (max-tokens ai--openai--default-max-tokens)
+                                                         (timeout ai--openai-request-timeout)
+                                                         (extra-params nil))
+  ""
+  (let* ((message input)
+         (success-response (ai--openai--completions-sync-request input :api-url api-url :model model :temperature temperature :max-tokens max-tokens :timeout timeout :extra-params extra-params))
+         (content (ai--openai--completions-get-choice success-response)))
+    content))
 
 
 (cl-defun ai--openai--completions-get-choice (response &optional (choice-id 0))
   ""
 
   (if (> (length (ai--openai--get-response-choices response)) 0)
-      (let
-          ((choice (elt (ai--openai--get-response-choices response) choice-id)))
+      (let* ((choice (elt (ai--openai--get-response-choices response) choice-id)))
         (cdr (assoc 'text choice)))))
 
 
-(cl-defun ai--openai--completion-sync-query-by-type (query-type query)
+(defun ai--openai--completions-completion-backend (code callback)
   ""
-
-  (if-let (format-string (cdr (assoc query-type ai--openai--query-type-map)))
-      (ai--openai--completion-send-query (format format-string query))
-    (ai--openai--completion-send-query (format "%s\n\n%s" query-type query))))
-
-(cl-defun ai--openai--completions-async-query-by-type (query-type query callback)
-  ""
-
-  (if-let (format-string (cdr (assoc query-type ai--openai--query-type-map)))
-      (ai--openai--completions-async-send-query (format format-string query) callback)
-    (ai--openai--completions-async-send-query (format "%s\n\n%s" query-type query) callback)))
-
-(cl-defun ai--openai--completion-send-query (input)
-  ""
-  (let* ((response (ai--openai--completions-sync-request input)))
-    (if (> (length (ai--openai--get-response-choices response)) 0)
-        (ai--openai--completions-get-choice response))))
-
-
-(cl-defun ai--openai--completion-query-region ()
-  ""
-  (if (use-region-p)
-      (let* ((query (ai--get-region-content)))
-        (ai--openai--completion-send-query query))))
-
-(defun ai--openapi--region-or-buffer-query-by-type (callback)
-  ""
-  (interactive)
-
-  (let* ((query-type (completing-read ai--query-type-prompt (mapcar #'car ai--openai--query-type-map))))
-    (if (region-active-p)
-        (ai--openai--completions-async-query-by-type query-type (ai--get-region-content) callback)
-      (ai--openai--completions-async-query-by-type (ai--get-buffer-content) callback))))
-
-
-(defun ai--openai--completions-explain-text (text callback)
-  ""
-  (ai--openai--completions-async-query-by-type
-   "explain"
-   text
-   (lambda (success-response)
-     (funcall callback (ai--openai--completions-get-choice success-response)))))
-
-
-(defun ai--openai--completion-backend (code callback)
-  ""
-  (ai--openai--completions-async-send-query
+  (ai--openai--completions-async-request
    code
-   (lambda (success-response)
-     (progn
-       (funcall callback (ai--openai--completion-choices-to-candidates (ai--openai--get-response-choices success-response)))))))
+   (lambda (response)
+     (let* ((success-response (ai--openai--extract-response-or-error response))
+            (choices  (ai--openai--get-response-choices success-response))
+            (candidates (ai--openai--completion-choices-to-candidates choices)))
+       (funcall callback candidates)))))
 
 
 (defun ai--openai--completion-choices-to-candidates (choices)
-  "Convert completion result choices into internal candidates"
+  "Convert completion result CHOICES into internal candidates."
   (mapcar (lambda (item) (cdr (assoc 'text item))) choices))
+
 
 
 (provide 'ai-openai-completions)

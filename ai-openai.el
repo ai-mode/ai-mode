@@ -64,36 +64,14 @@
   )
 
 
-(defcustom ai--openai--human-lang "english"
-  ""
-  :type 'string
-  :group 'ai-openai
-  )
-
-
 (defcustom ai--openai-request-timeout 60
   ""
   :type '(choice integer (const nil))
   :group 'ai-openai)
 
 
-(defcustom ai--openai--query-type-map
-  '(("spellcheck" . "Spellcheck this text: %s")
-    ("elaborate" . "Elaborate on this text: %s")
-    ("explain" . "Explain the following: %s")
-    ("document" . "Please add the documentation for the following code: %s")
-    ("fix" . "Here is a bug in the following function, please help me fix it: %s")
-    ("improve" . "Improve and extend the following code: %s")
-    ("optimize" . "Optimize the following code: %s")
-    ("refactor" . "Refactor the following code: %s")
-    )
-  "An association list that maps query types to their corresponding format strings."
-  :type '(alist :key-type (string :tag "Query Type")
-                :value-type (string :tag "Format String"))
-  :group 'ai-openai)
 
-
-(cl-defun ai--openai-async-request (api-url method body headers callback &optional (timeout ai--openai-request-timeout))
+(cl-defun ai--openai-async-request (api-url method body headers callback &key (timeout ai--openai-request-timeout))
   ""
   (let* (
 
@@ -126,14 +104,18 @@
                                  (ai--log-and-error (format "Error while parsing response body: %s" (error-message-string request-error)))
                                  )))
                       ))
-                  nil nil timeout)
-    )
-  )
+                  nil nil timeout)))
 
 
-(cl-defun ai--openai--sync-request (api-url method body headers &optional (timeout ai--openai-request-timeout))
-  ""
+(cl-defun ai--openai--sync-request (api-url method body headers &key (timeout ai--openai-request-timeout))
+  "Performing a synchronous request to the OpenAI API.
+Return response content or raise an error.
 
+API-URL is a full API address.
+METHOD is a request method.
+BODY is request body content.
+HEADERS is a list of headers.
+"
   (let* (
          (request-id (ai--get-random-uuid))
          (url-request-method method)
@@ -150,38 +132,33 @@
           (goto-char url-http-end-of-headers)
 
           (condition-case request-error
-              (decode-coding-string (json-read) 'utf-8)
+              (let ((result (json-read-from-string
+                             (decode-coding-string
+                              (buffer-substring-no-properties url-http-end-of-headers (point-max))
+                              'utf-8))))
+                result)
             (error (progn
-                     (ai--log-and-error  "Error while parsing response body")
-                     )))
-          )
-      (ai--log-and-error (format "Failed to send request %s to %s" request-id api-url))
-      )))
-
+                     (ai--log-and-error  "Error while parsing response body")))))
+      (ai--log-and-error (format "Failed to send request %s to %s" request-id api-url)))))
 
 
 
 (defun ai--openai--get-response-choices (response)
-  ""
-  (cdr (assoc 'choices response))
-  )
+  "Extract choices list from RESPONSE."
+  (cdr (assoc 'choices response)))
 
 
 (cl-defun ai--openai--extract-response-or-error (response)
-  ""
+  "Extract success response from RESPONSE or raise error."
   (if (assoc 'error response)
       (error (cdr (assoc 'message (cdr (assoc 'error response)))))
     response))
 
 (cl-defun ai--openai--extract-error-messages (response)
-  ""
+  "Extract error message from RESPONSE."
   (if (assoc 'error response)
       (cdr (assoc 'message (cdr (assoc 'error response))))
     "unknown"))
-
-(defun ai--openai--query-type-format-string (query-type)
-  ""
-  (cdr (assoc query-type ai--openai--query-type-map)))
 
 
 (provide 'ai-openai)

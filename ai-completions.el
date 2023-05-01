@@ -30,20 +30,28 @@
 ;;; Code:
 (require 'ai-openai-completions)
 
-(defgroup ai-completion nil
+(defgroup ai-completions nil
   "AI code completion tool for Emacs."
   :group 'ai-mode
   )
 
-(defcustom ai--completion-backends '()
-  "A list of async completion backends."
-  :group 'ai-completion
+
+(defcustom ai-completion--context-size 1
+  "Number of lines for context"
+  :type 'integer
+  :group 'ai-chat)
+
+(defcustom ai--completion-current-backend 'ai--openai--completions-completion-backend
+  "Active completion backend."
+  :group 'ai-completions
   )
 
-(defcustom ai--completion-current-backend 'ai--openai--completion-backend
-  "Active completion backend."
-  :group 'ai-completion
-  )
+(defcustom ai--completion-backends
+  '(("OpenAI completions" . ai--openai--completions-completion-backend))
+  "An association list that maps query backend to function."
+  :type '(alist :key-type (string :tag "Backend name")
+                :value-type (symbol :tag "Backend function"))
+  :group 'ai-mode)
 
 
 (defcustom ai--completion-continue-commands '(not save-buffer save-some-buffers
@@ -58,8 +66,7 @@
                         (repeat :tag "Commands" function))
                  (repeat :tag "Commands" function)
                  )
-  :group 'ai-completion
-  )
+  :group 'ai-completions)
 
 
 (defcustom ai--completion-abort-commands '(not ai--completion-select-next-or-abort
@@ -78,8 +85,7 @@
                         (repeat :tag "Commands" function))
                  (repeat :tag "Commands" function)
                  )
-  :group 'ai-completion
-  )
+  :group 'ai-completions)
 
 
 (defvar-local ai--completion--candidates '())
@@ -134,7 +140,10 @@
 (defun ai--completion-begin ()
   ""
   (ai--completion-cancel)
-  (setq ai--completion-last-point (point)
+  (setq ai--completion-last-point
+        (if (region-active-p)
+            (region-end)
+          (point))
         ai--completion-active t)
 
   (condition-case-unless-debug err
@@ -143,26 +152,20 @@
              ;; (ai--completion-show-candidate)
              )
     (error (message (format "AI completion: An error occured in ai--completion-begin => %s" (error-message-string err)))
-           (ai--completion-cancel))
-    )
-  )
+           (ai--completion-cancel))))
 
 (defun ai--completion-continue ()
   ""
   (condition-case-unless-debug err
       (progn )
     (error (message (format "AI completion : An error occured in ai--completion-continue => %s" (error-message-string err)))
-           (ai--completion-cancel)
-           )
-    )
-  )
+           (ai--completion-cancel))))
 
 (defun ai--completion-show-candidate ()
   ""
   (ai--completion-update-preview)
   (ai--completion-prepare-keymap)
-  (ai--completion-activate-keymap)
-  )
+  (ai--completion-activate-keymap))
 
 (defun ai--completion-should-continue (command)
   ""
@@ -188,9 +191,13 @@
   ""
   (if (region-active-p)
       (ai--get-region-content)
-    (ai--get-buffer-content-before-point)
-    )
-  )
+
+    (let* ((current (point))
+           (min-point (- current ai-completion--context-size))
+           (context-beginning-point (line-beginning-position (* -1 ai-completion--context-size))))
+      (buffer-substring-no-properties context-beginning-point current))
+    ))
+
 
 (defun ai--completion-update-candidates (buffer)
   ""
@@ -200,10 +207,7 @@
              (progn
                (with-current-buffer buffer
                  (ai--completion-add-candidates candidates)
-                 (ai--completion-show-candidate)
-                 )
-               )))
-  )
+                 (ai--completion-show-candidate))))))
 
 (defun ai--completion-update-preview ()
   ""
@@ -327,7 +331,6 @@
   )
 
 
-
 (defun ai--completion-prepare-keymap ()
   ""
   (ai--completion-ensure-emulation-alist)
@@ -411,6 +414,15 @@
         (overlay-put ov (if ptf-workaround 'display 'after-string)
                      completion)
         (overlay-put ov 'window (selected-window))))))
+
+
+(defun ai-change-completion-backend ()
+  ""
+  (interactive)
+  (let* ((value (completing-read ai--change-backend-prompt (mapcar #'car ai--completion-backends))))
+    (setq ai--completion-current-backend (cdr (assoc value ai--completion-backends)))
+    (message (format "AI query backend changed to \"%s\"" value))))
+
 
 
 (provide 'ai-completions)
