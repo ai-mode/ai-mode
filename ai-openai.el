@@ -25,7 +25,7 @@
 
 ;;; Commentary:
 ;;
-
+;; The module includes common functions for working with the OpenAI API.
 
 ;;; Code:
 
@@ -38,21 +38,19 @@
   :link '(url-link :tag "Repository" "https://github.com/ai-mode/ai-mode"))
 
 (defcustom ai--openai--model-temperature 0.7
-  ""
-
+  "What sampling temperature to use, between 0 and 2."
   :type '(choice integer (const nil))
   :group 'ai-openai
   )
 
 (defcustom ai--openai--completion-choices 1
-  ""
-
+  "How many completions to generate for each prompt."
   :type '(choice integer (const nil))
   :group 'ai-openai
   )
 
 (defcustom ai--openai--default-max-tokens 1000
-  ""
+  "The maximum number of tokens to generate in the completion."
   :type '(choice integer (const nil))
   :group 'ai-openai
   )
@@ -65,14 +63,20 @@
 
 
 (defcustom ai--openai-request-timeout 60
-  ""
+  "OpenAI request timeout."
   :type '(choice integer (const nil))
   :group 'ai-openai)
 
 
 
 (cl-defun ai--openai-async-request (api-url method body headers callback &key (timeout ai--openai-request-timeout))
-  ""
+  "Prepare and execute async request to API-URL.
+
+METHOD is HTTP method.
+BODY is request body.
+HEADERS is request headers.
+CALLBACK is function called upon successful response.
+TIMEOUT is timeout for request execution."
   (let* (
 
          (request-id (ai--get-random-uuid))
@@ -115,7 +119,7 @@ API-URL is a full API address.
 METHOD is a request method.
 BODY is request body content.
 HEADERS is a list of headers.
-"
+TIMEOUT is timeout for request execution."
   (let* (
          (request-id (ai--get-random-uuid))
          (url-request-method method)

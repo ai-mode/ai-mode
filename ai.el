@@ -68,34 +68,36 @@
 (defcustom ai-keymap-prefix "C-c i"
   "AI mode keymap prefix."
   :group 'ai
-  :type 'string
-  )
+  :type 'string)
 
 (defvar url-http-end-of-headers)
 
-(defvar ai--explain-buffer-name "*AI explanation*")
-(defvar ai--response-buffer-name "*AI response*")
-(defvar ai--explain-text-orig-buffer nil
-  "")
+(defvar ai--explain-buffer-name "*AI explanation*"
+  "The name of the buffer for explanation."
+  )
+(defvar ai--response-buffer-name "*AI response*"
+  "Tha name of the buffer for AI response."
+  )
+
 
 (defcustom ai--query-type-prompt "Type of Query: "
-  ""
+  "Prompt for selecting the type of request."
   :type 'string
   :group 'ai-mode)
 
 (defcustom ai--change-backend-prompt "Select query backend: "
-  ""
+  "Prompt for selecting backend."
   :type 'string
   :group 'ai-mode)
 
 
 (defcustom ai--doc-tag "{{__ai_doc__}}"
-  ""
+  "Marker for documentation placement."
   :type 'string
   :group 'ai-mode)
 
 (defcustom ai-async-query-backend 'ai--openai--chat-async-send-query
-  ""
+  "The current backend used to execute requests asynchronously."
   :group 'ai-mode
   )
 
@@ -110,7 +112,7 @@
 
 
 (defcustom ai--human-lang "english"
-  ""
+  "The language in which AI provides answers."
   :type 'string
   :group 'ai-mode
   )
@@ -178,54 +180,53 @@
   )
 
 (defun ai-mode-on ()
-  ""
+  "Turn on AI mode."
   (interactive)
   (ai-mode 1)
   )
 
 (defun ai-mode-pre-command ()
-  ""
+  "AI mode pre command hook."
   )
 
 (defun ai-mode-post-command ()
-  ""
+  "AI mode post command hook."
   )
 
 
 (defun ai-complete-code-at-point ()
-  ""
+  "Start a completion at point."
   (interactive)
   (ai--completion-coordinator)
   )
 
 (defun ai-insert-doc-marker ()
-  ""
+  "Insert a marker for documentation placement."
   (interactive)
-
   (with-current-buffer (current-buffer)
     (insert ai--doc-tag)))
 
 
 (defun ai-optimize-code-region ()
-  ""
+  "Optimize code region and replace it."
   (interactive)
   (ai--async-query-by-type "optimize" (ai--get-region-content) (ai--replace-region-or-insert-in-current-buffer))
   )
 
 (defun ai-improve-code-region ()
-  ""
+  "Improve code region and replace it."
   (interactive)
   (ai--async-query-by-type "improve" (ai--get-region-content) (ai--replace-region-or-insert-in-current-buffer))
   )
 
 (defun ai-fix-code-region ()
-  ""
+  "Fix code region and replace it."
   (interactive)
   (ai--async-query-by-type "fix" (ai--get-region-content) (ai--replace-region-or-insert-in-current-buffer))
   )
 
 (defun ai-document-code-region ()
-  ""
+  "Document code region and replace doc market."
   (interactive)
   (ai--async-query-by-type
    "document"
@@ -234,37 +235,37 @@
   )
 
 (defun ai-elaborate-code-region ()
-  ""
+  "Elaborate code region and replace it."
   (interactive)
   (ai--async-query-by-type "elaborate" (ai--get-region-content) (ai--replace-region-or-insert-in-current-buffer))
   )
 
 (defun ai-spellcheck-code-region ()
-  ""
+  "Spellcheck code region and replace it."
   (interactive)
   (ai--async-query-by-type "spellcheck" (ai--get-region-content) (ai--replace-region-or-insert-in-current-buffer))
   )
 
 
 (defun ai-explain-code-region ()
-  ""
+  "Explain code region and show explaination in help buffer."
   (interactive)
-  (ai--explain-text (ai--get-region-content))
-  )
+  (ai--explain-text (ai--get-region-content)))
+
 
 (defun ai--get-explaination-help-buffer ()
-  ""
+  "Return explaination buffer."
   (get-buffer-create ai--explain-buffer-name)
-)
+  )
 
 (defun ai--get-response-buffer ()
-  ""
+  "Return buffer for AI responses."
   (get-buffer-create ai--response-buffer-name)
   )
 
 
 (defun ai--show-explain-help-buffer (text)
-  ""
+  "Write the TEXT into the explanation buffer and display it."
   (save-excursion
     (with-help-window (ai--get-explaination-help-buffer)
       (princ "AI Explanation below: \n")
@@ -275,44 +276,45 @@
   )
 
 (defun ai--show-response-buffer (text)
-  ""
+  "Write the TEXT into the response buffer and display it."
   (save-excursion
     (with-help-window (ai--get-response-buffer)
       (princ text)
       (switch-to-buffer (ai--get-response-buffer)))))
 
+
 (defun ai--explain-text (text)
-  ""
+  "Explain TEXT and show explaination in help buffer."
   (ai--async-query-by-type "explain" text 'ai--show-explain-help-buffer))
 
 
 (defun ai--async-query-by-type (query-type input callback)
-  ""
+  "Perform INPUT using the QUERY-TYPE type and passes the result to the CALLBACK function."
   (let ((query (ai--format-query query-type input)))
     (funcall ai-async-query-backend query callback)))
 
 
 (defun ai--format-query (query-type query)
-  ""
+  "Format a request to AI based on QUERY and QUERY-TYPE."
   (if-let (format-string (cdr (assoc query-type ai--query-type-map)))
       (format format-string query)
     (format "%s\n\n%s" query-type query)))
 
 
 (defun ai--get-query-type ()
-  ""
+  "Get the request type using `completing-read`."
   (interactive)
   (completing-read ai--query-type-prompt (mapcar #'car ai--query-type-map)))
 
 
 (defun ai-show ()
-  ""
+  "Execute query and show response in special buffer."
   (interactive)
   (ai--async-query-by-type (ai--get-query-type) (ai--get-region-content) 'ai--show-response-buffe))
 
 
 (defun ai-perform ()
-  ""
+  "Execute request and replace selected region."
   (interactive)
   (if (region-active-p)
       (ai--async-query-by-type (ai--get-query-type) (ai--get-region-content) (ai--replace-region-or-insert-in-current-buffer))
@@ -320,7 +322,7 @@
 
 
 (defun ai-change-query-backend ()
-  ""
+  "Change query backend."
   (interactive)
   (let* ((value (completing-read ai--change-backend-prompt (mapcar #'car ai-async-query-backends))))
     (setq ai-async-query-backend (cdr (assoc value ai-async-query-backends)))

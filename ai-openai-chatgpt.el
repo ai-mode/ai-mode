@@ -24,7 +24,9 @@
 ;; see <https://www.gnu.org/licenses/>.
 
 ;;; Commentary:
-
+;;
+;; The module includes functions for creating requests
+;; to the OpenAI ChatGPT API and processing responses.
 
 
 ;;; Code:
@@ -52,7 +54,17 @@ https://platform.openai.com/docs/models/model-endpoint-compatibility."
                                                    (timeout ai--openai-request-timeout)
                                                    (n ai--openai--completion-choices)
                                                    (extra-params nil))
-  ""
+  "Asynchronous MESSAGES execution of a request to the OpenAI ChatGPT API.
+
+In case of a successful request execution, a CALLBACK function is called.
+
+API-URL - is a full API address.
+MODEL - an AI model that needs to be used to process the request.
+TEMPERATURE - sampling temperature to use, between 0 and 2.
+MAX-TOKENS - The maximum number of tokens to generate answer.
+TIMEOUT - the duration limit for the execution of the request.
+N - How many completions to generate for each prompt.
+EXTRA-PARAMS is a list of properties (plist) that can be used to store parameters."
   (when (null ai--openai--api-key)
     (error "OpenAI API key is not set"))
 
@@ -76,7 +88,15 @@ https://platform.openai.com/docs/models/model-endpoint-compatibility."
                                                   (timeout ai--openai-request-timeout)
                                                   (n ai--openai--completion-choices)
                                                   (extra-params nil))
-  ""
+  "Synchronous MESSAGES execution of a request to the OpenAI ChatGPT API.
+
+API-URL - is a full API address.
+MODEL - an AI model that needs to be used to process the request.
+TEMPERATURE - sampling temperature to use, between 0 and 2.
+MAX-TOKENS - The maximum number of tokens to generate answer.
+TIMEOUT - the duration limit for the execution of the request.
+N - How many completions to generate for each prompt.
+EXTRA-PARAMS is a list of properties (plist) that can be used to store parameters."
   (when (null ai--openai--api-key)
     (error "OpenAI API key is not set"))
 
@@ -105,7 +125,15 @@ https://platform.openai.com/docs/models/model-endpoint-compatibility."
                                                    (timeout ai--openai-request-timeout)
                                                    (n ai--openai--completion-choices)
                                                    (extra-params nil))
-  ""
+  "Async execute INPUT, exract message from response and call CALLBACK.
+
+API-URL - is a full API address.
+MODEL - an AI model that needs to be used to process the request.
+TEMPERATURE - sampling temperature to use, between 0 and 2.
+MAX-TOKENS - The maximum number of tokens to generate answer.
+TIMEOUT - the duration limit for the execution of the request.
+N - How many completions to generate for each prompt.
+EXTRA-PARAMS is a list of properties (plist) that can be used to store parameters."
   (ai--openai--async-chat-request
    `((("role" . "user") ("content" . ,input)))
    (lambda (response)
@@ -128,7 +156,15 @@ https://platform.openai.com/docs/models/model-endpoint-compatibility."
                                                      (timeout ai--openai-request-timeout)
                                                      (n ai--openai--completion-choices)
                                                      (extra-params nil))
-  ""
+  "Async execute INPUT, exract message from response and call CALLBACK.
+
+API-URL - is a full API address.
+MODEL - an AI model that needs to be used to process the request.
+TEMPERATURE - sampling temperature to use, between 0 and 2.
+MAX-TOKENS - The maximum number of tokens to generate answer.
+TIMEOUT - the duration limit for the execution of the request.
+N - How many completions to generate for each prompt.
+EXTRA-PARAMS is a list of properties (plist) that can be used to store parameters"
   (ai--openai--async-chat-request
    (ai--openai--chat-internal-to-messages input)
    (lambda (response)
@@ -153,7 +189,15 @@ https://platform.openai.com/docs/models/model-endpoint-compatibility."
                                                   (timeout ai--openai-request-timeout)
                                                   (n ai--openai--completion-choices)
                                                   (extra-params nil))
-  ""
+  "Sync execute INPUT, exract message from response and return.
+
+API-URL - is a full API address.
+MODEL - an AI model that needs to be used to process the request.
+TEMPERATURE - sampling temperature to use, between 0 and 2.
+MAX-TOKENS - The maximum number of tokens to generate answer.
+TIMEOUT - the duration limit for the execution of the request.
+N - How many completions to generate for each prompt.
+EXTRA-PARAMS is a list of properties (plist) that can be used to store parameters."
   (let* ((messages `((("role" . "user") ("content" . ,input))))
          (success-response (ai--openai--chat-sync-request messages :api-url api-url :model model :temperature temperature :max-tokens max-tokens :timeout timeout :n n :extra-params extra-params))
          (content (cdr (assoc 'content (ai--openai--chat-get-choice success-response)))))

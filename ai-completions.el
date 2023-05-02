@@ -25,7 +25,8 @@
 
 ;;; Commentary:
 ;;
-
+;; The package allows for text completion using various AI engines.
+;;
 
 ;;; Code:
 (require 'ai-openai-completions)
@@ -77,14 +78,12 @@
                                                other-window
                                                other-buffer
                                                )
-  ""
-
+  "A list of commands that abort completion."
   :type '(choice (const :tag "Any command" t)
                  (cons  :tag "Any except"
                         (const not)
                         (repeat :tag "Commands" function))
-                 (repeat :tag "Commands" function)
-                 )
+                 (repeat :tag "Commands" function))
   :group 'ai-completions)
 
 
@@ -125,7 +124,7 @@
 
 
 (defun ai--completion-coordinator ()
-  ""
+  "Decides whether to continue the previous process of supplementation or to start a new one."
   (condition-case-unless-debug err
       (progn
         (if (or (ai--completion-is-new-completion-required)
@@ -138,7 +137,7 @@
 
 
 (defun ai--completion-begin ()
-  ""
+  "Start new completion."
   (ai--completion-cancel)
   (setq ai--completion-last-point
         (if (region-active-p)
@@ -155,20 +154,20 @@
            (ai--completion-cancel))))
 
 (defun ai--completion-continue ()
-  ""
+  "Continue completion."
   (condition-case-unless-debug err
       (progn )
     (error (message (format "AI completion : An error occured in ai--completion-continue => %s" (error-message-string err)))
            (ai--completion-cancel))))
 
 (defun ai--completion-show-candidate ()
-  ""
+  "Show completion candidate."
   (ai--completion-update-preview)
   (ai--completion-prepare-keymap)
   (ai--completion-activate-keymap))
 
 (defun ai--completion-should-continue (command)
-  ""
+  "Check if it is possible to proceed with completion for COMMAND."
   (or (eq t ai--completion-continue-commands)
       (if (eq 'not (car ai--completion-abort-commands))
           (consp (memq command (cdr ai--completion-abort-commands)))
@@ -178,29 +177,25 @@
       ))
 
 (defun ai--completion-is-new-completion-required ()
-  ""
+  "Check if it is necessary to start a new completion process."
   (or (not (equal (point) ai--completion-last-point))
       (not ai--completion-active)))
 
 
-(defun ai--completion-before-buffer-changed ()
-  ""
-  )
 
 (defun ai--completion-get-text-to-complete ()
-  ""
+  "Get text to complete."
   (if (region-active-p)
       (ai--get-region-content)
 
     (let* ((current (point))
            (min-point (- current ai-completion--context-size))
            (context-beginning-point (line-beginning-position (* -1 ai-completion--context-size))))
-      (buffer-substring-no-properties context-beginning-point current))
-    ))
+      (buffer-substring-no-properties context-beginning-point current))))
 
 
 (defun ai--completion-update-candidates (buffer)
-  ""
+  "Update the list of candidates for BUFFER."
   (funcall ai--completion-current-backend
            (ai--completion-get-text-to-complete)
            (lambda (candidates)
@@ -210,38 +205,38 @@
                  (ai--completion-show-candidate))))))
 
 (defun ai--completion-update-preview ()
-  ""
+  "Show a preview with the current candidate."
   (ai--completion-preview-show-at-point ai--completion-last-point (nth ai--completion-current-candidate ai--completion--candidates))
   )
 
 (defun ai--completion-add-candidates (candidates)
-  ""
+  "Add a CANDIDATES to the list of `ai--completion--candidates`."
   (setq ai--completion--candidates (append ai--completion--candidates candidates)
         ai--completion-current-candidate (- (length ai--completion--candidates) (length candidates))
         ))
 
 (defun ai--completion-preview-hide ()
-  ""
+  "Hide preview with current candidate."
   (when ai--completion-preview-overlay
     (delete-overlay ai--completion-preview-overlay)
     (setq ai--completion-preview-overlay nil)))
 
 
 (defun ai--completion-abort ()
-  ""
+  "Aborf the supplementing process."
   (interactive)
   (ai--completion-cancel))
 
 
 (defun ai--completion-finish (candidate)
-  ""
+  "Use CANDIDATE and complete the completion process."
   (ai--completion-preview-hide)
   (ai--completion-insert-candidate candidate)
   (ai--completion-cancel)
   )
 
-(defun ai--completion-cancel (&optional result)
-  ""
+(defun ai--completion-cancel ()
+  "Cancel the completion process."
   (ai--completion-preview-hide)
   (setq ai--completion-current-candidate 0
         ai--completion--candidates '()
@@ -255,7 +250,7 @@
 
 
 (defun ai--completion-insert-candidate (candidate)
-  ""
+  "Use CANDIDATE."
   (when (> (length candidate) 0)
     (setq candidate (substring-no-properties candidate))
     (ai--insert-completion candidate)))
@@ -270,7 +265,7 @@
 
 
 (defun ai--completion-select-next-or-abort ()
-  ""
+  "Show the next candidate."
   (interactive)
   (let ((next-candidate-index (+ ai--completion-current-candidate 1)))
     (cond
@@ -282,7 +277,7 @@
           )))))
 
 (defun ai--completion-select-prev-or-abort ()
-  ""
+  "Show the previous candidate."
   (interactive)
   (let ((prev-candidate-index (- ai--completion-current-candidate 1)))
     (cond
@@ -297,27 +292,20 @@
 
 
 (define-minor-mode ai-completion-mode
-  ""
+  "AI completion mode."
   :lighter "ai complete mode lighter"
   (if ai-completion-mode
       (progn
         (message "AI completion mode enabled")
         (add-hook 'pre-command-hook 'ai-completion-mode-pre-command)
-        (add-hook 'post-command-hook 'ai-completion-mode-post-command)
-        (add-hook 'pre-command-hook 'ai--completion-before-buffer-changed)
-
-        )
+        (add-hook 'post-command-hook 'ai-completion-mode-post-command))
     (remove-hook 'pre-command-hook 'ai-completion-mode-pre-command)
     (remove-hook 'post-command-hook 'ai-completion-mode-post-command)
-    (remove-hook 'pre-command-hook 'ai--completion-before-buffer-changed)
-    (message "AI completion mode disabled")
-
-    )
-  )
+    (message "AI completion mode disabled")))
 
 
 (defun ai-completion-mode-pre-command ()
-  ""
+  "Function called before executing a command."
   (if (not (ai--completion-should-continue this-command))
       (progn
         (ai--completion-abort))
@@ -325,24 +313,26 @@
 
 
 (defun ai-completion-mode-post-command ()
-  ""
+  "Function called after executing a command."
   (when ai--completion-active
     (ai--completion-activate-keymap))
   )
 
 
 (defun ai--completion-prepare-keymap ()
-  ""
+  "Prepare keymap."
   (ai--completion-ensure-emulation-alist)
   (ai--completion-enable-overriding-keymap ai--completion-mode-keymap))
 
+
 (defun ai--completion-destroy-keymap ()
-  ""
+  "Destroy keymap."
   (ai--completion-deactivate-keymap)
   (ai--completion-enable-overriding-keymap nil))
 
+
 (defun ai--completion-enable-overriding-keymap (keymap)
-  ""
+  "Activate keymap."
   (ai--completion-deactivate-keymap)
 
   (setf (cdar ai--emulation-alist) nil)
@@ -350,19 +340,19 @@
 
 
 (defun ai--completion-deactivate-keymap ()
-  ""
+  "Deactivate keymap."
   (setf (cdar ai--emulation-alist) nil))
 
 
 (defun ai--completion-activate-keymap ()
-  ""
+  "Activate keymap."
   (unless (or (cdar ai--emulation-alist)
               (null ai--completion-activated-keymap))
     (setf (cdar ai--emulation-alist) ai--completion-activated-keymap)))
 
 
 (defun ai--completion-ensure-emulation-alist ()
-  ""
+  "Ensure emulation alist."
   (unless (eq 'ai--emulation-alist (car emulation-mode-map-alists))
     (setq emulation-mode-map-alists
           (cons 'ai--emulation-alist
@@ -385,7 +375,7 @@
 
 
 (defun ai--completion-preview-show-at-point (pos completion)
-  ""
+  "Show COMPLETION preview at POS."
   (ai--completion-preview-hide)
 
   (let* ((completion completion))
@@ -417,7 +407,7 @@
 
 
 (defun ai-change-completion-backend ()
-  ""
+  "Change completion backend."
   (interactive)
   (let* ((value (completing-read ai--change-backend-prompt (mapcar #'car ai--completion-backends))))
     (setq ai--completion-current-backend (cdr (assoc value ai--completion-backends)))

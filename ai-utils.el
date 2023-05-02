@@ -25,13 +25,14 @@
 
 ;;; Commentary:
 ;;
+;; Helper functions for AI mode.
 
 
 ;;; Code:
 
 
 (defcustom ai--write-log-buffer nil
-  ""
+  "Switch to turn on/off logging to a special buffer."
   :type 'boolean
   :group 'ai
   )
@@ -42,10 +43,12 @@
   :group 'ai
   )
 
-(defvar ai--log-buffer-name "*AI-request-log*")
+(defvar ai--log-buffer-name "*AI-request-log*"
+  "The name of the buffer for logging API requests."
+  )
 
 (defun ai--write-log (output)
-  ""
+  "Write OUTPUT into `ai--log-buffer-name` if `ai--write-log-buffer` is enabled."
   (when ai--write-log-buffer
     (ai--write-output-to-log-buffer output)
     (ai--write-output-to-log-buffer "\n")
@@ -54,7 +57,7 @@
 
 
 (defun ai--log-and-error (log-message)
-  ""
+  "Write LOG-MESSAGE into `ai--log-buffer-name` and raise an error."
   (ai--write-log log-message)
   (ai--write-log "\n")
   (error log-message)
@@ -62,8 +65,7 @@
 
 
 (defun ai--log-request (request-id method url headers body)
-  ""
-
+  "Write reguest parameters such REQUEST-ID, METHOD, URL, HEADERS and BODY into *Messages* buffer."
   (message "Sending %s request[%s] to '%s" method request-id url)
   (ai--write-log (format "REQUEST[%s]: %s %s\n" request-id method url))
   ;; TODO: write headers
@@ -71,46 +73,41 @@
   )
 
 (defun ai--log-response (request-id response)
-  ""
+  "Write RESPONSE and REQUEST-ID into *Messages* buffer."
   (ai--write-log (format "RESPONSE[%s]:\n" request-id))
-  (ai--write-log (format "%s\n\n" response))
-  )
+  (ai--write-log (format "%s\n\n" response)))
+
 
 (defun ai--write-output-to-log-buffer (output)
-  ""
+  "Write OUTPUT into `ai--log-buffer-name' buffer."
   (let ((buffer (get-buffer ai--log-buffer-name)))
     (unless buffer
       (setq buffer (get-buffer-create ai--log-buffer-name)))
-
     (with-current-buffer buffer
       (progn
         (let ((beginning-of-input (goto-char (point-max))))
-          (insert output)
-          )
-        )
-      )
-    )
-  )
+          (insert output))))))
 
 
 (defun ai--get-query-content ()
-  ""
+  "Return region content or full buffer."
   (if (region-active-p)
       (ai--get-region-content)
     (ai--get-buffer-content)))
 
 
 (defun ai--get-region-content ()
-  ""
+  "Return region content without properties."
   (buffer-substring-no-properties (region-beginning) (region-end))
   )
 
 (defun ai--get-buffer-content ()
+  "Return buffer content without properties."
   (buffer-substring-no-properties (point-min) (point-max))
   )
 
 (defun ai--get-buffer-content-before-point ()
-  ""
+  "Return buffer content from beginning to current point."
   (buffer-substring-no-properties (point-min) (point))
   )
 
@@ -126,44 +123,28 @@
   (insert text))
 
 (defun ai--insert-completion (text)
-  ""
+  "Insert TEXT after selected region or at cursor position."
   (if (region-active-p)
       (ai--insert-after-region text)
     (ai--insert-at-point text))
   )
 
-(defun ai--get-completion-context ()
-  ""
-  (ai--get-buffer-content-before-point)
-  )
 
 (cl-defun ai--replace-or-insert (text &optional beginning end)
-  ""
+  "Replace the selected region with TEXT or the area between BEGINNING and END."
   (cond
    ((region-active-p)
     (delete-region (region-beginning) (region-end))
     (insert text))
    ((and beginning end)
     (delete-region beginning end)
-    (insert text)
-    )
+    (insert text))
    (t (insert text)))
   )
 
-(cl-defun ai--replace-region (text &optional beginning end)
-  ""
-  (cond
-   ((region-active-p)
-    (delete-region (region-beginning) (region-end))
-    (insert text))
-   ((and beginning end)
-    (delete-region (region-beginning) (region-end))
-    (insert text)
-    )
-   (t (insert text))))
 
 (defun ai--replace-tag-in-region (tag text)
-  ""
+  "Replace TAG in the selected region with TEXT."
   (when (region-active-p)
     (let ((region-content (ai--get-region-content)))
       (delete-region (region-beginning) (region-end))
@@ -171,7 +152,9 @@
 
 
 (cl-defun ai--with-current-buffer-callback (callback &optional (trim t))
-  ""
+  "Create a CALLBACK function that will use the context of the current buffer.
+
+The TRIM parameter allows trimming the content passed to the CALLBACK function."
   (let ((buffer (current-buffer)))
     (lambda (content)
       (with-current-buffer buffer
@@ -181,7 +164,10 @@
 
 
 (cl-defun ai--replace-region-or-insert-in-current-buffer (&optional (trim t))
-  ""
+  "Create scoped `ai-replace-or-insert` with the context of the current buffer.
+
+The TRIM parameter allows trimming the content
+ passed to the `ai-replace-or-insert`."
   (let ((buffer (current-buffer))
         (beginning (if (region-active-p) (region-beginning) (point)))
         (end (if (region-active-p) (region-end) (point))))
@@ -193,7 +179,11 @@
 
 
 (cl-defun ai--with-current-buffer-tagged-callback (callback tag &optional (trim t))
-  ""
+  "Create a CALLBACK function that will use the context of the current buffer.
+
+TAG - a marker for placing the content passed to the CALLBACK function.
+
+The TRIM parameter allows trimming the content passed to the CALLBACK function."
   (let ((buffer (current-buffer)))
     (lambda (content)
       (with-current-buffer buffer

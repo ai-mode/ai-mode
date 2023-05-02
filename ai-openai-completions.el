@@ -25,7 +25,8 @@
 
 ;;; Commentary:
 ;;
-
+;; The module includes functions for creating requests
+;; to the OpenAI completions API and processing responses.
 
 ;;; Code:
 
@@ -53,7 +54,16 @@ https://platform.openai.com/docs/models/model-endpoint-compatibility."
                                                        (max-tokens ai--openai--default-max-tokens)
                                                        (timeout ai--openai-request-timeout)
                                                        (extra-params nil))
-  ""
+  "Asynchronous INPUT execution of a request to the OpenAI completions API.
+
+In case of a successful request execution, a CALLBACK function is called.
+
+API-URL - is a full API address.
+MODEL - an AI model that needs to be used to process the request.
+TEMPERATURE - sampling temperature to use, between 0 and 2.
+MAX-TOKENS - The maximum number of tokens to generate answer.
+TIMEOUT - the duration limit for the execution of the request.
+EXTRA-PARAMS is a list of properties (plist) that can be used to store parameters."
   (when (null ai--openai--api-key)
     (error "OpenAI API key is not set"))
 
@@ -74,7 +84,14 @@ https://platform.openai.com/docs/models/model-endpoint-compatibility."
                                                       (max-tokens ai--openai--default-max-tokens)
                                                       (timeout ai--openai-request-timeout)
                                                       (extra-params nil))
-  ""
+  "Synchronous INPUT execution of a request to the OpenAI completions API.
+
+API-URL - is a full API address.
+MODEL - an AI model that needs to be used to process the request.
+TEMPERATURE - sampling temperature to use, between 0 and 2.
+MAX-TOKENS - The maximum number of tokens to generate answer.
+TIMEOUT - the duration limit for the execution of the request.
+EXTRA-PARAMS is a list of properties (plist) that can be used to store parameters."
   (when (null ai--openai--api-key)
     (error "OpenAI API key is not set"))
 
@@ -101,7 +118,14 @@ https://platform.openai.com/docs/models/model-endpoint-compatibility."
                                                           (max-tokens ai--openai--default-max-tokens)
                                                           (timeout ai--openai-request-timeout)
                                                           (extra-params nil))
-  ""
+  "Async execute INPUT, exract message from response and call CALLBACK.
+
+API-URL - is a full API address.
+MODEL - an AI model that needs to be used to process the request.
+TEMPERATURE - sampling temperature to use, between 0 and 2.
+MAX-TOKENS - The maximum number of tokens to generate answer.
+TIMEOUT - the duration limit for the execution of the request.
+EXTRA-PARAMS is a list of properties (plist) that can be used to store parameters."
   (ai--openai--completions-async-request
    input
    (lambda (response)
@@ -123,7 +147,14 @@ https://platform.openai.com/docs/models/model-endpoint-compatibility."
                                                          (max-tokens ai--openai--default-max-tokens)
                                                          (timeout ai--openai-request-timeout)
                                                          (extra-params nil))
-  ""
+  "Sync execute INPUT, exract message from response and return.
+
+API-URL - is a full API address.
+MODEL - an AI model that needs to be used to process the request.
+TEMPERATURE - sampling temperature to use, between 0 and 2.
+MAX-TOKENS - The maximum number of tokens to generate answer.
+TIMEOUT - the duration limit for the execution of the request.
+EXTRA-PARAMS is a list of properties (plist) that can be used to store parameters."
   (let* ((message input)
          (success-response (ai--openai--completions-sync-request input :api-url api-url :model model :temperature temperature :max-tokens max-tokens :timeout timeout :extra-params extra-params))
          (content (ai--openai--completions-get-choice success-response)))
@@ -131,15 +162,14 @@ https://platform.openai.com/docs/models/model-endpoint-compatibility."
 
 
 (cl-defun ai--openai--completions-get-choice (response &optional (choice-id 0))
-  ""
-
+  "Extract CHOICE-ID element from RESPONSE."
   (if (> (length (ai--openai--get-response-choices response)) 0)
       (let* ((choice (elt (ai--openai--get-response-choices response) choice-id)))
         (cdr (assoc 'text choice)))))
 
 
 (defun ai--openai--completions-completion-backend (code callback)
-  ""
+  "Completion CODE via AI and call CALLBACK with response."
   (ai--openai--completions-async-request
    code
    (lambda (response)
