@@ -192,6 +192,32 @@ The TRIM parameter allows trimming the content passed to the CALLBACK function."
           (funcall callback tag content))))))
 
 
+(defun ai--get-explaination-help-buffer ()
+  "Return explaination buffer."
+  (get-buffer-create ai--explanation-buffer-name))
+
+(defun ai--get-response-buffer ()
+  "Return buffer for AI responses."
+  (get-buffer-create ai--response-buffer-name))
+
+
+(defun ai--show-explain-help-buffer (text)
+  "Write the TEXT into the explanation buffer and display it."
+  (save-excursion
+    (with-help-window (ai--get-explaination-help-buffer)
+      (princ "AI Explanation below: \n")
+      (princ text)
+      (switch-to-buffer (ai--get-explaination-help-buffer)))))
+
+
+(defun ai--show-response-buffer (text)
+  "Write the TEXT into the response buffer and display it."
+  (save-excursion
+    (with-help-window (ai--get-response-buffer)
+      (princ text)
+      (switch-to-buffer (ai--get-response-buffer)))))
+
+
 (defun ai--get-random-uuid ()
   "Insert a UUID. This uses a simple hashing of variable data.
 Example of a UUID: 1df63142-a513-c850-31a3-535fc3520c3d
