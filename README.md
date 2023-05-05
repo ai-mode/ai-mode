@@ -49,11 +49,11 @@ Add the following in your .emacs file:
 
 To use OpenAI backends, you need to obtain an authorization key. You can get the key on the [page](https://platform.openai.com/account/api-keys).
 
-There are several ways to assign your key to the variable `ai--openai--api-key`.
+There are several ways to assign your key to the variable `ai-openai--api-key`.
 
-1. Put `(setq ai--openai--api-key "you key")` in the configuration file.
-2. Use the command M-x `set-variable ai--openai--api-key`.
-3. Use the command M-x `customize-variable ai--openai--api-key`.
+1. Put `(setq ai-openai--api-key "you key")` in the configuration file.
+2. Use the command M-x `set-variable ai-openai--api-key`.
+3. Use the command M-x `customize-variable ai-openai--api-key`.
 
 
 ```elisp
@@ -86,7 +86,7 @@ Interactive mode for interacting with AI. In this mode, you can ask AI questions
 
 ### List of available commands:
 
-- `ai-change-chat-backend` - changing the AI backend used for processing requests
+- `ai-chat-change-backend` - changing the AI backend used for processing requests
 - `ai--chat--return` - sends a request to the AI backend
 - `ai--chat--interrupt` - interrupts the request processing
 - `ai--chat--clear-buffer` - clears the interaction history
@@ -95,15 +95,15 @@ Interactive mode for interacting with AI. In this mode, you can ask AI questions
 
 ### Customization of chat mode.
 
-- `(setq ai--chat-prompt "SuperAI>")` - changing the greeting
+- `(setq ai-chat--prompt "SuperAI>")` - changing the greeting
 - `(setq ai--chat--buffer-context-size 10)` - changing the context size
 
-If you want to write your own backend, take a look at the source code of the `ai--openai--chat-async-send-context` function.
+If you want to write your own backend, take a look at the source code of the `ai-openai--chat-async-send-context` function.
 
 Adding a customized backend:
 
 ```elisp
-(add-to-list 'ai-chat-query-backends '("SuperAI backend" . super-chat-ai-backend))
+(add-to-list 'ai-chat--query-backends '("SuperAI backend" . super-chat-ai-backend))
 ```
 
 
@@ -131,10 +131,10 @@ List of contextual commands in autocomplete mode after preview display.
 
 ### Customization of code completion mode
 
-- `(setq ai--chat-prompt "SuperAI>")` - changing the greeting
+- `(setq ai-chat--prompt "SuperAI>")` - changing the greeting
 - `(setq ai-completion--context-size 10)` - changing the context size
 
-If you want to write your own backend, take a look at the source code of the `ai--openai--completions-completion-backend` function.
+If you want to write your own backend, take a look at the source code of the `ai-openai--completions-completion-backend` function.
 
 Adding a customized backend:
 
@@ -165,7 +165,7 @@ This mode includes several commands that allow modifying, adding to, and changin
 - `(setq ai--query-type-prompt "Type of Query:")` - changing the greeting for selecting the query type
 - `(setq ai-keymap-prefix "C-c i")` - changing the prefix for keymap
 
-If you want to write your own backend, take a look at the source code of the ` ai--openai--chat-async-send-query` function.
+If you want to write your own backend, take a look at the source code of the ` ai-openai--chat-async-send-query` function.
 
 Adding a customized backend:
 

@@ -5,7 +5,7 @@
 ;; URL: https://github.com/ai-mode/ai-mode
 ;; Version: 0.1
 ;; Package-Requires: ((emacs "27.1"))
-;; Keywords: ai, chatgpt, gpt
+;; Keywords: help, tools
 
 
 ;; This file is part of GNU Emacs.
@@ -33,51 +33,48 @@
 
 (defgroup ai-completions nil
   "AI code completion tool for Emacs."
-  :group 'ai-mode
-  )
-
-
-(defcustom ai-completion--context-size 1
-  "Number of lines for context"
-  :type 'integer
-  :group 'ai-chat)
-
-(defcustom ai--completion-current-backend 'ai--openai--completions-completion-backend
-  "Active completion backend."
-  :group 'ai-completions
-  )
-
-(defcustom ai--completion-backends
-  '(("OpenAI completions" . ai--openai--completions-completion-backend))
-  "An association list that maps query backend to function."
-  :type '(alist :key-type (string :tag "Backend name")
-                :value-type (symbol :tag "Backend function"))
   :group 'ai-mode)
 
 
-(defcustom ai--completion-continue-commands '(not save-buffer save-some-buffers
+(defcustom ai-completions--context-size 1
+  "Number of lines for context."
+  :type 'integer
+  :group 'ai-chat)
+
+
+(defcustom ai-completions--current-backend 'ai-openai-completions--completion-backend
+  "Active completion backend."
+  :group 'ai-completions)
+
+
+(defcustom ai-completions--backends
+  '(("OpenAI completions" . ai-openai-completions--completion-backend))
+  "An association list that maps query backend to function."
+  :type '(alist :key-type (string :tag "Backend name")
+                :value-type (symbol :tag "Backend function"))
+  :group 'ai-completions)
+
+
+(defcustom ai-completions--continue-commands '(not save-buffer save-some-buffers
                                                   save-buffers-kill-terminal
-                                                  save-buffers-kill-emacs
-                                                  )
+                                                  save-buffers-kill-emacs)
   "A list of commands that are allowed during completion."
 
   :type '(choice (const :tag "Any command" t)
                  (cons  :tag "Any except"
                         (const not)
                         (repeat :tag "Commands" function))
-                 (repeat :tag "Commands" function)
-                 )
+                 (repeat :tag "Commands" function))
   :group 'ai-completions)
 
 
-(defcustom ai--completion-abort-commands '(not ai--completion-select-next-or-abort
-                                               ai--completion-select-prev-or-abort
-                                               ai--completion-select-current
+(defcustom ai-completions--abort-commands '(not ai-completions--select-next-or-abort
+                                               ai-completions--select-prev-or-abort
+                                               ai-completions--select-current
                                                ignore
                                                switch-to-buffer
                                                other-window
-                                               other-buffer
-                                               )
+                                               other-buffer)
   "A list of commands that abort completion."
   :type '(choice (const :tag "Any command" t)
                  (cons  :tag "Any except"
@@ -87,279 +84,268 @@
   :group 'ai-completions)
 
 
-(defvar-local ai--completion--candidates '())
-(defvar-local ai--completion-current-candidate 0)
+(defvar-local ai-completions--candidates '())
+(defvar-local ai-completions--current-candidate 0)
 
-(defvar-local ai--completion-active nil)
+(defvar-local ai-completions--active nil)
 
-(defvar ai--emulation-alist '((t . nil)))
-
-
-(defvar-local ai--completion-preview-overlay nil)
-(defvar-local ai--completion-pseudo-tooltip-overlay nil)
-(defvar-local ai--completion-last-point nil)
-(defvar-local ai--completion-activated-keymap nil)
+(defvar ai-completions--emulation-alist '((t . nil)))
 
 
-(defvar ai--completion-mode-keymap
+(defvar-local ai-completions--preview-overlay nil)
+(defvar-local ai-completions--pseudo-tooltip-overlay nil)
+(defvar-local ai-completions--last-point nil)
+(defvar-local ai-completions--activated-keymap nil)
+
+
+(defvar ai-completions--mode-keymap
   (let ((keymap (make-sparse-keymap)))
-    (define-key keymap "\e\e\e" 'ai--completion-abort)
-    (define-key keymap "\C-g" 'ai--completion-abort)
-    (define-key keymap (kbd "C-n") 'ai--completion-select-next-or-abort)
-    (define-key keymap (kbd "C-p") 'ai--completion-select-prev-or-abort)
-    (define-key keymap (kbd "<down>") 'ai--completion-select-next-or-abort)
-    (define-key keymap (kbd "<up>") 'ai--completion-select-prev-or-abort)
+    (define-key keymap "\e\e\e" 'ai-completions--abort)
+    (define-key keymap "\C-g" 'ai-completions--abort)
+    (define-key keymap (kbd "C-n") 'ai-completions--select-next-or-abort)
+    (define-key keymap (kbd "C-p") 'ai-completions--select-prev-or-abort)
+    (define-key keymap (kbd "<down>") 'ai-completions--select-next-or-abort)
+    (define-key keymap (kbd "<up>") 'ai-completions--select-prev-or-abort)
     (define-key keymap [down-mouse-1] 'ignore)
     (define-key keymap [down-mouse-3] 'ignore)
     (define-key keymap [mouse-1] 'ignore)
     (define-key keymap [mouse-3] 'ignore)
     (define-key keymap [up-mouse-1] 'ignore)
     (define-key keymap [up-mouse-3] 'ignore)
-    (define-key keymap [return] 'ai--completion-select-current)
-    (define-key keymap (kbd "RET") 'ai--completion-select-current)
-    (define-key keymap (kbd "C-<tab>") 'ai--completion-select-next-or-abort)
+    (define-key keymap [return] 'ai-completions--select-current)
+    (define-key keymap (kbd "RET") 'ai-completions--select-current)
+    (define-key keymap (kbd "C-<tab>") 'ai-completions--select-next-or-abort)
     keymap)
 
-  "Keymap used for manage complete candidates")
+  "Keymap used for manage complete candidates.")
 
 
-(defun ai--completion-coordinator ()
+(defun ai-completions--coordinator ()
   "Decides whether to continue the previous process of supplementation or to start a new one."
   (condition-case-unless-debug err
       (progn
-        (if (or (ai--completion-is-new-completion-required)
-                (not (ai--completion-should-continue this-command)))
-            (ai--completion-begin)
-          (ai--completion-continue)
-          ))
-    (error (message (format "AI completion: An error occured in ai--completion-coordinator => %s" (error-message-string err)))
-           (ai--completion-cancel))))
+        (if (or (ai-completions--is-new-completion-required)
+                (not (ai-completions--should-continue this-command)))
+            (ai-completions--begin)
+          (ai-completions--continue)))
+    (error (message (format "AI completion: An error occured in ai-completions--coordinator => %s" (error-message-string err)))
+           (ai-completions--cancel))))
 
 
-(defun ai--completion-begin ()
+(defun ai-completions--begin ()
   "Start new completion."
-  (ai--completion-cancel)
-  (setq ai--completion-last-point
+  (ai-completions--cancel)
+  (setq ai-completions--last-point
         (if (region-active-p)
             (region-end)
           (point))
-        ai--completion-active t)
+        ai-completions--active t)
 
   (condition-case-unless-debug err
-      (progn (ai-completion-mode 1)
-             (ai--completion-update-candidates (current-buffer))
-             ;; (ai--completion-show-candidate)
+      (progn (ai-completions-mode 1)
+             (ai-completions--update-candidates (current-buffer))
+             ;; (ai-completions--show-candidate)
              )
-    (error (message (format "AI completion: An error occured in ai--completion-begin => %s" (error-message-string err)))
-           (ai--completion-cancel))))
+    (error (message (format "AI completion: An error occured in ai-completions--begin => %s" (error-message-string err)))
+           (ai-completions--cancel))))
 
-(defun ai--completion-continue ()
+(defun ai-completions--continue ()
   "Continue completion."
   (condition-case-unless-debug err
       (progn )
-    (error (message (format "AI completion : An error occured in ai--completion-continue => %s" (error-message-string err)))
-           (ai--completion-cancel))))
+    (error (message (format "AI completion : An error occured in ai-completions--continue => %s" (error-message-string err)))
+           (ai-completions--cancel))))
 
-(defun ai--completion-show-candidate ()
+(defun ai-completions--show-candidate ()
   "Show completion candidate."
-  (ai--completion-update-preview)
-  (ai--completion-prepare-keymap)
-  (ai--completion-activate-keymap))
+  (ai-completions--update-preview)
+  (ai-completions--prepare-keymap)
+  (ai-completions--activate-keymap))
 
-(defun ai--completion-should-continue (command)
+(defun ai-completions--should-continue (command)
   "Check if it is possible to proceed with completion for COMMAND."
-  (or (eq t ai--completion-continue-commands)
-      (if (eq 'not (car ai--completion-abort-commands))
-          (consp (memq command (cdr ai--completion-abort-commands)))
-        (or (memq command ai--completion-abort-commands)
+  (or (eq t ai-completions--continue-commands)
+      (if (eq 'not (car ai-completions--abort-commands))
+          (consp (memq command (cdr ai-completions--abort-commands)))
+        (or (memq command ai-completions--abort-commands)
             (and (symbolp command)
-                 (string-match-p "\\`ai-" (symbol-name command)))))
-      ))
+                 (string-match-p "\\`ai-" (symbol-name command)))))))
 
-(defun ai--completion-is-new-completion-required ()
+
+(defun ai-completions--is-new-completion-required ()
   "Check if it is necessary to start a new completion process."
-  (or (not (equal (point) ai--completion-last-point))
-      (not ai--completion-active)))
+  (or (not (equal (point) ai-completions--last-point))
+      (not ai-completions--active)))
 
 
-
-(defun ai--completion-get-text-to-complete ()
+(defun ai-completions--get-text-to-complete ()
   "Get text to complete."
   (if (region-active-p)
-      (ai--get-region-content)
+      (ai-utils--get-region-content)
 
     (let* ((current (point))
-           (min-point (- current ai-completion--context-size))
-           (context-beginning-point (line-beginning-position (* -1 ai-completion--context-size))))
+           (min-point (- current ai-completions--context-size))
+           (context-beginning-point (line-beginning-position (* -1 ai-completions--context-size))))
       (buffer-substring-no-properties context-beginning-point current))))
 
 
-(defun ai--completion-update-candidates (buffer)
+(defun ai-completions--update-candidates (buffer)
   "Update the list of candidates for BUFFER."
-  (funcall ai--completion-current-backend
-           (ai--completion-get-text-to-complete)
+  (funcall ai-completions--current-backend
+           (ai-completions--get-text-to-complete)
+           (ai-completions--get-buffer-type-or-language buffer)
            (lambda (candidates)
              (progn
                (with-current-buffer buffer
-                 (ai--completion-add-candidates candidates)
-                 (ai--completion-show-candidate))))))
+                 (ai-completions--add-candidates candidates)
+                 (ai-completions--show-candidate))))))
 
-(defun ai--completion-update-preview ()
+(defun ai-completions--update-preview ()
   "Show a preview with the current candidate."
-  (ai--completion-preview-show-at-point ai--completion-last-point (nth ai--completion-current-candidate ai--completion--candidates))
-  )
+  (ai-completions--preview-show-at-point ai-completions--last-point (nth ai-completions--current-candidate ai-completions--candidates)))
 
-(defun ai--completion-add-candidates (candidates)
-  "Add a CANDIDATES to the list of `ai--completion--candidates`."
-  (setq ai--completion--candidates (append ai--completion--candidates candidates)
-        ai--completion-current-candidate (- (length ai--completion--candidates) (length candidates))
-        ))
+(defun ai-completions--add-candidates (candidates)
+  "Add a CANDIDATES to the list of `ai-completions--candidates`."
+  (setq ai-completions--candidates (append ai-completions--candidates candidates)
+        ai-completions--current-candidate (- (length ai-completions--candidates) (length candidates))))
 
-(defun ai--completion-preview-hide ()
+(defun ai-completions--preview-hide ()
   "Hide preview with current candidate."
-  (when ai--completion-preview-overlay
-    (delete-overlay ai--completion-preview-overlay)
-    (setq ai--completion-preview-overlay nil)))
+  (when ai-completions--preview-overlay
+    (delete-overlay ai-completions--preview-overlay)
+    (setq ai-completions--preview-overlay nil)))
 
 
-(defun ai--completion-abort ()
+(defun ai-completions--abort ()
   "Aborf the supplementing process."
   (interactive)
-  (ai--completion-cancel))
+  (ai-completions--cancel))
 
 
-(defun ai--completion-finish (candidate)
+(defun ai-completions-finish (candidate)
   "Use CANDIDATE and complete the completion process."
-  (ai--completion-preview-hide)
-  (ai--completion-insert-candidate candidate)
-  (ai--completion-cancel)
-  )
+  (ai-completions--preview-hide)
+  (ai-completions--insert-candidate candidate)
+  (ai-completions--cancel))
 
-(defun ai--completion-cancel ()
+(defun ai-completions--cancel ()
   "Cancel the completion process."
-  (ai--completion-preview-hide)
-  (setq ai--completion-current-candidate 0
-        ai--completion--candidates '()
-        ai--completion-last-point nil
-        ai--completion-active nil
-        )
-  (ai--completion-destroy-keymap)
-  (ai-completion-mode 0)
+  (ai-completions--preview-hide)
+  (setq ai-completions--current-candidate 0
+        ai-completions--candidates '()
+        ai-completions--last-point nil
+        ai-completions--active nil)
+  (ai-completions--destroy-keymap)
+  (ai-completions-mode 0)
   ;; TODO: run hooks
   nil)
 
 
-(defun ai--completion-insert-candidate (candidate)
+(defun ai-completions--insert-candidate (candidate)
   "Use CANDIDATE."
   (when (> (length candidate) 0)
     (setq candidate (substring-no-properties candidate))
-    (ai--insert-completion candidate)))
+    (ai-utils--insert-completion candidate)))
 
 
-(defun ai--completion-select-current ()
+(defun ai-completions--select-current ()
   "Insert the selected candidate."
   (interactive)
-  (let ((result (nth ai--completion-current-candidate ai--completion--candidates)))
-    (ai--completion-finish result)
-    ))
+  (let ((result (nth ai-completions--current-candidate ai-completions--candidates)))
+    (ai-completions-finish result)))
 
 
-(defun ai--completion-select-next-or-abort ()
+(defun ai-completions--select-next-or-abort ()
   "Show the next candidate."
   (interactive)
-  (let ((next-candidate-index (+ ai--completion-current-candidate 1)))
+  (let ((next-candidate-index (+ ai-completions--current-candidate 1)))
     (cond
-     ((>= next-candidate-index (length ai--completion--candidates))
-      (ai--completion-update-candidates (current-buffer)))
+     ((>= next-candidate-index (length ai-completions--candidates))
+      (ai-completions--update-candidates (current-buffer)))
      (t (progn
-          (setq ai--completion-current-candidate next-candidate-index)
-          (ai--completion-show-candidate)
-          )))))
+          (setq ai-completions--current-candidate next-candidate-index)
+          (ai-completions--show-candidate))))))
 
-(defun ai--completion-select-prev-or-abort ()
+(defun ai-completions--select-prev-or-abort ()
   "Show the previous candidate."
   (interactive)
-  (let ((prev-candidate-index (- ai--completion-current-candidate 1)))
+  (let ((prev-candidate-index (- ai-completions--current-candidate 1)))
     (cond
      ((>= prev-candidate-index 0)
-      (let ((result (nth prev-candidate-index ai--completion--candidates)))
-        (setq ai--completion-current-candidate prev-candidate-index)
-        (ai--completion-show-candidate)
-        )
-      )
-     (t (message "completion candidate already selected"))
-     )))
+      (let ((result (nth prev-candidate-index ai-completions--candidates)))
+        (setq ai-completions--current-candidate prev-candidate-index)
+        (ai-completions--show-candidate)))
+     (t (message "completion candidate already selected")))))
 
 
-(define-minor-mode ai-completion-mode
+(define-minor-mode ai-completions-mode
   "AI completion mode."
   :lighter "ai complete mode lighter"
-  (if ai-completion-mode
+  (if ai-completions-mode
       (progn
         (message "AI completion mode enabled")
-        (add-hook 'pre-command-hook 'ai-completion-mode-pre-command)
-        (add-hook 'post-command-hook 'ai-completion-mode-post-command))
-    (remove-hook 'pre-command-hook 'ai-completion-mode-pre-command)
-    (remove-hook 'post-command-hook 'ai-completion-mode-post-command)
+        (add-hook 'pre-command-hook 'ai-completions-mode-pre-command)
+        (add-hook 'post-command-hook 'ai-completions-mode-post-command))
+    (remove-hook 'pre-command-hook 'ai-completions-mode-pre-command)
+    (remove-hook 'post-command-hook 'ai-completions-mode-post-command)
     (message "AI completion mode disabled")))
 
 
-(defun ai-completion-mode-pre-command ()
+(defun ai-completions-mode-pre-command ()
   "Function called before executing a command."
-  (if (not (ai--completion-should-continue this-command))
+  (if (not (ai-completions--should-continue this-command))
       (progn
-        (ai--completion-abort))
-    (ai--completion-deactivate-keymap)))
+        (ai-completions--abort))
+    (ai-completions--deactivate-keymap)))
 
 
-(defun ai-completion-mode-post-command ()
+(defun ai-completions-mode-post-command ()
   "Function called after executing a command."
-  (when ai--completion-active
-    (ai--completion-activate-keymap))
-  )
+  (when ai-completions--active
+    (ai-completions--activate-keymap)))
 
 
-(defun ai--completion-prepare-keymap ()
+(defun ai-completions--prepare-keymap ()
   "Prepare keymap."
-  (ai--completion-ensure-emulation-alist)
-  (ai--completion-enable-overriding-keymap ai--completion-mode-keymap))
+  (ai-completions-ensure-emulation-alist)
+  (ai-completions--enable-overriding-keymap ai-completions--mode-keymap))
 
 
-(defun ai--completion-destroy-keymap ()
+(defun ai-completions--destroy-keymap ()
   "Destroy keymap."
-  (ai--completion-deactivate-keymap)
-  (ai--completion-enable-overriding-keymap nil))
+  (ai-completions--deactivate-keymap)
+  (ai-completions--enable-overriding-keymap nil))
 
 
-(defun ai--completion-enable-overriding-keymap (keymap)
-  "Activate keymap."
-  (ai--completion-deactivate-keymap)
+(defun ai-completions--enable-overriding-keymap (keymap)
+  "Activate KEYMAP."
+  (ai-completions--deactivate-keymap)
 
-  (setf (cdar ai--emulation-alist) nil)
-  (setq ai--completion-activated-keymap keymap))
+  (setf (cdar ai-completions--emulation-alist) nil)
+  (setq ai-completions--activated-keymap keymap))
 
 
-(defun ai--completion-deactivate-keymap ()
+(defun ai-completions--deactivate-keymap ()
   "Deactivate keymap."
-  (setf (cdar ai--emulation-alist) nil))
+  (setf (cdar ai-completions--emulation-alist) nil))
 
 
-(defun ai--completion-activate-keymap ()
+(defun ai-completions--activate-keymap ()
   "Activate keymap."
-  (unless (or (cdar ai--emulation-alist)
-              (null ai--completion-activated-keymap))
-    (setf (cdar ai--emulation-alist) ai--completion-activated-keymap)))
+  (unless (or (cdar ai-completions--emulation-alist)
+              (null ai-completions--activated-keymap))
+    (setf (cdar ai-completions--emulation-alist) ai-completions--activated-keymap)))
 
 
-(defun ai--completion-ensure-emulation-alist ()
+(defun ai-completions-ensure-emulation-alist ()
   "Ensure emulation alist."
-  (unless (eq 'ai--emulation-alist (car emulation-mode-map-alists))
+  (unless (eq 'ai-completions--emulation-alist (car emulation-mode-map-alists))
     (setq emulation-mode-map-alists
-          (cons 'ai--emulation-alist
-                (delq 'ai--emulation-alist emulation-mode-map-alists)))))
+          (cons 'ai-completions--emulation-alist
+                (delq 'ai-completions--emulation-alist emulation-mode-map-alists)))))
 
 
-(defface ai--completion-preview-face
+(defface ai-completions--preview-face
   '((((class color) (min-colors 88) (background light))
      (:background "light blue"))
     (((class color) (min-colors 88) (background dark))
@@ -369,25 +355,24 @@
      (:foreground "black" :background "cornsilk"))
     (((class color) (min-colors 88) (background dark))
      (:background "gray26"))
-    (t (:foreground "black" :background "yellow"))
-    )
+    (t (:foreground "black" :background "yellow")))
   "Face used for the selection in the tooltip.")
 
 
-(defun ai--completion-preview-show-at-point (pos completion)
+(defun ai-completions--preview-show-at-point (pos completion)
   "Show COMPLETION preview at POS."
-  (ai--completion-preview-hide)
+  (ai-completions--preview-hide)
 
   (let* ((completion completion))
 
-    (add-face-text-property 0 (length completion) 'ai--completion-preview-face nil completion)
+    (add-face-text-property 0 (length completion) 'ai-completions--preview-face nil completion)
 
     (and (equal pos (point))
          (not (equal completion ""))
          (add-text-properties 0 1 '(cursor 1) completion))
 
     (let* ((beg pos)
-           (pto ai--completion-pseudo-tooltip-overlay)
+           (pto ai-completions--pseudo-tooltip-overlay)
            (ptf-workaround (and
                             pto
                             (char-before pos)
@@ -398,21 +383,26 @@
         (cl-decf beg)
         (setq completion (concat (buffer-substring beg pos) completion)))
 
-      (setq ai--completion-preview-overlay (make-overlay beg pos))
+      (setq ai-completions--preview-overlay (make-overlay beg pos))
 
-      (let ((ov ai--completion-preview-overlay))
+      (let ((ov ai-completions--preview-overlay))
         (overlay-put ov (if ptf-workaround 'display 'after-string)
                      completion)
         (overlay-put ov 'window (selected-window))))))
 
 
-(defun ai-change-completion-backend ()
+(defun ai-completions-change-backend ()
   "Change completion backend."
   (interactive)
-  (let* ((value (completing-read ai--change-backend-prompt (mapcar #'car ai--completion-backends))))
-    (setq ai--completion-current-backend (cdr (assoc value ai--completion-backends)))
+  (let* ((value (completing-read ai--change-backend-prompt (mapcar #'car ai-completions--backends))))
+    (setq ai-completions--current-backend (cdr (assoc value ai-completions--backends)))
     (message (format "AI query backend changed to \"%s\"" value))))
 
+
+(defun ai-completions--get-buffer-type-or-language (buffer)
+  "Get programming language for BUFFER."
+  (with-current-buffer buffer
+    (file-name-extension (buffer-file-name buffer))))
 
 
 (provide 'ai-completions)

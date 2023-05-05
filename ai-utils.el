@@ -5,7 +5,7 @@
 ;; URL: https://github.com/ai-mode/ai-mode
 ;; Version: 0.1
 ;; Package-Requires: ((emacs "27.1"))
-;; Keywords: ai, chatgpt, gpt
+;; Keywords: help, tools
 
 
 ;; This file is part of GNU Emacs.
@@ -31,106 +31,106 @@
 ;;; Code:
 
 
-(defcustom ai--write-log-buffer nil
+(defcustom ai-utils--write-log-buffer nil
   "Switch to turn on/off logging to a special buffer."
   :type 'boolean
-  :group 'ai
-  )
-
-(defcustom ai-debug-mode nil
-  "Enable or disable AI debug mode."
-  :type 'boolean
-  :group 'ai
-  )
-
-(defvar ai--log-buffer-name "*AI-request-log*"
-  "The name of the buffer for logging API requests."
-  )
-
-(defun ai--write-log (output)
-  "Write OUTPUT into `ai--log-buffer-name` if `ai--write-log-buffer` is enabled."
-  (when ai--write-log-buffer
-    (ai--write-output-to-log-buffer output)
-    (ai--write-output-to-log-buffer "\n")
-    )
-  )
+  :group 'ai)
 
 
-(defun ai--log-and-error (log-message)
-  "Write LOG-MESSAGE into `ai--log-buffer-name` and raise an error."
-  (ai--write-log log-message)
-  (ai--write-log "\n")
-  (error log-message)
-  )
+(defvar ai-utils--explanation-buffer-name "*AI explanation*"
+  "The name of the buffer for explanation.")
+
+(defvar ai-utils--response-buffer-name "*AI response*"
+  "Tha name of the buffer for AI response.")
+
+(defvar ai-utils--log-buffer-name "*AI-request-log*"
+  "The name of the buffer for logging API requests.")
+
+(defun ai-utils--write-log (output)
+  "Write OUTPUT into `ai-utils--log-buffer-name`.
+
+If `ai-utils--write-log-buffer` is enabled."
+  (when ai-utils--write-log-buffer
+    (ai-utils--write-output-to-log-buffer output)
+    (ai-utils--write-output-to-log-buffer "\n")))
 
 
-(defun ai--log-request (request-id method url headers body)
-  "Write reguest parameters such REQUEST-ID, METHOD, URL, HEADERS and BODY into *Messages* buffer."
+(defun ai-utils--log-and-error (log-message)
+  "Write LOG-MESSAGE into `ai-utils--log-buffer-name` and raise an error."
+  (ai-utils--write-log log-message)
+  (ai-utils--write-log "\n")
+  (error log-message))
+
+
+(defun ai-utils--log-request (request-id method url headers body)
+  "Write log request into *Messages* buffer.
+
+REQUEST-ID - request id
+METHOD - request method
+URL - requested url
+HEADERS - request headers
+BODY - request body"
   (message "Sending %s request[%s] to '%s" method request-id url)
-  (ai--write-log (format "REQUEST[%s]: %s %s\n" request-id method url))
+  (ai-utils--write-log (format "REQUEST[%s]: %s %s\n" request-id method url))
+  (ai-utils--write-log (format "HEADERS[%s]\n" headers))
   ;; TODO: write headers
-  (ai--write-log (format "%s\n" body))
-  )
+  (ai-utils--write-log (format "%s\n" body)))
 
-(defun ai--log-response (request-id response)
+
+(defun ai-utils--log-response (request-id response)
   "Write RESPONSE and REQUEST-ID into *Messages* buffer."
-  (ai--write-log (format "RESPONSE[%s]:\n" request-id))
-  (ai--write-log (format "%s\n\n" response)))
+  (ai-utils--write-log (format "RESPONSE[%s]:\n" request-id))
+  (ai-utils--write-log (format "%s\n\n" response)))
 
 
-(defun ai--write-output-to-log-buffer (output)
-  "Write OUTPUT into `ai--log-buffer-name' buffer."
-  (let ((buffer (get-buffer ai--log-buffer-name)))
+(defun ai-utils--write-output-to-log-buffer (output)
+  "Write OUTPUT into `ai-utils--log-buffer-name' buffer."
+  (let ((buffer (get-buffer ai-utils--log-buffer-name)))
     (unless buffer
-      (setq buffer (get-buffer-create ai--log-buffer-name)))
+      (setq buffer (get-buffer-create ai-utils--log-buffer-name)))
     (with-current-buffer buffer
       (progn
-        (let ((beginning-of-input (goto-char (point-max))))
-          (insert output))))))
+        (insert output)))))
 
 
-(defun ai--get-query-content ()
+(defun ai-utils--get-query-content ()
   "Return region content or full buffer."
   (if (region-active-p)
-      (ai--get-region-content)
-    (ai--get-buffer-content)))
+      (ai-utils--get-region-content)
+    (ai-utils--get-buffer-content)))
 
 
-(defun ai--get-region-content ()
+(defun ai-utils--get-region-content ()
   "Return region content without properties."
-  (buffer-substring-no-properties (region-beginning) (region-end))
-  )
+  (buffer-substring-no-properties (region-beginning) (region-end)))
 
-(defun ai--get-buffer-content ()
+(defun ai-utils--get-buffer-content ()
   "Return buffer content without properties."
-  (buffer-substring-no-properties (point-min) (point-max))
-  )
+  (buffer-substring-no-properties (point-min) (point-max)))
 
-(defun ai--get-buffer-content-before-point ()
+(defun ai-utils--get-buffer-content-before-point ()
   "Return buffer content from beginning to current point."
-  (buffer-substring-no-properties (point-min) (point))
-  )
+  (buffer-substring-no-properties (point-min) (point)))
 
-(defun ai--insert-after-region (text)
+(defun ai-utils--insert-after-region (text)
   "Insert the given TEXT after the region."
   (when (region-active-p)
     (goto-char (region-end))
     (insert text)))
 
-(defun ai--insert-at-point (text)
+(defun ai-utils--insert-at-point (text)
   "Insert the given TEXT after the region."
   (goto-char (point))
   (insert text))
 
-(defun ai--insert-completion (text)
+(defun ai-utils--insert-completion (text)
   "Insert TEXT after selected region or at cursor position."
   (if (region-active-p)
-      (ai--insert-after-region text)
-    (ai--insert-at-point text))
-  )
+      (ai-utils--insert-after-region text)
+    (ai-utils--insert-at-point text)))
 
 
-(cl-defun ai--replace-or-insert (text &optional beginning end)
+(cl-defun ai-utils--replace-or-insert (text &optional beginning end)
   "Replace the selected region with TEXT or the area between BEGINNING and END."
   (cond
    ((region-active-p)
@@ -139,19 +139,18 @@
    ((and beginning end)
     (delete-region beginning end)
     (insert text))
-   (t (insert text)))
-  )
+   (t (insert text))))
 
 
-(defun ai--replace-tag-in-region (tag text)
+(defun ai-utils--replace-tag-in-region (tag text)
   "Replace TAG in the selected region with TEXT."
   (when (region-active-p)
-    (let ((region-content (ai--get-region-content)))
+    (let ((region-content (ai-utils--get-region-content)))
       (delete-region (region-beginning) (region-end))
       (insert (replace-regexp-in-string tag text region-content)))))
 
 
-(cl-defun ai--with-current-buffer-callback (callback &optional (trim t))
+(cl-defun ai-utils--with-current-buffer-callback (callback &optional (trim t))
   "Create a CALLBACK function that will use the context of the current buffer.
 
 The TRIM parameter allows trimming the content passed to the CALLBACK function."
@@ -163,7 +162,7 @@ The TRIM parameter allows trimming the content passed to the CALLBACK function."
           (funcall callback content))))))
 
 
-(cl-defun ai--replace-region-or-insert-in-current-buffer (&optional (trim t))
+(cl-defun ai-utils--replace-region-or-insert-in-current-buffer (&optional (trim t))
   "Create scoped `ai-replace-or-insert` with the context of the current buffer.
 
 The TRIM parameter allows trimming the content
@@ -174,11 +173,11 @@ The TRIM parameter allows trimming the content
     (lambda (content)
       (with-current-buffer buffer
         (if trim
-            (funcall 'ai--replace-or-insert (string-trim-left content) beginning end)
-          (funcall 'ai--replace-or-insert content beginning end))))))
+            (funcall 'ai-utils--replace-or-insert (string-trim-left content) beginning end)
+          (funcall 'ai-utils--replace-or-insert content beginning end))))))
 
 
-(cl-defun ai--with-current-buffer-tagged-callback (callback tag &optional (trim t))
+(cl-defun ai-utils--with-current-buffer-tagged-callback (callback tag &optional (trim t))
   "Create a CALLBACK function that will use the context of the current buffer.
 
 TAG - a marker for placing the content passed to the CALLBACK function.
@@ -192,41 +191,46 @@ The TRIM parameter allows trimming the content passed to the CALLBACK function."
           (funcall callback tag content))))))
 
 
-(defun ai--get-explaination-help-buffer ()
+(defun ai-utils--get-explaination-help-buffer ()
   "Return explaination buffer."
-  (get-buffer-create ai--explanation-buffer-name))
+  (get-buffer-create ai-utils--explanation-buffer-name))
 
-(defun ai--get-response-buffer ()
+
+(defun ai-utils--get-response-buffer ()
   "Return buffer for AI responses."
-  (get-buffer-create ai--response-buffer-name))
+  (get-buffer-create ai-utils--response-buffer-name))
 
 
-(defun ai--show-explain-help-buffer (text)
+(defun ai-utils--show-explain-help-buffer (text)
   "Write the TEXT into the explanation buffer and display it."
   (save-excursion
-    (with-help-window (ai--get-explaination-help-buffer)
+    (with-help-window (ai-utils--get-explaination-help-buffer)
       (princ "AI Explanation below: \n")
       (princ text)
-      (switch-to-buffer (ai--get-explaination-help-buffer)))))
+      (switch-to-buffer (ai-utils--get-explaination-help-buffer)))))
 
 
-(defun ai--show-response-buffer (text)
+(defun ai-utils--show-response-buffer (text)
   "Write the TEXT into the response buffer and display it."
   (save-excursion
-    (with-help-window (ai--get-response-buffer)
+    (with-help-window (ai-utils--get-response-buffer)
       (princ text)
-      (switch-to-buffer (ai--get-response-buffer)))))
+      (switch-to-buffer (ai-utils--get-response-buffer)))))
 
 
-(defun ai--get-random-uuid ()
-  "Insert a UUID. This uses a simple hashing of variable data.
+(defun ai-utils--get-random-uuid ()
+  "Insert a UUID.
+
+This uses a simple hashing of variable data.
+
 Example of a UUID: 1df63142-a513-c850-31a3-535fc3520c3d
 
-Note: this code uses https://en.wikipedia.org/wiki/Md5 , which is not cryptographically safe. I'm not sure what's the implication of its use here.
+Note: this code uses https://en.wikipedia.org/wiki/Md5 ,
+ which is not cryptographically safe.
+ I'm not sure what's the implication of its use here.
 
 Version 2015-01-30
-URL `http://ergoemacs.org/emacs/elisp_generate_uuid.html'
-"
+URL `http://ergoemacs.org/emacs/elisp_generate_uuid.html'."
   ;; by Christopher Wellons, 2011-11-18. Editted by Xah Lee.
   ;; Edited by Hideki Saito further to generate all valid variants for "N" in xxxxxxxx-xxxx-Mxxx-Nxxx-xxxxxxxxxxxx format.
 
