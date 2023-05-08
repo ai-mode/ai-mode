@@ -14,6 +14,9 @@ This package provides support for AI in Emacs in several ways.
 - Extension for org babel
 
 
+![ai-mode-completion](https://github.com/ai-mode/ai-mode/blob/master/media/ai-mode-completion.gif "ai-mode-completion")
+
+
 # Installation
 
 
@@ -78,11 +81,48 @@ There are several ways to assign your key to the variable `ai-openai--api-key`.
 
 Extension capabilities can be divided into 4 areas.
 
+
+## Code completion
+
+
+To invoke completion, you need to call the command `ai-complete-code-at-point`. For convenience, you can assign a keyboard shortcut to the command, for example `C-<tab>`.
+
+List of contextual commands in autocomplete mode after preview display.
+
+| binding    | command                                    | Explanation              |
+|------------|--------------------------------------------|--------------------------|
+| `\e\e\e`   | `ai--completion-abort`                     | Disable autocomplete     |
+| `\C-g`     | `ai--completion-abort`                     | Disable autocomplete     |
+| `C-<tab>`  | `ai--completion-select-next-or-abort`      | Show the next candidate  |
+| `C-n`      | `ai--completion-select-next-or-abort`      | Show the next candidate  |
+| `<down>`   | `ai--completion-select-next-or-abort`      | Show the next candidate  |
+| `C-p`      | `ai--completion-select-prev-or-abort`      | Show the prev candidate  |
+| `<up>`     | `ai--completion-select-prev-or-abort`      | Show the prev candidate  |
+| `[return]` | `ai--completion-select-current`            | Select current candidate |
+| `RET`      | `ai--completion-select-current`            | Select current candidate |
+| C-i        | `ai-completions--increase-current-context` | Increase context         |
+
+
+
+### Customization of code completion mode
+
+- `(setq ai-chat--prompt "SuperAI>")` - changing the greeting
+- `(setq ai-completion--context-size 10)` - changing the context size
+
+If you want to write your own backend, take a look at the source code of the `ai-openai--completions-completion-backend` function.
+
+Adding a customized backend:
+
+```elisp
+(add-to-list 'ai--completion-backends '("SuperAI completion backend" . super-ai-completion-backend))
+```
+
+
 ## ChatAI
 
 Interactive mode for interacting with AI. In this mode, you can ask AI questions in an interactive way and receive answers. After typing a message, you can send it using the `C-return>` key combination.
 
-[Place the video here.]
+![ai-chat](https://github.com/ai-mode/ai-mode/blob/master/media/ai-chat.gif "ai-chat")
 
 ### List of available commands:
 
@@ -107,47 +147,11 @@ Adding a customized backend:
 ```
 
 
-## Code completion
-
-[Place the video here.]
-
-To invoke completion, you need to call the command `ai-complete-code-at-point`. For convenience, you can assign a keyboard shortcut to the command, for example `C-<tab>`.
-
-List of contextual commands in autocomplete mode after preview display.
-
-| binding    | command                                    | Explanation              |
-|------------|--------------------------------------------|--------------------------|
-| `\e\e\e`   | `ai--completion-abort`                     | Disable autocomplete     |
-| `\C-g`     | `ai--completion-abort`                     | Disable autocomplete     |
-| `C-<tab>`  | `ai--completion-select-next-or-abort`      | Show the next candidate  |
-| `C-n`      | `ai--completion-select-next-or-abort`      | Show the next candidate  |
-| `<down>`   | `ai--completion-select-next-or-abort`      | Show the next candidate  |
-| `C-p`      | `ai--completion-select-prev-or-abort`      | Show the prev candidate  |
-| `<up>`     | `ai--completion-select-prev-or-abort`      | Show the prev candidate  |
-| `[return]` | `ai--completion-select-current`            | Select current candidate |
-| `RET`      | `ai--completion-select-current`            | Select current candidate |
-| C-i        | `ai-completions--increase-current-context` | Increase context         |
-
-
-
-
-### Customization of code completion mode
-
-- `(setq ai-chat--prompt "SuperAI>")` - changing the greeting
-- `(setq ai-completion--context-size 10)` - changing the context size
-
-If you want to write your own backend, take a look at the source code of the `ai-openai--completions-completion-backend` function.
-
-Adding a customized backend:
-
-```elisp
-(add-to-list 'ai--completion-backends '("SuperAI completion backend" . super-ai-completion-backend))
-```
-
-
 ## Code manipulation
 
-[Place the video here.]
+![ai-replace-number](https://github.com/ai-mode/ai-mode/blob/master/media/ai-mode-replace-number.gif "ai-replace-number")
+![ai-mode-translation](https://github.com/ai-mode/ai-mode/blob/master/media/ai-mode-translation.gif "ai-mode-translation")
+![ai-mode-translation-2](https://github.com/ai-mode/ai-mode/blob/master/media/ai-mode-translation-2.gif "ai-mode-translation-2")
 
 This mode includes several commands that allow modifying, adding to, and changing the code and text.
 
