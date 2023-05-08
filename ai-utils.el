@@ -30,12 +30,14 @@
 
 ;;; Code:
 
+(require 'url)
 
 (defcustom ai-utils--write-log-buffer nil
   "Switch to turn on/off logging to a special buffer."
   :type 'boolean
   :group 'ai)
 
+(defvar url-http-end-of-headers)
 
 (defvar ai-utils--explanation-buffer-name "*AI explanation*"
   "The name of the buffer for explanation.")
@@ -45,6 +47,12 @@
 
 (defvar ai-utils--log-buffer-name "*AI-request-log*"
   "The name of the buffer for logging API requests.")
+
+(defcustom ai-utils--default-request-timeout 60
+  "HTTP request timeout."
+  :type '(choice integer (const nil))
+  :group 'ai-mode)
+
 
 (defun ai-utils--write-log (output)
   "Write OUTPUT into `ai-utils--log-buffer-name`.
@@ -254,6 +262,75 @@ URL `http://ergoemacs.org/emacs/elisp_generate_uuid.html'."
             (substring myStr 17 20)
             (substring myStr 20 32))))
 
+
+
+(cl-defun ai-utils--async-request (api-url method body headers callback
+                                           &key (timeout ai-utils--default-request-timeout))
+  "Prepare and execute async request to API-URL.
+
+METHOD is HTTP method.
+BODY is request body.
+HEADERS is request headers.
+CALLBACK is function called upon successful response.
+TIMEOUT is timeout for request execution."
+  (let* (
+
+         (request-id (ai-utils--get-random-uuid))
+         (url-request-method method)
+         (url-request-extra-headers headers)
+         (url-request-data body))
+
+    (ai-utils--log-request request-id url-request-method api-url headers body)
+
+    (url-retrieve api-url
+                  (lambda (_events)
+                    (progn
+                      (ai-utils--log-response request-id (buffer-string))
+                      (goto-char url-http-end-of-headers)
+
+                      (condition-case request-error
+                          (let ((result (json-read-from-string
+                                         (decode-coding-string
+                                          (buffer-substring-no-properties url-http-end-of-headers (point-max))
+                                          'utf-8))))
+                            (funcall callback result))
+                        (error (ai-utils--log-and-error (format "Error while parsing response body: %s" (error-message-string request-error)))))))
+                  nil nil timeout)))
+
+
+(cl-defun ai-utils--sync-request (api-url method body headers
+                                          &key (timeout ai-utils--default-request-timeout))
+  "Performing a synchronous request to API-URL.
+Return response content or raise an error.
+
+API-URL is a full API address.
+METHOD is a request method.
+BODY is request body content.
+HEADERS is a list of headers.
+TIMEOUT is timeout for request execution."
+  (let* ((request-id (ai-utils--get-random-uuid))
+         (url-request-method method)
+         (url-request-extra-headers headers)
+         (url-request-data body)
+         (buffer (url-retrieve-synchronously api-url 'silent nil timeout))
+         response)
+
+    (ai-utils--log-request request-id url-request-method api-url headers body)
+
+    (if buffer
+        (with-current-buffer buffer
+          (ai-utils--log-response request-id (buffer-string))
+          (goto-char url-http-end-of-headers)
+
+          (condition-case _request-error
+              (let ((result (json-read-from-string
+                             (decode-coding-string
+                              (buffer-substring-no-properties url-http-end-of-headers (point-max))
+                              'utf-8))))
+                result)
+            (error (progn
+                     (ai-utils--log-and-error  "Error while parsing response body")))))
+      (ai-utils--log-and-error (format "Failed to send request %s to %s" request-id api-url)))))
 
 
 (provide 'ai-utils)

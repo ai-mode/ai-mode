@@ -36,7 +36,13 @@
   :group 'ai-mode)
 
 
-(defcustom ai-completions--context-size 1
+(defcustom ai-completions--context-size 2
+  "Number of lines for context."
+  :type 'integer
+  :group 'ai-chat)
+
+
+(defcustom ai-completions--current-context-size 1
   "Number of lines for context."
   :type 'integer
   :group 'ai-chat)
@@ -69,12 +75,13 @@
 
 
 (defcustom ai-completions--abort-commands '(not ai-completions--select-next-or-abort
-                                               ai-completions--select-prev-or-abort
-                                               ai-completions--select-current
-                                               ignore
-                                               switch-to-buffer
-                                               other-window
-                                               other-buffer)
+                                                ai-completions--select-prev-or-abort
+                                                ai-completions--select-current
+                                                ai-completions--increase-current-context
+                                                ignore
+                                                switch-to-buffer
+                                                other-window
+                                                other-buffer)
   "A list of commands that abort completion."
   :type '(choice (const :tag "Any command" t)
                  (cons  :tag "Any except"
@@ -114,6 +121,7 @@
     (define-key keymap [up-mouse-3] 'ignore)
     (define-key keymap [return] 'ai-completions--select-current)
     (define-key keymap (kbd "RET") 'ai-completions--select-current)
+    (define-key keymap (kbd "C-i") 'ai-completions--increase-current-context)
     (define-key keymap (kbd "C-<tab>") 'ai-completions--select-next-or-abort)
     keymap)
 
@@ -139,7 +147,8 @@
         (if (region-active-p)
             (region-end)
           (point))
-        ai-completions--active t)
+        ai-completions--active t
+        ai-completions--current-context-size ai-completions--context-size)
 
   (condition-case-unless-debug err
       (progn (ai-completions-mode 1)
@@ -184,25 +193,47 @@
       (ai-utils--get-region-content)
 
     (let* ((current (point))
-           (min-point (- current ai-completions--context-size))
-           (context-beginning-point (line-beginning-position (* -1 ai-completions--context-size))))
+           (min-point (- current ai-completions--current-context-size))
+           (context-beginning-point (line-beginning-position (* -1 ai-completions--current-context-size))))
       (buffer-substring-no-properties context-beginning-point current))))
+
+
+(defun ai-completions--get-complete-params ()
+  "Get parameters alist for completions."
+  (if (region-active-p)
+      (let* ((completion-context-beginning (region-beginning))
+             (completion-context-end (region-end))
+             (cursor-offset completion-context-end)
+             (content (ai-utils--get-region-content)))
+        `(:content ,content :cursor-offset ,cursor-offset :context-beginning ,completion-context-beginning :context-end ,completion-context-end))
+
+    (let* ((cursor-offset (point))
+           (completion-context-beginning (line-beginning-position (* -1 ai-completions--current-context-size)))
+           (content (buffer-substring-no-properties completion-context-beginning cursor-offset)))
+      `(:content ,content :cursor-offset ,cursor-offset :context-beginning ,completion-context-beginning :context-end ,cursor-offset))))
 
 
 (defun ai-completions--update-candidates (buffer)
   "Update the list of candidates for BUFFER."
-  (funcall ai-completions--current-backend
-           (ai-completions--get-text-to-complete)
-           (ai-completions--get-buffer-type-or-language buffer)
-           (lambda (candidates)
-             (progn
-               (with-current-buffer buffer
-                 (ai-completions--add-candidates candidates)
-                 (ai-completions--show-candidate))))))
+  (let* ((completion-params (ai-completions--get-complete-params))
+         (text (map-elt completion-params :content)))
+    (funcall ai-completions--current-backend
+             text
+             (lambda (candidates)
+               (progn
+                 (with-current-buffer buffer
+                   (ai-completions--add-candidates candidates)
+                   (ai-completions--show-candidate))))
+             :fail-callback (lambda ()
+                              (with-current-buffer buffer
+                                (message "ai-complations--update-candidates failed")))
+             :extra-params (append completion-params `(:buffer-language ,(ai-completions--get-buffer-type-or-language buffer) :buffer ,buffer)))))
+
 
 (defun ai-completions--update-preview ()
   "Show a preview with the current candidate."
   (ai-completions--preview-show-at-point ai-completions--last-point (nth ai-completions--current-candidate ai-completions--candidates)))
+
 
 (defun ai-completions--add-candidates (candidates)
   "Add a CANDIDATES to the list of `ai-completions--candidates`."
@@ -234,7 +265,8 @@
   (setq ai-completions--current-candidate 0
         ai-completions--candidates '()
         ai-completions--last-point nil
-        ai-completions--active nil)
+        ai-completions--active nil
+        ai-completions--current-context-size ai-completions--context-size)
   (ai-completions--destroy-keymap)
   (ai-completions-mode 0)
   ;; TODO: run hooks
@@ -266,6 +298,7 @@
           (setq ai-completions--current-candidate next-candidate-index)
           (ai-completions--show-candidate))))))
 
+
 (defun ai-completions--select-prev-or-abort ()
   "Show the previous candidate."
   (interactive)
@@ -276,6 +309,14 @@
         (setq ai-completions--current-candidate prev-candidate-index)
         (ai-completions--show-candidate)))
      (t (message "completion candidate already selected")))))
+
+
+(defun ai-completions--increase-current-context ()
+  "Increase current context."
+  (interactive)
+  (setq ai-completions--current-context-size (+ ai-completions--current-context-size 1))
+  (ai-completions--show-candidate)
+  (message (format "Current completion context size: %d" ai-completions--current-context-size)))
 
 
 (define-minor-mode ai-completions-mode
@@ -398,11 +439,117 @@
     (setq ai-completions--current-backend (cdr (assoc value ai-completions--backends)))
     (message (format "AI query backend changed to \"%s\"" value))))
 
+(defvar ai-completions--language-alist
+  '((nil . "text")
+    (text-mode . "Plain text")
+    (c-mode . "C")
+    (c-ts-mode . "C")
+    (clojure-mode . "Clojure")
+    (clojurec-mode . "Clojure")
+    (clojurescript-mode . "Clojure")
+    (coffee-mode . "CoffeeScript")
+    (cc-mode . "C++")
+    (c++-mode . "C++")
+    (c++-ts-mode . "C++")
+    (csharp-mode . "C#")
+    (csharp-tree-sitter-mode . "C#")
+    (csharp-ts-mode . "C#")
+    (css-mode . "CSS")
+    (css-ts-mode . "CSS")
+    (cuda-mode . "CUDA")
+    (dockerfile-mode . "Dockerfile")
+    (dockerfile-ts-mode . "Dockerfile")
+    (go-dot-mod-mode . "Go")
+    (go-mod-ts-mode . "Go")
+    (go-mode . "Go")
+    (go-ts-mode . "Go")
+    (groovy-mode . "Groovy")
+    (haskell-mode . "Haskell")
+    (terraform-mode . "Terraform")
+    (html-mode . "HTML")
+    (sgml-mode . "HTML")
+    (mhtml-mode . "HTML")
+    (java-mode . "Java")
+    (java-ts-mode . "Java")
+    (jdee-mode . "Java")
+    (ecmascript-mode . "JavaScript")
+    (javascript-mode . "JavaScript")
+    (js-mode . "JavaScript")
+    (js2-mode . "JavaScript")
+    (js-ts-mode . "JavaScript")
+    (rjsx-mode . "JavaScript")
+    (json-mode . "JSON")
+    (json-ts-mode . "JSON")
+    (julia-mode . "Julia")
+    (ess-julia-mode . "Julia")
+    (kotlin-mode . "Kotlin")
+    (kotlin-ts-mode . "Kotlin")
+    (latex-mode . "LaTeX")
+    (less-mode . "Less")
+    (less-css-mode . "Less")
+    (lua-mode . "Lua")
+    (lsp--render-markdown . "Markdown")
+    (markdown-mode . "Markdown")
+    (gfm-mode . "Markdown")
+    (objc-mode . "Objective-C")
+    (perl-mode . "Perl")
+    (cperl-mode . "Perl")
+    (php-mode . "PHP")
+    (python-mode . "Python")
+    (python-ts-mode . "Python")
+    (cython-mode . "Python")
+    (ess-r-mode . "R")
+    (ruby-mode . "Ruby")
+    (enh-ruby-mode . "Ruby")
+    (ruby-ts-mode . "Ruby")
+    (rust-mode . "Rust")
+    (rust-ts-mode . "Rust")
+    (rustic-mode . "Rust")
+    (sass-mode . "Sass")
+    (ssass-mode . "Sass")
+    (scala-mode . "Scala")
+    (scss-mode . "SCSS")
+    (sh-mode . "Shell")
+    (ebuild-mode . "Shell")
+    (pkgbuild-mode . "Shell")
+    (sql-mode . "SQL")
+    (swift-mode . "Swift")
+    (ts-mode . "TypeScript")
+    (typescript-mode . "TypeScript")
+    (typescript-ts-mode . "TypeScript")
+    (nxml-mode . "XML")
+    (xml-mode . "XML")
+    (yaml-mode . "YAML")
+    (yaml-ts-mode . "YAML")
+    (conf-toml-mode . "TOML")
+    (toml-ts-mode . "TOML")
+    (dart-mode . "Dart")
+    (caml-mode . "OCaml")
+    (tuareg-mode . "OCaml")
+    (cmake-mode . "CMake")
+    (cmake-ts-mode . "CMake")
+    (pascal-mode . "Pascal")
+    (elixir-mode . "Elixir")
+    (elixir-ts-mode . "Elixir")
+    (heex-ts-mode . "Elixir")
+    (fsharp-mode . "F#")
+    (lisp-mode . "Lisp")
+    (emacs-lisp-mode . "Emacs Lisp")))
+
 
 (defun ai-completions--get-buffer-type-or-language (buffer)
   "Get programming language for BUFFER."
   (with-current-buffer buffer
-    (file-name-extension (buffer-file-name buffer))))
+    (let* ((mode major-mode))
+      (while (not (alist-get mode ai-completions--language-alist))
+	(setq mode (get mode 'derived-mode-parent)))
+      (alist-get mode ai-completions--language-alist))))
+
+
+(defun print-buffer-lang ()
+  ""
+  (interactive)
+  (message (format ">>>>%s" (ai-completions--get-buffer-type-or-language (current-buffer)))))
 
 
 (provide 'ai-completions)

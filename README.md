@@ -5,12 +5,14 @@
 
 #  Overview
 
-AI Mode is an experimental extension for Emacs that allows for interacting with AI systems via API interfaces. The extension includes several different scenarios for interaction:
+This package provides support for AI in Emacs in several ways.
 
-- Code completion mode
-- Code manipulation: explanation, optimization, improve, etc.
-- AI interaction mode in chat format
+- Interaction with AI in interactive chat mode.
+- Using AI for code and text completion in AI completion mode.
+- Using AI to modify code.
+- Using AI to explain code.
 - Extension for org babel
+
 
 # Installation
 
@@ -69,9 +71,7 @@ There are several ways to assign your key to the variable `ai-openai--api-key`.
                                        ("spellcheck" . "Spellcheck this text: %s")
                                        ("elaborate" . "Elaborate on this text: %s")
                                        ("document" . "Please add the documentation for the following code: %s")
-                                       ("refactor" . "Refactor the following code: %s")
-                                       ))
-  ))
+                                       ("refactor" . "Refactor the following code: %s")))))
 ```
 
 # Features
@@ -96,7 +96,7 @@ Interactive mode for interacting with AI. In this mode, you can ask AI questions
 ### Customization of chat mode.
 
 - `(setq ai-chat--prompt "SuperAI>")` - changing the greeting
-- `(setq ai--chat--buffer-context-size 10)` - changing the context size
+- `(setq ai-chat--buffer-context-size 10)` - changing the context size
 
 If you want to write your own backend, take a look at the source code of the `ai-openai--chat-async-send-context` function.
 
@@ -115,17 +115,19 @@ To invoke completion, you need to call the command `ai-complete-code-at-point`. 
 
 List of contextual commands in autocomplete mode after preview display.
 
-| binding    | command                               | Explanation                                       |
-|------------|---------------------------------------|---------------------------------------------------|
-| `\e\e\e`   | `ai--completion-abort`                | Disable autocomplete                              |
-| `\C-g`     | `ai--completion-abort`                | Disable autocomplete                              |
-| `C-<tab>`  | `ai--completion-select-next-or-abort` | Show the next candidate                           |
-| `C-n`      | `ai--completion-select-next-or-abort` | Show the next candidate                           |
-| `<down>`   | `ai--completion-select-next-or-abort` | Show the next candidate                           |
-| `C-p`      | `ai--completion-select-prev-or-abort` | Show the prev candidate                           |
-| `<up>`     | `ai--completion-select-prev-or-abort` | Show the prev candidate                           |
-| `[return]` | `ai--completion-select-current`       | Select current candidate                          |
-| `RET`      | `ai--completion-select-current`       | Select current candidate                          |
+| binding    | command                                    | Explanation              |
+|------------|--------------------------------------------|--------------------------|
+| `\e\e\e`   | `ai--completion-abort`                     | Disable autocomplete     |
+| `\C-g`     | `ai--completion-abort`                     | Disable autocomplete     |
+| `C-<tab>`  | `ai--completion-select-next-or-abort`      | Show the next candidate  |
+| `C-n`      | `ai--completion-select-next-or-abort`      | Show the next candidate  |
+| `<down>`   | `ai--completion-select-next-or-abort`      | Show the next candidate  |
+| `C-p`      | `ai--completion-select-prev-or-abort`      | Show the prev candidate  |
+| `<up>`     | `ai--completion-select-prev-or-abort`      | Show the prev candidate  |
+| `[return]` | `ai--completion-select-current`            | Select current candidate |
+| `RET`      | `ai--completion-select-current`            | Select current candidate |
+| C-i        | `ai-completions--increase-current-context` | Increase context         |
+
 
 
 
@@ -182,6 +184,11 @@ The org babel extension allows executing blocks using an AI engine. This functio
 
 `ai-change-query-backend` - allows you to change the current backend to another one from the list `ai-async-query-backends`.
 
+
+## Related projects
+
+- [Codeium backend](https://github.com/ai-mode/ai-mode-codeium)
+- [org babel support](https://github.com/ai-mode/ob-ai)
 
 
 

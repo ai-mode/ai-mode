@@ -31,6 +31,7 @@
 
 
 (require 'ai-utils)
+(require 'url)
 
 
 (defgroup ai-openai nil
@@ -64,82 +65,6 @@
   "OpenAI request timeout."
   :type '(choice integer (const nil))
   :group 'ai-openai)
-
-
-
-(cl-defun ai-openai-async-request (api-url method body headers callback &key (timeout ai-openai-request-timeout))
-  "Prepare and execute async request to API-URL.
-
-METHOD is HTTP method.
-BODY is request body.
-HEADERS is request headers.
-CALLBACK is function called upon successful response.
-TIMEOUT is timeout for request execution."
-  (let* (
-
-         (request-id (ai-utils--get-random-uuid))
-         (url-request-method method)
-         (url-request-extra-headers headers)
-         (url-request-data body))
-
-    (ai-utils--log-request request-id url-request-method api-url headers body)
-
-    (url-retrieve api-url
-                  (lambda (events)
-                    (progn
-                      (ai-utils--log-response request-id (buffer-string))
-                      (goto-char url-http-end-of-headers)
-
-                      (condition-case request-error
-                          (let (
-                                ;; (json-object-type 'plist)
-                                ;; (json-key-type 'symbol)
-                                ;; (json-array-type 'vector)
-                                )
-                            (let ((result (json-read-from-string
-                                           (decode-coding-string
-                                            (buffer-substring-no-properties url-http-end-of-headers (point-max))
-                                            'utf-8))))
-                              (funcall callback result)))
-                        (error (progn
-                                 (ai-utils--log-and-error (format "Error while parsing response body: %s" (error-message-string request-error))))))))
-                  nil nil timeout)))
-
-
-(cl-defun ai-openai--sync-request (api-url method body headers &key (timeout ai-openai-request-timeout))
-  "Performing a synchronous request to the OpenAI API.
-Return response content or raise an error.
-
-API-URL is a full API address.
-METHOD is a request method.
-BODY is request body content.
-HEADERS is a list of headers.
-TIMEOUT is timeout for request execution."
-  (let* (
-         (request-id (ai-utils--get-random-uuid))
-         (url-request-method method)
-         (url-request-extra-headers headers)
-         (url-request-data body)
-         (buffer (url-retrieve-synchronously api-url 'silent nil timeout))
-         response)
-
-    (ai-utils--log-request request-id url-request-method api-url headers body)
-
-    (if buffer
-        (with-current-buffer buffer
-          (ai-utils--log-response request-id (buffer-string))
-          (goto-char url-http-end-of-headers)
-
-          (condition-case request-error
-              (let ((result (json-read-from-string
-                             (decode-coding-string
-                              (buffer-substring-no-properties url-http-end-of-headers (point-max))
-                              'utf-8))))
-                result)
-            (error (progn
-                     (ai-utils--log-and-error  "Error while parsing response body")))))
-      (ai-utils--log-and-error (format "Failed to send request %s to %s" request-id api-url)))))
-
 
 
 (defun ai-openai--get-response-choices (response)

@@ -46,30 +46,25 @@ https://platform.openai.com/docs/models/model-endpoint-compatibility."
   :group 'ai-openai)
 
 
-(cl-defun ai-openai-chat--async-request (messages callback &key
-                                                   (api-url ai-openai-chat--url)
-                                                   (model ai-openai-chat--model-version)
-                                                   (temperature ai-openai--model-temperature)
-                                                   (max-tokens ai-openai--default-max-tokens)
-                                                   (timeout ai-openai-request-timeout)
-                                                   (n ai-openai--completion-choices)
-                                                   (extra-params nil))
+(cl-defun ai-openai-chat--async-request (messages callback &key (fail-callback nil) (extra-params nil))
   "Asynchronous MESSAGES execution of a request to the OpenAI ChatGPT API.
 
 In case of a successful request execution, a CALLBACK function is called.
 
-API-URL - is a full API address.
-MODEL - an AI model that needs to be used to process the request.
-TEMPERATURE - sampling temperature to use, between 0 and 2.
-MAX-TOKENS - The maximum number of tokens to generate answer.
-TIMEOUT - the duration limit for the execution of the request.
-N - How many completions to generate for each prompt.
+If request failed then FAIL-CALLBACK called if it is provided.
 EXTRA-PARAMS is a list of properties (plist) that can be used to store parameters."
   (when (null ai-openai--api-key)
     (error "OpenAI API key is not set"))
 
 
-  (let* ((request-data `(("model" . ,model)
+  (let* ((api-url (map-elt extra-params :api-url ai-openai-chat--url))
+         (model (map-elt extra-params :model ai-openai-chat--model-version))
+         (temperature (map-elt extra-params :temperature ai-openai--model-temperature))
+         (max-tokens (map-elt extra-params :max-tokens ai-openai--default-max-tokens))
+         (timeout (map-elt extra-params :timeout ai-openai-request-timeout))
+         (n (map-elt extra-params :n ai-openai--completion-choices))
+
+         (request-data `(("model" . ,model)
                          ("messages" . ,messages)
                          ("temperature" . ,temperature)
                          ("max_tokens" . ,max-tokens)
@@ -78,16 +73,9 @@ EXTRA-PARAMS is a list of properties (plist) that can be used to store parameter
 
          (headers  `(("Content-Type" . "application/json")
                      ("Authorization" . ,(format "Bearer %s" ai-openai--api-key)))))
-    (ai-openai-async-request api-url "POST" encoded-request-data headers callback :timeout timeout)))
+    (ai-utils--async-request api-url "POST" encoded-request-data headers callback :timeout timeout)))
 
-(cl-defun ai-openai-chat--sync-request (messages &key
-                                                  (api-url ai-openai-chat--url)
-                                                  (model ai-openai-chat--model-version)
-                                                  (temperature ai-openai--model-temperature)
-                                                  (max-tokens ai-openai--default-max-tokens)
-                                                  (timeout ai-openai-request-timeout)
-                                                  (n ai-openai--completion-choices)
-                                                  (extra-params nil))
+(cl-defun ai-openai-chat--sync-request (messages &key (extra-params nil))
   "Synchronous MESSAGES execution of a request to the OpenAI ChatGPT API.
 
 API-URL - is a full API address.
@@ -99,8 +87,16 @@ N - How many completions to generate for each prompt.
 EXTRA-PARAMS is a list of properties (plist) that can be used to store parameters."
   (when (null ai-openai--api-key)
     (error "OpenAI API key is not set"))
+  (message (format "ai-openai-chat--sync-request called: %s" extra-params))
 
-  (let* ((request-data `(("model" . ,model)
+  (let* ((api-url (map-elt extra-params :api-url ai-openai-chat--url))
+         (model (map-elt extra-params :model ai-openai-chat--model-version))
+         (temperature (map-elt extra-params :temperature ai-openai--model-temperature))
+         (max-tokens (map-elt extra-params :max-tokens ai-openai--default-max-tokens))
+         (timeout (map-elt extra-params :timeout ai-openai-request-timeout))
+         (n (map-elt extra-params :n ai-openai--completion-choices))
+
+         (request-data `(("model" . ,model)
                          ("messages" . ,messages)
                          ("temperature" . ,temperature)
                          ("max_tokens" . ,max-tokens)
@@ -110,59 +106,31 @@ EXTRA-PARAMS is a list of properties (plist) that can be used to store parameter
          (headers  `(("Content-Type" . "application/json")
                      ("Authorization" . ,(format "Bearer %s" ai-openai--api-key)))))
     (condition-case-unless-debug processing-error
-        (let ((response (ai-openai--sync-request api-url "POST" encoded-request-data headers :timeout timeout)))
+        (let ((response (ai-utils--sync-request api-url "POST" encoded-request-data headers :timeout timeout)))
           (ai-openai--extract-response-or-error response))
       (error (progn
                (ai-utils--log-and-error  (format "Process chat request error: %s" (error-message-string processing-error))))))))
 
 
-(cl-defun ai-openai-chat--async-send-query (input callback &key
-                                                   (api-url ai-openai-chat--url)
-                                                   (model ai-openai-chat--model-version)
-                                                   (temperature ai-openai--model-temperature)
-                                                   (max-tokens ai-openai--default-max-tokens)
-                                                   (timeout ai-openai-request-timeout)
-                                                   (n ai-openai--completion-choices)
-                                                   (extra-params nil))
+(cl-defun ai-openai-chat--async-send-query (input callback &key (fail-callback nil) (extra-params nil))
   "Async execute INPUT, exract message from response and call CALLBACK.
 
-API-URL - is a full API address.
-MODEL - an AI model that needs to be used to process the request.
-TEMPERATURE - sampling temperature to use, between 0 and 2.
-MAX-TOKENS - The maximum number of tokens to generate answer.
-TIMEOUT - the duration limit for the execution of the request.
-N - How many completions to generate for each prompt.
+If request failed call FAIL-CALLBACK.
+
 EXTRA-PARAMS is a list of properties (plist) that can be used to store parameters."
   (ai-openai-chat--async-request
    `((("role" . "user") ("content" . ,input)))
    (lambda (response)
      (progn
        (funcall callback (cdr (assoc 'content (ai-openai-chat--get-choice (ai-openai--extract-response-or-error response))))))))
-  :api-url api-url
-  :model model
-  :temperature temperature
-  :max-tokens max-tokens
-  :timeout timeout
-  :n n
+  :fail-callback fail-callback
   :extra-params extra-params)
 
 
-(cl-defun ai-openai-chat--async-send-context (input callback &key
-                                                     (api-url ai-openai-chat--url)
-                                                     (model ai-openai-chat--model-version)
-                                                     (temperature ai-openai--model-temperature)
-                                                     (max-tokens ai-openai--default-max-tokens)
-                                                     (timeout ai-openai-request-timeout)
-                                                     (n ai-openai--completion-choices)
-                                                     (extra-params nil))
+(cl-defun ai-openai-chat--async-send-context (input callback &key (fail-callback nil) (extra-params nil))
   "Async execute INPUT, exract message from response and call CALLBACK.
 
-API-URL - is a full API address.
-MODEL - an AI model that needs to be used to process the request.
-TEMPERATURE - sampling temperature to use, between 0 and 2.
-MAX-TOKENS - The maximum number of tokens to generate answer.
-TIMEOUT - the duration limit for the execution of the request.
-N - How many completions to generate for each prompt.
+If request failed FAIL-CALLBACK provided.
 EXTRA-PARAMS is a list of properties (plist) that can be used to store parameters"
   (ai-openai-chat--async-request
    (ai-openai-chat--internal-to-messages input)
@@ -171,34 +139,16 @@ EXTRA-PARAMS is a list of properties (plist) that can be used to store parameter
             (choices (ai-openai--get-response-choices response-content))
             (messages (ai-openai-chat--messages-to-internal-context choices)))
        (funcall callback messages))))
-  :api-url api-url
-  :model model
-  :temperature temperature
-  :max-tokens max-tokens
-  :timeout timeout
-  :n n
+  :fail-callback fail-callback
   :extra-params extra-params)
 
 
-(cl-defun ai-openai-chat--sync-send-query (input &key
-                                                  (api-url ai-openai-chat--url)
-                                                  (model ai-openai-chat--model-version)
-                                                  (temperature ai-openai--model-temperature)
-                                                  (max-tokens ai-openai--default-max-tokens)
-                                                  (timeout ai-openai-request-timeout)
-                                                  (n ai-openai--completion-choices)
-                                                  (extra-params nil))
+(cl-defun ai-openai-chat--sync-send-query (input &key (extra-params nil))
   "Sync execute INPUT, exract message from response and return.
 
-API-URL - is a full API address.
-MODEL - an AI model that needs to be used to process the request.
-TEMPERATURE - sampling temperature to use, between 0 and 2.
-MAX-TOKENS - The maximum number of tokens to generate answer.
-TIMEOUT - the duration limit for the execution of the request.
-N - How many completions to generate for each prompt.
 EXTRA-PARAMS is a list of properties (plist) that can be used to store parameters."
   (let* ((messages `((("role" . "user") ("content" . ,input))))
-         (success-response (ai-openai-chat--sync-request messages :api-url api-url :model model :temperature temperature :max-tokens max-tokens :timeout timeout :n n :extra-params extra-params))
+         (success-response (ai-openai-chat--sync-request messages :extra-params extra-params))
          (content (cdr (assoc 'content (ai-openai-chat--get-choice success-response)))))
     content))
 

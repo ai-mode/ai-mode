@@ -102,6 +102,19 @@
   :group 'ai-mode)
 
 
+(defcustom ai-sync-query-backend 'ai-openai-chat--sync-send-query
+  "The current backend used to execute requests asynchronously."
+  :group 'ai-mode)
+
+(defcustom ai-sync-query-backends
+  '(("OpenAI ChatGPT" . ai-openai-chat--sync-send-query)
+    ("OpenAI completions" . ai-openai-completions--sync-send-query))
+  "An association list that maps query backend to function."
+  :type '(alist :key-type (string :tag "Backend name")
+                :value-type (symbol :tag "Backend function"))
+  :group 'ai-mode)
+
+
 
 (defcustom ai--human-lang "english"
   "The language in which AI provides answers."
@@ -194,17 +207,17 @@
 (defun ai-optimize-code-region ()
   "Optimize code region and replace it."
   (interactive)
-  (ai--async-query-by-type "optimize" (ai-utils--get-region-content) (ai--replace-region-or-insert-in-current-buffer)))
+  (ai--async-query-by-type "optimize" (ai-utils--get-region-content) (ai-utils--replace-region-or-insert-in-current-buffer)))
 
 (defun ai-improve-code-region ()
   "Improve code region and replace it."
   (interactive)
-  (ai--async-query-by-type "improve" (ai-utils--get-region-content) (ai--replace-region-or-insert-in-current-buffer)))
+  (ai--async-query-by-type "improve" (ai-utils--get-region-content) (ai-utils--replace-region-or-insert-in-current-buffer)))
 
 (defun ai-fix-code-region ()
   "Fix code region and replace it."
   (interactive)
-  (ai--async-query-by-type "fix" (ai-utils--get-region-content) (ai--replace-region-or-insert-in-current-buffer)))
+  (ai--async-query-by-type "fix" (ai-utils--get-region-content) (ai-utils--replace-region-or-insert-in-current-buffer)))
 
 (defun ai-document-code-region ()
   "Document code region and replace doc market."
@@ -217,12 +230,12 @@
 (defun ai-elaborate-code-region ()
   "Elaborate code region and replace it."
   (interactive)
-  (ai--async-query-by-type "elaborate" (ai-utils--get-region-content) (ai--replace-region-or-insert-in-current-buffer)))
+  (ai--async-query-by-type "elaborate" (ai-utils--get-region-content) (ai-utils--replace-region-or-insert-in-current-buffer)))
 
 (defun ai-spellcheck-code-region ()
   "Spellcheck code region and replace it."
   (interactive)
-  (ai--async-query-by-type "spellcheck" (ai-utils--get-region-content) (ai--replace-region-or-insert-in-current-buffer)))
+  (ai--async-query-by-type "spellcheck" (ai-utils--get-region-content) (ai-utils--replace-region-or-insert-in-current-buffer)))
 
 
 (defun ai-explain-code-region ()
@@ -239,7 +252,7 @@
 (defun ai--async-query-by-type (query-type input callback)
   "Perform INPUT using the QUERY-TYPE type and passes the result to the CALLBACK function."
   (let ((query (ai--format-query query-type input)))
-    (funcall ai-async-query-backend query callback)))
+    (ai-perform-async-backend-query query callback :fail-callback nil)))
 
 
 (defun ai--format-query (query-type query)
@@ -265,16 +278,44 @@
   "Execute request and replace selected region."
   (interactive)
   (if (region-active-p)
-      (ai--async-query-by-type (ai--get-query-type) (ai-utils--get-region-content) (ai--replace-region-or-insert-in-current-buffer))
+      (ai--async-query-by-type (ai--get-query-type) (ai-utils--get-region-content) (ai-utils--replace-region-or-insert-in-current-buffer))
     (message "You must select region for this command")))
 
 
-(defun ai-change-query-backend ()
+(defun ai-change-async-query-backend ()
   "Change query backend."
   (interactive)
   (let* ((value (completing-read ai--change-backend-prompt (mapcar #'car ai-async-query-backends))))
     (setq ai-async-query-backend (cdr (assoc value ai-async-query-backends)))
-    (message (format "AI query backend is changed to \"%s\"" value))))
+    (message (format "AI query async backend is changed to \"%s\"" value))))
+
+
+(defun ai-change-sync-query-backend ()
+  "Change query backend."
+  (interactive)
+  (let* ((value (completing-read ai--change-backend-prompt (mapcar #'car ai-sync-query-backends))))
+    (setq ai-sync-query-backend (cdr (assoc value ai-sync-query-backends)))
+    (message (format "AI query sync backend is changed to \"%s\"" value))))
+
+
+(cl-defun ai-perform-async-backend-query (query callback &key
+                                             (fail-callback nil)
+                                             (extra-params nil))
+  "Execute QUERY by current backend asynchronously.
+
+After successful execution CALLBACK will called.
+If execution failed then FAIL-CALLBACK called if provided.
+EXTRA-PARAMS is a alist of extra parameters for backend."
+  (funcall ai-async-query-backend query callback :fail-callback fail-callback))
+
+
+(cl-defun ai-perform-sync-backend-query (query &key (extra-params nil))
+  "Execute QUERY by current backend synchronously.
+
+EXTRA-PARAMS is a alist of extra parameters for backend."
+  (funcall ai-sync-query-backend query :extra-params extra-params))
+
+
 
 (provide 'ai-mode)
 
