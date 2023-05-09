@@ -163,7 +163,7 @@
     keymap)
   "Keymap used by `ai-mode`.")
 
-
+;;;###autoload
 (define-minor-mode ai-mode
   "Mode for AI interaction."
   :keymap ai-mode-map
