@@ -31,6 +31,7 @@
 ;;; Code:
 
 (require 'url)
+(require 'json)
 
 (defcustom ai-utils--write-log-buffer nil
   "Switch to turn on/off logging to a special buffer."

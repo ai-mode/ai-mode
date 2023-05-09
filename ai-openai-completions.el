@@ -144,7 +144,6 @@ EXTRA-PARAMS is a list of properties (plist) that can be used to store parameter
 If request failed call FAIL-CALLBACK.
 EXTRA-PARAMS is a list of properties (plist) that can be used to store parameters."
 
-  (message (format "ai-openai-completions--completion-backend: %s" extra-params))
   (ai-openai-completions--async-request
    code
    (lambda (response)
