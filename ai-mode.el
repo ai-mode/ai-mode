@@ -1,12 +1,11 @@
-;;; ai-mode.el --- AI interaction mode -*- lexical-binding: t -*-
+;;; ai-mode.el --- AI interaction mode for Emacs -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2023 Alex (https://github.com/lispython)
 
 ;; URL: https://github.com/ai-mode/ai-mode
 ;; Version: 0.1
 ;; Package-Requires: ((emacs "27.1") cl-lib)
-;; Keywords: help, tools
-
+;; Keywords: help, tools, AI
 
 ;; This file is part of GNU Emacs.
 
@@ -22,19 +21,32 @@
 
 ;; For a full copy of the GNU General Public License
 ;; see <https://www.gnu.org/licenses/>.
+
 ;;; Commentary:
 ;;
-;; This library and package defines a set of functions and variables for interation
-;; with AI engines.
-;; Currently available:
-;; - Code completion
-;; - Code optimization
-;; - Code fixing
-;; - Code documentation
-;; - Code improvement
-;; - Code elaboration
-;; - Code explanation
-;; - Chatting with AI.
+;; AI Mode is a comprehensive Emacs package that provides seamless integration
+;; with various AI engines and language models. This package transforms Emacs
+;; into a powerful AI-assisted development environment.
+;;
+;; Features include:
+;; - Intelligent code completion with context awareness
+;; - Code optimization and refactoring suggestions
+;; - Automated bug detection and fixing
+;; - Comprehensive code documentation generation
+;; - Code improvement and modernization suggestions
+;; - Code elaboration and extension capabilities
+;; - Interactive code explanation and analysis
+;; - Conversational AI interactions within the editor
+;; - Support for multiple AI backends and models
+;; - Customizable prompts and instruction templates
+;; - Buffer-local and global context management
+;; - Real-time preview of AI suggestions
+;;
+;; The package supports multiple AI providers and models, allowing users to
+;; choose the most suitable AI engine for their specific needs. With its
+;; extensive customization options and intuitive interface, AI Mode enhances
+;; productivity and code quality for developers working in any programming
+;; language supported by Emacs.
 
 ;;; Code:
 
@@ -43,12 +55,9 @@
 (require 'cl-lib)
 
 (require 'ai-utils)
-(require 'ai-openai)
-(require 'ai-openai-completions)
-(require 'ai-openai-chat)
+(require 'ai-common)
 (require 'ai-completions)
 (require 'ai-chat)
-
 
 (defgroup ai nil
   "Support for AI interactions."
@@ -56,9 +65,7 @@
   :group 'emacs
   :link '(url-link :tag "Repository" "https://github.com/ai-mode/ai-mode"))
 
-
 (defvar url-http-end-of-headers)
-
 
 (defgroup ai-mode nil
   "Use AI or AGI API."
@@ -66,12 +73,10 @@
   :group 'ai
   :link '(url-link :tag "Repository" "https://github.com/ai-mode/ai-mode"))
 
-
 (defcustom ai-keymap-prefix "C-c i"
   "AI mode keymap prefix."
   :group 'ai-mode
   :type 'string)
-
 
 (defcustom ai--query-type-prompt "Type of Query: "
   "Prompt for selecting the type of request."
@@ -83,78 +88,110 @@
   :type 'string
   :group 'ai-mode)
 
+(defcustom ai--project-file-instructions-enabled t
+  "Enable file instructions"
+  :type 'boolean
+  :group 'ai)
 
-(defcustom ai--doc-tag "{{__ai_doc__}}"
-  "Marker for documentation placement."
-  :type 'string
-  :group 'ai-mode)
+(defcustom ai--extended-instructions-enabled t
+  "Enable extended instructions."
+  :type 'boolean
+  :group 'ai)
 
-(defcustom ai-async-query-backend 'ai-openai-chat--async-send-query
+(defcustom ai--global-prompts-enabled t
+  "Enable global prompts."
+  :type 'boolean
+  :group 'ai)
+
+(defcustom ai--current-buffer-additional-context t
+  "Enable additional context for the current buffer."
+  :type 'boolean
+  :group 'ai)
+
+(defvar-local ai--buffer-file-instructions (make-hash-table :test 'equal))
+(defvar ai-mode--actions-instructions (make-hash-table :test 'equal))
+
+(defvar ai-mode--models-providers nil)
+
+(defcustom ai-mode--execution-model nil
   "The current backend used to execute requests asynchronously."
   :group 'ai-mode)
 
-(defcustom ai-async-query-backends
-  '(("OpenAI ChatGPT" . ai-openai-chat--async-send-query)
-    ("OpenAI completions" . ai-openai-completions--async-send-query))
-  "An association list that maps query backend to function."
-  :type '(alist :key-type (string :tag "Backend name")
-                :value-type (symbol :tag "Backend function"))
-  :group 'ai-mode)
+(defcustom ai--current-context-size 10
+  "Number of lines for context."
+  :type 'integer
+  :group 'ai-completions)
 
+(defcustom ai--current-following-context-size 10
+  "Following context size."
+  :type 'integer
+  :group 'ai-completions)
 
-(defcustom ai-sync-query-backend 'ai-openai-chat--sync-send-query
-  "The current backend used to execute requests asynchronously."
-  :group 'ai-mode)
+(defvar ai-mode-change-model-hook nil
+  "Hook that is run when execution model changes.")
 
-(defcustom ai-sync-query-backends
-  '(("OpenAI ChatGPT" . ai-openai-chat--sync-send-query)
-    ("OpenAI completions" . ai-openai-completions--sync-send-query))
-  "An association list that maps query backend to function."
-  :type '(alist :key-type (string :tag "Backend name")
-                :value-type (symbol :tag "Backend function"))
-  :group 'ai-mode)
+(defcustom ai-mode--base-additional-context-prompts-names
+  '("basic"
+    "complete"
+    "_file_metadata"
+    "modify_action_type_object"
+    "complete_action_type_object"
+    "explain_action_type_object"
+    "chat-basic")
+  "List of file names to load additional prompt instructions from.
 
-
-
-(defcustom ai--human-lang "english"
-  "The language in which AI provides answers."
+These files should contain context or prompts intended to guide the AI chatbot."
   :type 'string
   :group 'ai-mode)
 
-(defcustom ai--query-type-map
-  '(("spellcheck" . "Spellcheck this text: %s")
-    ("elaborate" . "Elaborate on this text: %s")
-    ("explain" . "Explain the following: %s")
-    ("document" . "Please add the documentation for the following code: %s")
-    ("fix" . "Here is a bug in the following function, please help me fix it: %s")
-    ("improve" . "Improve and extend the following code: %s")
-    ("optimize" . "Optimize the following code: %s")
-    ("refactor" . "Refactor the following code: %s"))
+(defcustom ai--query-type-config-map
+  '(
+    ("modify" . (:template "" :instructions nil :user-input t))
+    ("generate code" . (:instructions nil))
+    ("execute prompt inplace" . (:instructions nil))
+    ("explain" . (:instructions nil :action-type "explain"))
+    ("doc" . (:instructions nil))
+    ("fix" . (:instructions nil))
+    ("simplify" . (:instructions nil))
+    ("improve" . (:instructions nil))
+    ("optimize" . (:instructions nil))
+    ("spellcheck" . (:instructions nil))
+    )
+
   "An association list that maps query types to their corresponding format strings."
   :type '(alist :key-type (string :tag "Query Type")
-                :value-type (string :tag "Format String"))
+                :value-type (plist :tag "Format Specification"
+                                   :options ((:instructions (list :tag "Instructions"))
+                                             (:user-input (boolean :tag "User input")))))
   :group 'ai-mode)
 
+(defcustom ai--completion-config
+  `(:action "complete" :instructions nil :action-type "complete")
+  "Configuration for code completion."
+  :group 'ai-mode)
+
+(defcustom ai--query-config
+  `(:instructions nil)
+  "Configuration for generic queries."
+  :group 'ai-mode)
 
 (defvar ai-command-map
   (let ((keymap (make-sparse-keymap)))
-
-    (define-key keymap (kbd "m") 'ai-insert-doc-marker)
     (define-key keymap (kbd "o") 'ai-optimize-code-region)
-    (define-key keymap (kbd "i") 'ai-improve-code-region)
-    (define-key keymap (kbd "f") 'ai-fix-code-region)
-    (define-key keymap (kbd "d") 'ai-document-code-region)
-    (define-key keymap (kbd "e b") 'ai-elaborate-code-region)
-    (define-key keymap (kbd "s c") 'ai-spellcheck-code-region)
     (define-key keymap (kbd "e") 'ai-explain-code-region)
     (define-key keymap (kbd "c c") 'ai-chat)
-    (define-key keymap (kbd "b q") 'ai-change-query-backend)
-    (define-key keymap (kbd "b c") 'ai-completions-change-backend)
-    (define-key keymap (kbd "p") 'ai-perform)
+    (define-key keymap (kbd "b c") 'ai--change-execution-backend)
+    (define-key keymap (kbd "f") 'ai--switch-file-instructions-enabled)
+    (define-key keymap (kbd "p") 'ai-perform-coordinator)
+    (define-key keymap (kbd "r") 'ai-perform)
     (define-key keymap (kbd "s") 'ai-show)
+    (define-key keymap (kbd "b a") 'ai-common--add-buffer-bound-prompts)
+    (define-key keymap (kbd "b c") 'ai-common--clear-buffer-bound-prompts)
+    (define-key keymap (kbd "m a") 'ai-common--add-to-global-memory)
+    (define-key keymap (kbd "m c") 'ai-common--clear-global-memory)
+    (define-key keymap (kbd "a c") 'ai-common--add-to-context-pool)
     keymap)
-  "Keymap for ai commands.")
-
+  "Keymap for AI commands.")
 
 (defvar ai-mode-map
   (let ((keymap (make-sparse-keymap)))
@@ -165,16 +202,21 @@
 
 ;;;###autoload
 (define-minor-mode ai-mode
-  "Mode for AI interaction."
+  "Minor mode for AI interaction."
   :keymap ai-mode-map
-  :lighter " AI mode"
+  :lighter (:eval (ai-mode-line-info))
   :group 'ai
-  (if ai-mode
-      (progn
-        (add-hook 'pre-command-hook 'ai-mode-pre-command)
-        (add-hook 'post-command-hook 'ai-mode-post-command))
-    (remove-hook 'pre-command-hook 'ai-mode-pre-command)
-    (remove-hook 'post-command-hook 'ai-mode-post-command)))
+  :after-hook (force-mode-line-update t)
+  (progn
+    (if ai-mode
+        (progn
+          (add-hook 'pre-command-hook 'ai-mode-pre-command)
+          (add-hook 'post-command-hook 'ai-mode-post-command)
+          (add-hook 'after-save-hook 'ai-mode--update-file-instructions))
+      (remove-hook 'pre-command-hook 'ai-mode-pre-command)
+      (remove-hook 'post-command-hook 'ai-mode-post-command)
+      (remove-hook 'after-save-hook 'ai-mode--update-file-instructions))
+    (ai-mode-update-mode-line-info)))
 
 ;;;###autoload
 (define-globalized-minor-mode global-ai-mode ai-mode ai-mode-on
@@ -183,139 +225,369 @@
 (defun ai-mode-on ()
   "Turn on AI mode."
   (interactive)
-  (ai-mode 1))
+  (ai-mode 1)
+  (ai-mode-update-mode-line-info))
 
 (defun ai-mode-pre-command ()
-  "AI mode pre command hook.")
+  "Function called before each command in `ai-mode`.")
 
 (defun ai-mode-post-command ()
-  "AI mode post command hook.")
+  "Function called after each command in `ai-mode`.")
 
+(defun ai-mode-global-init-hook ()
+  "Function that runs when `global-ai-mode` is initialized."
+  (message "Global AI mode is now enabled or disabled!")
+  (ai-mode-update-mode-line-info)
+  (if global-ai-mode
+      (progn
+        (ai-mode--update-mode-instructions)
+        (message "Global AI mode is now enabled!"))
+    (message "Global AI mode is now disabled!")))
 
-(defun ai-complete-code-at-point ()
-  "Start a completion at point."
-  (interactive)
-  (ai-completions--coordinator))
+(add-hook 'global-ai-mode-hook 'ai-mode-global-init-hook)
 
-(defun ai-insert-doc-marker ()
-  "Insert a marker for documentation placement."
-  (interactive)
+(defun ai-mode--update-file-instructions ()
+  "Update local file instructions for AI mode."
+  (message "Updating AI mode local actions instructions...")
+
   (with-current-buffer (current-buffer)
-    (insert ai--doc-tag)))
+    (let* ((actions (mapcar #'car ai--query-type-config-map))
+           (actions (append actions ai-mode--base-additional-context-prompts-names))
+           (root-path (ai-utils--get-buffer-root-path (current-buffer)))
+           (library-root-path (file-name-directory (locate-library "ai-mode")))
+           (instructions-table (make-hash-table :test 'equal)))
 
+      (unless (equal root-path library-root-path)
+        (message "Updating AI mode buffer actions instructions...")
 
-(defun ai-optimize-code-region ()
-  "Optimize code region and replace it."
+        (dolist (action actions)
+          (let* ((instruction (ai-utils--file-instructions-for-command action root-path))
+                 (action-examples-file-name (format "%s_examples" action))
+                 (instruction-examples (ai-utils--file-instructions-for-command action-examples-file-name root-path)))
+            (when instruction
+              (puthash action instruction instructions-table))
+            (when instruction-examples
+              (puthash (format "%s-examples" action) instruction-examples instructions-table))))
+
+        (setq-local ai--buffer-file-instructions instructions-table)
+        (message "AI mode buffer actions instructions updated!")))))
+
+(defun ai-mode--update-mode-instructions ()
+  "Update global AI mode library instructions."
   (interactive)
-  (ai--async-query-by-type "optimize" (ai-utils--get-region-content) (ai-utils--replace-region-or-insert-in-current-buffer)))
+  (message "Updating AI mode global actions instructions...")
 
-(defun ai-improve-code-region ()
-  "Improve code region and replace it."
-  (interactive)
-  (ai--async-query-by-type "improve" (ai-utils--get-region-content) (ai-utils--replace-region-or-insert-in-current-buffer)))
+  (let* ((root-path (file-name-directory (locate-library "ai-mode")))
+         (actions (mapcar #'car ai--query-type-config-map))
+         (actions (append actions ai-mode--base-additional-context-prompts-names))
+         (instructions-table (make-hash-table :test 'equal)))
 
-(defun ai-fix-code-region ()
-  "Fix code region and replace it."
-  (interactive)
-  (ai--async-query-by-type "fix" (ai-utils--get-region-content) (ai-utils--replace-region-or-insert-in-current-buffer)))
+    (message "ai-mode library path: %s" root-path)
 
-(defun ai-document-code-region ()
-  "Document code region and replace doc market."
-  (interactive)
-  (ai--async-query-by-type
-   "document"
-   (ai-utils--get-region-content)
-   (ai--with-current-buffer-callback (lambda (text) (ai-utils--replace-tag-in-region ai--doc-tag text)))))
+    (dolist (action actions)
+      (let* ((instruction (ai-utils--file-instructions-for-command action root-path))
+             (action-examples-file-name (format "%s_examples" action))
+             (instruction-examples (ai-utils--file-instructions-for-command action-examples-file-name root-path)))
+        (when instruction
+          (puthash action instruction instructions-table)
+          (ai-utils--verbose-message "Instructions for action \"%s\" added to global actions instructions" action))
+        (when instruction-examples
+          (puthash (format "%s-examples" action) instruction-examples instructions-table)
+          (ai-utils--verbose-message "Examples for action \"%s\" added to global actions instructions" action))))
 
-(defun ai-elaborate-code-region ()
-  "Elaborate code region and replace it."
-  (interactive)
-  (ai--async-query-by-type "elaborate" (ai-utils--get-region-content) (ai-utils--replace-region-or-insert-in-current-buffer)))
+    (setq ai-mode--actions-instructions instructions-table))
+  (message "AI mode actions instructions updated!"))
 
-(defun ai-spellcheck-code-region ()
-  "Spellcheck code region and replace it."
-  (interactive)
-  (ai--async-query-by-type "spellcheck" (ai-utils--get-region-content) (ai-utils--replace-region-or-insert-in-current-buffer)))
+(cl-defun ai--execute-context (context success-callback &key (fail-callback nil) (model nil))
+  "Execute CONTEXT using SUCCESS-CALLBACK and optional FAIL-CALLBACK with an optional MODEL."
+  (ai-perform-async-backend-query context success-callback :fail-callback fail-callback :model model))
 
+(cl-defun ai--execute-command (command success-callback &key (fail-callback nil) (model nil))
+  "Execute COMMAND by dispatching to the appropriate backend using SUCCESS-CALLBACK.
+Optionally use FAIL-CALLBACK and specify a MODEL."
+  (let* ((execution-model (if model model (ai--get-current-model)))
+         (execution-backend (map-elt execution-model :execution-backend))
+         (context (ai--get-executions-context-for-query-type command :model execution-model)))
+    (funcall execution-backend
+             context
+             execution-model
+             :success-callback success-callback
+             :fail-callback fail-callback)))
+
+(defun ai--get-selected-region (config full-context)
+  "Return the currently selected region.
+CONFIG contains configuration details and FULL-CONTEXT includes information for rendering."
+  (when (region-active-p)
+    (buffer-substring-no-properties (region-beginning) (region-end))))
+
+(defun ai--render-messages-templates (items context)
+  "Render message templates from ITEMS using CONTEXT."
+  (mapcar (lambda (content) (ai-utils--render-template content context)) items))
+
+(defun ai--get-action-type-for-config (config)
+  "Determine the action type from CONFIG, defaulting to \"modify\"."
+  (let* ((action-type (map-elt config :action-type))
+         (action-type (if action-type action-type "modify")))
+    action-type))
+
+(cl-defun ai--get-rendered-action-context (config &key preceding-context-size following-context-size)
+  "Render the action context based on CONFIG and optional context sizes PRECEDING-CONTEXT-SIZE and FOLLOWING-CONTEXT-SIZE."
+  (let* ((action (map-elt config :action))
+         (action-type (ai--get-action-type-for-config config)))
+    (if (equal action "complete")
+        (ai-common--render-container-from-elements
+         "complete-action-object"
+         (ai-common--assemble-completion-context
+          :preceding-context-size preceding-context-size
+          :following-context-size following-context-size))
+      (ai-common--render-container-from-elements
+       (format "%s-action-object" action-type)
+       (ai-common--assemble-edit-context)))))
+
+(defun ai--get-current-buffer-context ()
+  "Get the additional context for the current buffer if enabled."
+  (when ai--current-buffer-additional-context
+    (ai-common--make-file-context)))
+
+(cl-defun ai--get-execution-context (buffer config query-type &key
+                                            (preceding-context-size ai--current-context-size)
+                                            (following-context-size ai--current-following-context-size)
+                                            model)
+  "Get full execution context for BUFFER.
+CONFIG specifies configuration, QUERY-TYPE indicates the query, and options for context sizes are PRECEDING-CONTEXT-SIZE and FOLLOWING-CONTEXT-SIZE."
+  (with-current-buffer buffer
+    (let* ((completion-context (ai-utils--get-completion-params
+                                :preceding-context-size preceding-context-size
+                                :following-context-size following-context-size))
+           (buffer-context (ai-utils--get-buffer-context (current-buffer)))
+           (model-context (ai-utils--get-model-context model))
+           (full-context (append completion-context buffer-context model-context))
+
+           (basic-file-prompt (ai-common--make-typed-struct
+                               (ai--get-rendered-action-prompt "basic" full-context)
+                               'agent-instructions))
+
+           (file-metadata-context (ai-common--make-typed-struct
+                                   (ai--get-rendered-action-prompt "_file_metadata" full-context)
+                                   'additional-context))
+
+           (action-file-prompt (ai-common--make-typed-struct
+                                (ai--get-rendered-action-prompt query-type full-context)
+                                'agent-instructions))
+
+           (action-examples-prompt (ai-common--make-typed-struct
+                                    (ai--get-rendered-action-prompt (format "%s-examples" query-type) full-context)
+                                    'agent-instructions))
+
+           (action-type-object-prompt (ai-common--make-typed-struct
+                                       (ai--get-action-type-object-prompt (ai--get-action-type-for-config config) full-context)
+                                       'agent-instructions))
+
+           (action-config-prompt (when-let ((instructions (map-elt config :instructions)))
+                                   (ai-common--make-typed-struct instructions 'agent-instructions)))
+
+           (additional-context
+            (let ((context-pool-content (ai-common--render-struct-to-string (ai-common--get-context-pool))))
+              (when context-pool-content
+                (ai-common--make-typed-struct context-pool-content 'additional-context))))
+
+           (current-buffer-content-context
+            (when (use-region-p)
+              (ai--get-current-buffer-context)))
+
+           (user-input (when (map-elt config :user-input)
+                         (let ((input-text (ai-utils--user-input)))
+                           (when input-text
+                             (ai-common--make-typed-struct
+                              (ai-utils--render-template input-text full-context)
+                              'user-input
+                              'user-input)))))
+
+           (query-struct (when-let ((query-text (map-elt config :query)))
+                           (ai-common--make-typed-struct query-text 'user-input 'user-input)))
+
+           (rendered-action-context (ai-common--make-typed-struct
+                                     (ai--get-rendered-action-context
+                                      config
+                                      :preceding-context-size preceding-context-size
+                                      :following-context-size following-context-size)
+                                     'action-context))
+
+           (messages
+            (append
+             '()
+             (when ai--extended-instructions-enabled
+               (cl-remove-if
+                #'null
+                (list basic-file-prompt
+                      action-type-object-prompt
+                      (ai-common--get-global-system-prompts)
+                      (ai-common--get-global-memory)
+                      action-file-prompt
+                      file-metadata-context
+                      current-buffer-content-context
+                      action-config-prompt
+                      additional-context
+                      (ai-common--get-buffer-bound-prompts)
+                      action-examples-prompt
+                      rendered-action-context
+                      user-input
+                      query-struct)))))
+
+           (messages (ai-utils-filter-non-empty-content messages))
+           (_ (ai-utils-write-context-to-prompt-buffer messages))
+           (full-context (append full-context `(:messages ,messages))))
+
+      full-context)))
+
+(defun ai--get-local-query-prompt (query-type)
+  "Return instruction for QUERY-TYPE from buffer-local hash table as a string."
+  (gethash query-type ai--buffer-file-instructions))
+
+(defun ai--get-default-action-prompt (query-type)
+  "Return instruction for QUERY-TYPE from global actions hash table as a string."
+  (gethash query-type ai-mode--actions-instructions))
+
+(defun ai--get-action-prompt (query-type)
+  "Return buffer-specific instructions for QUERY-TYPE if available.
+If not available and `ai--global-prompts-enabled' is non-nil,
+return the global instruction from `ai--get-default-action-prompt'."
+  (or (ai--get-local-query-prompt query-type)
+      (when ai--global-prompts-enabled
+        (ai--get-default-action-prompt query-type))))
+
+(defun ai--get-rendered-action-prompt (query-type context)
+  "Get prompt for QUERY-TYPE, render it with CONTEXT, and return the result.
+If no prompt is found for QUERY-TYPE, returns nil."
+  (when-let* ((prompt-content (ai--get-action-prompt query-type)))
+    (ai-utils--render-template prompt-content context)))
+
+(defun ai--get-action-type-object-prompt (action-type context)
+  "Get the prompt for ACTION-TYPE rendered with CONTEXT."
+  (ai--get-rendered-action-prompt (format "%s_action_type_object" action-type) context))
+
+(defun ai--get-query-config-by-type (query-type)
+  "Get query config by QUERY-TYPE."
+  (if-let (config (cdr (assoc query-type ai--query-type-config-map)))
+      (append config `(:action ,query-type))
+    (if (string= query-type "complete")
+        ai--completion-config
+      (append ai--query-config `(:query ,query-type)))))
+
+(cl-defun ai--get-executions-context-for-query-type (query-type &key (model nil))
+  "Get execution context for QUERY-TYPE with an optional MODEL."
+  (let* ((config (ai--get-query-config-by-type query-type))
+         (execution-context (ai--get-execution-context (current-buffer) config query-type :model model)))
+    execution-context))
 
 (defun ai-explain-code-region ()
-  "Explain code region and show explaination in help buffer."
+  "Explain the selected code region and display the explanation in a help buffer."
   (interactive)
-  (ai--explain-text (ai-utils--get-region-content)))
-
-
-(defun ai--explain-text (text)
-  "Explain TEXT and show explaination in help buffer."
-  (ai--async-query-by-type "explain" text 'ai-utils--show-explain-help-buffer))
-
-
-(defun ai--async-query-by-type (query-type input callback)
-  "Perform INPUT using the QUERY-TYPE type and passes the result to the CALLBACK function."
-  (let ((query (ai--format-query query-type input)))
-    (ai-perform-async-backend-query query callback :fail-callback nil)))
-
-
-(defun ai--format-query (query-type query)
-  "Format a request to AI based on QUERY and QUERY-TYPE."
-  (if-let (format-string (cdr (assoc query-type ai--query-type-map)))
-      (format format-string query)
-    (format "%s\n\n%s" query-type query)))
-
+  (ai--execute-context (ai--get-executions-context-for-query-type "explain") 'ai-utils--show-explain-help-buffer))
 
 (defun ai--get-query-type ()
-  "Get the request type using `completing-read`."
+  "Prompt the user to select the type of request using `completing-read`."
   (interactive)
-  (completing-read ai--query-type-prompt (mapcar #'car ai--query-type-map)))
+  (completing-read ai--query-type-prompt (mapcar #'car ai--query-type-config-map)))
 
+(defun ai--set-execution-model (model)
+  "Set the execution model and execute hooks.
+MODEL is the model configuration to be set."
+  (let ((setup-function (map-elt model :setup-function)))
+    (when setup-function
+      (funcall setup-function))
+    (setq ai-mode--execution-model model)
+    (run-hooks 'ai-mode-change-model-hook)
+    (ai-mode-update-mode-line-info)))
 
-(defun ai-show ()
-  "Execute query and show response in special buffer."
+(defun ai--change-execution-backend (&optional model-name)
+  "Change query backend interactively, or use MODEL-NAME if given."
   (interactive)
-  (ai--async-query-by-type (ai--get-query-type) (ai-utils--get-region-content) 'ai--show-response-buffe))
+  (let* ((models (mapcar (lambda (item) `(,(map-elt item :name) ,item)) (ai-mode--get-models)))
+         (value (or model-name
+                    (completing-read ai--change-backend-prompt (mapcar #'car models))))
+         (model (ai-utils--find-model-config-by-name value (ai-mode--get-models))))
 
-
-(defun ai-perform ()
-  "Execute request and replace selected region."
-  (interactive)
-  (if (region-active-p)
-      (ai--async-query-by-type (ai--get-query-type) (ai-utils--get-region-content) (ai-utils--replace-region-or-insert-in-current-buffer))
-    (message "You must select region for this command")))
-
-
-(defun ai-change-async-query-backend ()
-  "Change query backend."
-  (interactive)
-  (let* ((value (completing-read ai--change-backend-prompt (mapcar #'car ai-async-query-backends))))
-    (setq ai-async-query-backend (cdr (assoc value ai-async-query-backends)))
+    (message "Setup model: %s" (pp-to-string model))
+    (ai--set-execution-model model)
     (message (format "AI query async backend is changed to \"%s\"" value))))
 
+(defun ai--switch-file-instructions-enabled ()
+  "Toggle file instructions for the current buffer."
+  (setq ai--buffer-file-instructions (not ai--buffer-file-instructions)))
 
-(defun ai-change-sync-query-backend ()
-  "Change query backend."
+(cl-defun ai-perform-async-backend-query (context success-callback &key
+                                                  (fail-callback nil)
+                                                  (extra-params nil)
+                                                  (model nil))
+  "Execute CONTEXT by current backend asynchronously.
+After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL-CALLBACK if provided. EXTRA-PARAMS is a list of additional parameters for backend configuration."
+  (let* ((execution-model (if model model (ai--get-current-model)))
+         (execution-backend (map-elt execution-model :execution-backend)))
+    (funcall execution-backend
+             context
+             execution-model
+             :success-callback success-callback
+             :fail-callback fail-callback)))
+
+(defun ai-show ()
+  "Execute query and show the response in a special buffer."
   (interactive)
-  (let* ((value (completing-read ai--change-backend-prompt (mapcar #'car ai-sync-query-backends))))
-    (setq ai-sync-query-backend (cdr (assoc value ai-sync-query-backends)))
-    (message (format "AI query sync backend is changed to \"%s\"" value))))
+  (ai--execute-command (ai--get-query-type) 'ai-utils--show-response-buffer))
 
+(defun ai-perform ()
+  "Execute request and replace the selected region."
+  (interactive)
+  (ai--execute-command (ai--get-query-type) (ai-utils--replace-region-or-insert-in-current-buffer)))
 
-(cl-defun ai-perform-async-backend-query (query callback &key
-                                             (fail-callback nil)
-                                             (extra-params nil))
-  "Execute QUERY by current backend asynchronously.
+(defun ai-perform-coordinator ()
+  "Decide whether to continue the previous process of supplementation or to start a new one."
+  (interactive)
+  (ai-completions--coordinator :action-type (ai--get-query-type) :strategy 'replace))
 
-After successful execution CALLBACK will called.
-If execution failed then FAIL-CALLBACK called if provided.
-EXTRA-PARAMS is a alist of extra parameters for backend."
-  (funcall ai-async-query-backend query callback :fail-callback fail-callback))
+(defun ai-debug ()
+  "Debug AI mode by printing region status and execution context."
+  (interactive)
+  (message "ai debug Region active? %s | Mark: %s | Point: %s" (use-region-p) (mark) (point))
 
+  (ai-utils--show-context-debug (ai--get-executions-context-for-query-type (ai--get-query-type) :model (ai--get-current-model))))
 
-(cl-defun ai-perform-sync-backend-query (query &key (extra-params nil))
-  "Execute QUERY by current backend synchronously.
+(defun ai--get-current-model ()
+  "Return the currently selected execution model or set a default if none is selected."
+  (or ai-mode--execution-model
+      (let ((default-model (car (ai-mode--get-models))))
+        (ai--set-execution-model default-model)
+        default-model)))
 
-EXTRA-PARAMS is a alist of extra parameters for backend."
-  (funcall ai-sync-query-backend query :extra-params extra-params))
+(defun ai-mode--get-models ()
+  "Return a flat list of available AI models retrieved from multiple sources."
+  (let ((model-funcs ai-mode--models-providers))
+    (apply #'append (mapcar #'funcall model-funcs))))
 
+(defun ai-mode-line-info ()
+  "Return a formatted string describing the current AI mode state for the mode line."
+  (let* ((model (ai--get-current-model))
+         (ai-mode-line-section
+          (format " AI[%s|%d/%d]"
+                  (map-elt model :name)
+                  ai--current-context-size
+                  ai--current-following-context-size)))
+    ai-mode-line-section))
 
+(defun ai-mode-update-mode-line-info ()
+  "Force update of the mode line to reflect current AI mode state."
+  (force-mode-line-update))
+
+(when (require 'doom-modeline nil 'noerror)
+
+  (doom-modeline-def-segment ai-mode-line-info
+    "Display AI mode line information."
+    (ai-mode-line-info))
+
+  (add-hook 'ai-mode-change-model-hook 'doom-modeline-refresh-bars)
+  (add-to-list 'mode-line-misc-info  '(:eval (ai-mode-line-info)) t))
+
+(add-hook 'ai-mode-change-model-hook 'ai-mode-update-mode-line-info)
 
 (provide 'ai-mode)
 
