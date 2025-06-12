@@ -135,7 +135,7 @@
     "complete"
     "_file_metadata"
     "modify_action_type_object"
-    "complete_action_type_object"
+    "complete_action-type_object"
     "explain_action_type_object"
     "chat-basic")
   "List of file names to load additional prompt instructions from.
@@ -145,25 +145,29 @@ These files should contain context or prompts intended to guide the AI chatbot."
   :group 'ai-mode)
 
 (defcustom ai--query-type-config-map
-  '(
-    ("modify" . (:template "" :instructions nil :user-input t))
-    ("generate code" . (:instructions nil))
-    ("execute prompt inplace" . (:instructions nil))
-    ("explain" . (:instructions nil :action-type "explain"))
-    ("doc" . (:instructions nil))
-    ("fix" . (:instructions nil))
-    ("simplify" . (:instructions nil))
-    ("improve" . (:instructions nil))
-    ("optimize" . (:instructions nil))
-    ("spellcheck" . (:instructions nil))
-    )
+  '(("modify" . (:template "" :instructions nil :user-input t :result-action replace))
+    ("generate code" . (:instructions nil :result-action replace))
+    ("execute prompt inplace" . (:instructions nil :result-action replace))
+    ("explain" . (:instructions nil :action-type "explain" :result-action show))
+    ("explain with user input" . (:instructions nil :action-type "explain" :result-action show))
+    ("doc" . (:instructions nil :result-action replace))
+    ("fix" . (:instructions nil :result-action replace))
+    ("simplify" . (:instructions nil :result-action replace))
+    ("improve" . (:instructions nil :result-action replace))
+    ("optimize" . (:instructions nil :result-action replace))
+    ("spellcheck" . (:instructions nil :result-action replace)))
 
-  "An association list that maps query types to their corresponding format strings."
+  "An association list that maps query types to their corresponding format strings.
+   The `:result-action` key specifies the default handling of the AI's response."
   :type '(alist :key-type (string :tag "Query Type")
                 :value-type (plist :tag "Format Specification"
-                                   :options ((:instructions (list :tag "Instructions"))
-                                             (:user-input (boolean :tag "User input")))))
+                                   :options ((:template (string :tag "Template") :optional t)
+                                             (:instructions (string :tag "Instructions") :optional t)
+                                             (:user-input (boolean :tag "User input"))
+                                             (:action-type (string :tag "Action Type") :optional t)
+                                             (:result-action (symbol :tag "Result Action" :value-type (choice (const show) (const replace)))))))
   :group 'ai-mode)
+
 
 (defcustom ai--completion-config
   `(:action "complete" :instructions nil :action-type "complete")
@@ -490,6 +494,17 @@ If no prompt is found for QUERY-TYPE, returns nil."
   (interactive)
   (completing-read ai--query-type-prompt (mapcar #'car ai--query-type-config-map)))
 
+(defun ai--get-informational-query-type ()
+  "Prompt the user to select an informational type of request, filtering by :result-action 'show'."
+  (interactive)
+  (let* ((available-query-types
+          (mapcar #'car
+                  (cl-remove-if-not
+                   (lambda (item)
+                     (eq (map-elt (cdr item) :result-action) 'show))
+                   ai--query-type-config-map))))
+    (completing-read ai--query-type-prompt available-query-types)))
+
 (defun ai--set-execution-model (model)
   "Set the execution model and execute hooks.
 MODEL is the model configuration to be set."
@@ -531,14 +546,30 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
              :fail-callback fail-callback)))
 
 (defun ai-show ()
-  "Execute query and show the response in a special buffer."
+  "Execute query and show the response in a special buffer, limited to informational commands."
   (interactive)
-  (ai--execute-command (ai--get-query-type) 'ai-utils--show-response-buffer))
+  (ai--execute-command (ai--get-informational-query-type) 'ai-utils--show-response-buffer))
 
 (defun ai-perform ()
-  "Execute request and replace the selected region."
+  "Execute request and apply the result based on query type's specified result action.
+   If result action is 'replace', it replaces the selected region or inserts in current buffer.
+   If result action is 'show', it shows the response in a special buffer."
   (interactive)
-  (ai--execute-command (ai--get-query-type) (ai-utils--replace-region-or-insert-in-current-buffer)))
+  (let* ((query-type (ai--get-query-type))
+         (config (ai--get-query-config-by-type query-type))
+         (result-action (map-elt config :result-action)))
+    (cond
+     ((eq result-action 'show)
+      ;; If the selected query type is meant to be shown, delegate
+      (message "Query type '%s' is informational. Displaying in a new buffer." query-type)
+      (ai--execute-command query-type 'ai-utils--show-response-buffer))
+     ((eq result-action 'replace)
+      ;; Default replace behavior
+      (ai--execute-command query-type (ai-utils--replace-region-or-insert-in-current-buffer)))
+     (t
+      ;; Fallback for unconfigured or new actions
+      (message "Unknown or unspecified result action for query type '%s'. Defaulting to replace." query-type)
+      (ai--execute-command query-type (ai-utils--replace-region-or-insert-in-current-buffer))))))
 
 (defun ai-perform-coordinator ()
   "Decide whether to continue the previous process of supplementation or to start a new one."
@@ -548,8 +579,6 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
 (defun ai-debug ()
   "Debug AI mode by printing region status and execution context."
   (interactive)
-  (message "ai debug Region active? %s | Mark: %s | Point: %s" (use-region-p) (mark) (point))
-
   (ai-utils--show-context-debug (ai--get-executions-context-for-query-type (ai--get-query-type) :model (ai--get-current-model))))
 
 (defun ai--get-current-model ()
