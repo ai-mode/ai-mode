@@ -427,39 +427,42 @@ TIMEOUT specifies the request timeout."
 
 
 (cl-defun ai-utils--get-completion-params (&key (preceding-context-size ai-utils--default-preceding-context-size)
-                                                (following-context-size ai-utils--default-following-context-size))
+                                              (following-context-size ai-utils--default-following-context-size))
   "Retrieve completion parameters including context and cursor information."
   (let* ((precending-context-beginning
-         (if (region-active-p)
-             (region-beginning)
-           (if (equal preceding-context-size -1)
-               (point-min)
-             (max 1 (- (point) preceding-context-size)))))
-        (precending-context-end (if (region-active-p) (region-end) (point)))
-        (region-content (and (region-active-p) (buffer-substring-no-properties (region-beginning) (region-end))))
-        (cursor-point (point))
-        (cursor-offset precending-context-end)
-        (preceding-context-content (buffer-substring-no-properties precending-context-beginning precending-context-end))
-        (preceding-context-size (length preceding-context-content))
-        (following-context-beginning (min (+ precending-context-end 1) (point-max)))
-        (following-context-end (if (equal following-context-size -1)
+          (if (region-active-p)
+              (region-beginning)
+            (if (or (equal preceding-context-size -1)
+                    (null preceding-context-size))
+                (point-min)
+              (max 1 (- (point) preceding-context-size)))))
+         (precending-context-end (if (region-active-p) (region-end) (point)))
+         (region-content (and (region-active-p) (buffer-substring-no-properties (region-beginning) (region-end))))
+         (cursor-point (point))
+         (cursor-offset precending-context-end)
+         (preceding-context-content (buffer-substring-no-properties precending-context-beginning precending-context-end))
+         (preceding-context-size (length preceding-context-content))
+         (following-context-beginning (min (+ precending-context-end 1) (point-max)))
+         (following-context-end (if (or (equal following-context-size -1)
+                                        (null following-context-size))
                                     (point-max)
                                   (min (point-max) (+ following-context-beginning following-context-size))))
-        (following-context-content (buffer-substring-no-properties following-context-beginning following-context-end))
-        (following-context-size (length following-context-content)))
+         (following-context-content (buffer-substring-no-properties following-context-beginning following-context-end))
+         (following-context-size (length following-context-content)))
+
     `(:cursor-point ,cursor-point
-      :cursor-offset ,cursor-offset
-      :region-content ,region-content
-      :preceding-context-beginning ,precending-context-beginning
-      :preceding-context-end ,precending-context-end
-      :preceding-context-content ,preceding-context-content
-      :preceding-context-size ,preceding-context-size
-      :following-context-beginning ,following-context-beginning
-      :following-context-end ,following-context-end
-      :following-context-content ,following-context-content
-      :following-context-size ,following-context-size
-      :cursor-line-number ,(line-number-at-pos)
-      :cursor-column-number ,(current-column))))
+                    :cursor-offset ,cursor-offset
+                    :region-content ,region-content
+                    :preceding-context-beginning ,precending-context-beginning
+                    :preceding-context-end ,precending-context-end
+                    :preceding-context-content ,preceding-context-content
+                    :preceding-context-size ,preceding-context-size
+                    :following-context-beginning ,following-context-beginning
+                    :following-context-end ,following-context-end
+                    :following-context-content ,following-context-content
+                    :following-context-size ,following-context-size
+                    :cursor-line-number ,(line-number-at-pos)
+                    :cursor-column-number ,(current-column))))
 
 
 (defvar ai-utils--language-alist
@@ -805,9 +808,7 @@ with `ai-utils--instruction-file-extension'."
 
 (defun ai-utils-write-context-to-prompt-buffer (messages)
   "Extract 'context' from MESSAGES and write it to the prompt buffer if enabled."
-  (message "ai-utils-write-context-to-prompt-buffer")
   (when ai-utils--write-to-prompt-buffer
-    (message "Write to buffer")
     (let ((buffer (get-buffer-create ai-utils--prompt-buffer-name)))
       (with-current-buffer buffer
         (erase-buffer)   ; Clear the buffer before writing new content

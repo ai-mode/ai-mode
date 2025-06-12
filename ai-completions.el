@@ -41,12 +41,12 @@
   :type 'integer
   :group 'ai-completions)
 
-(defcustom ai-completions--current-context-size 20
+(defcustom ai-completions--current-precending-context-size 20
   "Current number of lines used as context for code completion."
   :type 'integer
   :group 'ai-completions)
 
-(defcustom ai-completions--forwarding-current-context-size 20
+(defcustom ai-completions--current-forwarding-context-size 20
   "Size of the context following the cursor for completion."
   :type 'integer
   :group 'ai-completions)
@@ -168,8 +168,8 @@ uses the active region if available, otherwise restricts the context around the 
 (defun ai-completions--complete-at-point-with-full-context ()
   "Perform autocompletion with full file context."
   (interactive)
-  (let ((ai-utils--default-preceding-context-size nil)
-        (ai-utils--default-following-context-size nil))
+  (let* ((ai-completions--current-precending-context-size nil)
+         (ai-completions--current-forwarding-context-size nil))
     (ai-completions--coordinator :action-type "complete")))
 
 (cl-defun ai-completions--coordinator (&key (action-type nil) (strategy nil))
@@ -190,13 +190,13 @@ STRATEGY may be specified to alter completion behavior."
 ACTION-TYPE specifies the action to be completed.
 STRATEGY may alter the completion behavior."
   (ai-completions--cancel)
-  (setq ai-completions--complete-at-point (ai-completions--get-completion-point strategy)
-        ai-completions--preview-at-point (ai-completions--get-preview-point strategy)
-        ai-completions--active t
-        ai-completions--current-context-size ai-completions--context-size
-        ai-completions--current-action-type action-type
-        ai-completions--current-buffer-clone (ai-utils--clone-buffer (current-buffer))
-        ai-completions--strategy strategy)
+  (setq-local ai-completions--complete-at-point (ai-completions--get-completion-point strategy)
+              ai-completions--preview-at-point (ai-completions--get-preview-point strategy)
+              ai-completions--active t
+
+              ai-completions--current-action-type action-type
+              ai-completions--current-buffer-clone (ai-utils--clone-buffer (current-buffer))
+              ai-completions--strategy strategy)
 
   (condition-case-unless-debug err
       (progn (ai-completions-mode 1)
@@ -264,8 +264,8 @@ STRATEGY may alter the completion behavior."
          (execution-model (ai-completions--get-current-model))
          (execution-context
           (ai--get-execution-context (ai-completions--get-current-buffer-clone) config action-type
-                                     :preceding-context-size ai-completions--current-context-size
-                                     :following-context-size ai-completions--forwarding-current-context-size
+                                     :preceding-context-size ai-completions--current-precending-context-size
+                                     :following-context-size ai-completions--current-forwarding-context-size
                                      :model execution-model))
          (execution-backend (map-elt execution-model :execution-backend))
          (success-callback (lambda (candidates)
@@ -316,28 +316,43 @@ STRATEGY may alter the completion behavior."
     (delete-overlay ai-completions--preview-overlay)
     (setq ai-completions--preview-overlay nil)))
 
+(defun ai-completions--reset-variables-to-defaults ()
+  "Reset variables to their default values when completion process is interrupted or canceled."
+  (setq-local ai-completions--current-candidate 0
+              ai-completions--candidates '()
+              ai-completions--complete-at-point nil
+              ai-completions--preview-at-point nil
+              ai-completions--active nil
+              ai-completions--current-action-type nil
+              ai-completions--current-precending-context-size ai-utils--default-preceding-context-size
+              ai-completions--current-forwarding-context-size ai-utils--default-following-context-size
+              ai-completions--current-buffer-clone nil
+              ai-completions--strategy nil))
+
 (defun ai-completions--abort ()
   "Abort the completion process."
   (interactive)
+  (ai-completions--reset-variables-to-defaults)
   (ai-completions--cancel))
 
 (defun ai-completions-finish (candidate)
   "Complete the completion process with the given CANDIDATE."
   (ai-completions--preview-hide)
   (ai-completions--insert-candidate candidate)
+  (ai-completions--reset-variables-to-defaults)
   (ai-completions--cancel))
 
 (defun ai-completions--cancel ()
   "Cancel the ongoing completion process, resetting the state."
   (ai-completions--preview-hide)
   (ai-completions--clear-buffer-clone)
-  (setq ai-completions--current-candidate 0
+  (setq-local ai-completions--current-candidate 0
         ai-completions--candidates '()
         ai-completions--complete-at-point nil
         ai-completions--preview-at-point nil
         ai-completions--active nil
         ai-completions--current-action-type nil
-        ai-completions--current-context-size ai-completions--context-size
+
         ai-completions--current-buffer-clone nil
         ai-completions--strategy nil)
   (ai-completions--destroy-keymap)
@@ -383,21 +398,21 @@ STRATEGY may alter the completion behavior."
 (defun ai-completions--increase-current-context ()
   "Increase the context size for the current completion."
   (interactive)
-  (setq ai-completions--current-context-size (+ ai-completions--current-context-size ai-completions--context-size-step))
+  (setq ai-completions--current-precending-context-size (+ ai-completions--current-precending-context-size ai-completions--context-size-step))
   (ai-completions--show-candidate)
   (message (format "Current completion context size: %d - %d"
-                   ai-completions--current-context-size
-                   ai-completions--forwarding-current-context-size)))
+                   ai-completions--current-precending-context-size
+                   ai-completions--current-forwarding-context-size)))
 
 (defun ai-completions--maximize-current-context ()
   "Maximize the context window for completion."
   (interactive)
-  (setq ai-completions--current-context-size -1)
-  (setq ai-completions--forwarding-current-context-size -1)
+  (setq ai-completions--current-precending-context-size -1)
+  (setq ai-completions--current-forwarding-context-size -1)
   (ai-completions--show-candidate)
   (message (format "Current completion context size: %d - %d"
-                   ai-completions--current-context-size
-                   ai-completions--forwarding-current-context-size)))
+                   ai-completions--current-precending-context-size
+                   ai-completions--current-forwarding-context-size)))
 
 (defun ai-completions--add-instruction (input)
   "Add an instruction INPUT to the current query."
@@ -526,7 +541,7 @@ STRATEGY may alter the completion behavior."
 (defun ai-completions-line-info ()
   "Format and return a line info string for AI completions mode."
   (let* ((model (ai-completions--get-current-model)))
-    (format " AIC[%s|%d/%d/%d]" (map-elt model :name) ai-completions--context-size ai-completions--forwarding-current-context-size ai-completions--context-size-step)))
+    (format " AIC[%s|%d/%d/%d]" (map-elt model :name) ai-completions--context-size ai-completions--current-forwarding-context-size ai-completions--context-size-step)))
 
 (when (require 'doom-modeline nil 'noerror)
 
