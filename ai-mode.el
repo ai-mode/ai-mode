@@ -510,7 +510,7 @@ MODEL is the model configuration to be set."
 
     (message "Setup model: %s" (pp-to-string model))
     (ai--set-execution-model model)
-    (message (format "AI query async backend is changed to \"%s\"" value))))
+    (message "AI mode backend changed to '%s'." value)))
 
 (defun ai--switch-file-instructions-enabled ()
   "Toggle file instructions for the current buffer."
