@@ -818,6 +818,31 @@ with `ai-utils--instruction-file-extension'."
               (insert content "\n"))))))))
 
 
+
+(defun ai-utils--show-and-eval-response (messages)
+  "Show MESSAGES in a buffer and ask user for permission to evaluate the Emacs Lisp code."
+  (let* ((content (ai-utils--extract-content-from-messages messages))
+         (buffer-name "*AI Generated Code*")
+         (buffer (get-buffer-create buffer-name)))
+    (with-current-buffer buffer
+      (erase-buffer)
+      (emacs-lisp-mode)
+      (insert content)
+      (goto-char (point-min))
+      (when (fboundp 'font-lock-ensure)
+        (font-lock-ensure)))
+
+    (pop-to-buffer buffer)
+
+    (when (yes-or-no-p "The AI has generated Emacs Lisp code. Do you want to evaluate it? ")
+      (condition-case err
+          (progn
+            (eval-buffer buffer)
+            (message "Code evaluated successfully."))
+        (error
+         (message "Error evaluating code: %s" (error-message-string err)))))))
+
+
 (provide 'ai-utils)
 
 ;;; ai-utils.el ends here
