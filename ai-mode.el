@@ -165,7 +165,7 @@ These files should contain context or prompts intended to guide the AI chatbot."
                                              (:instructions (string :tag "Instructions") :optional t)
                                              (:user-input (boolean :tag "User input"))
                                              (:action-type (string :tag "Action Type") :optional t)
-                                             (:result-action (symbol :tag "Result Action" :value-type (choice (const show) (const replace)))))))
+                                             (:result-action (symbol :tag "Result Action" :value-type (choice (const show) (const replace) (const eval)))))))
   :group 'ai-mode)
 
 
@@ -189,6 +189,7 @@ These files should contain context or prompts intended to guide the AI chatbot."
     (define-key keymap (kbd "p") 'ai-perform-coordinator)
     (define-key keymap (kbd "r") 'ai-perform)
     (define-key keymap (kbd "s") 'ai-show)
+    (define-key keymap (kbd "x") 'ai-execute)
     (define-key keymap (kbd "b a") 'ai-common--add-buffer-bound-prompts)
     (define-key keymap (kbd "b c") 'ai-common--clear-buffer-bound-prompts)
     (define-key keymap (kbd "m a") 'ai-common--add-to-global-memory)
@@ -505,6 +506,17 @@ If no prompt is found for QUERY-TYPE, returns nil."
                    ai--query-type-config-map))))
     (completing-read ai--query-type-prompt available-query-types)))
 
+(defun ai--get-executable-query-type ()
+  "Prompt the user to select an executable type of request, filtering by :result-action 'eval'."
+  (interactive)
+  (let* ((available-query-types
+          (mapcar #'car
+                  (cl-remove-if-not
+                   (lambda (item)
+                     (eq (map-elt (cdr item) :result-action) 'eval))
+                   ai--query-type-config-map))))
+    (completing-read ai--query-type-prompt available-query-types)))
+
 (defun ai--set-execution-model (model)
   "Set the execution model and execute hooks.
 MODEL is the model configuration to be set."
@@ -550,10 +562,41 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
   (interactive)
   (ai--execute-command (ai--get-informational-query-type) 'ai-utils--show-response-buffer))
 
+(defun ai-execute ()
+  "Execute query and show the response for evaluation, limited to executable commands."
+  (interactive)
+  (let ((query-type (ai--get-executable-query-type)))
+    (if query-type
+        (ai--execute-command query-type 'ai--show-and-eval-response)
+      (message "No executable query types available. Consider adding query types with :result-action 'eval'."))))
+
+(defun ai--show-and-eval-response (response)
+  "Show RESPONSE in a buffer and ask user for permission to evaluate the Emacs Lisp code."
+  (let* ((buffer-name "*AI Generated Code*")
+         (buffer (get-buffer-create buffer-name)))
+    (with-current-buffer buffer
+      (erase-buffer)
+      (emacs-lisp-mode)
+      (insert response)
+      (goto-char (point-min))
+      (when (fboundp 'font-lock-ensure)
+        (font-lock-ensure)))
+
+    (pop-to-buffer buffer)
+
+    (when (yes-or-no-p "The AI has generated Emacs Lisp code. Do you want to evaluate it? ")
+      (condition-case err
+          (progn
+            (eval-buffer buffer)
+            (message "Code evaluated successfully."))
+        (error
+         (message "Error evaluating code: %s" (error-message-string err)))))))
+
 (defun ai-perform ()
   "Execute request and apply the result based on query type's specified result action.
    If result action is 'replace', it replaces the selected region or inserts in current buffer.
-   If result action is 'show', it shows the response in a special buffer."
+   If result action is 'show', it shows the response in a special buffer.
+   If result action is 'eval', it shows the response and asks for permission to evaluate."
   (interactive)
   (let* ((query-type (ai--get-query-type))
          (config (ai--get-query-config-by-type query-type))
@@ -563,6 +606,10 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
       ;; If the selected query type is meant to be shown, delegate
       (message "Query type '%s' is informational. Displaying in a new buffer." query-type)
       (ai--execute-command query-type 'ai-utils--show-response-buffer))
+     ((eq result-action 'eval)
+      ;; Show response and ask for permission to evaluate
+      (message "Query type '%s' will generate code for evaluation." query-type)
+      (ai--execute-command query-type 'ai--show-and-eval-response))
      ((eq result-action 'replace)
       ;; Default replace behavior
       (ai--execute-command query-type (ai-utils--replace-region-or-insert-in-current-buffer)))
