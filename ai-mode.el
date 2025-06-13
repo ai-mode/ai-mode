@@ -144,6 +144,17 @@ These files should contain context or prompts intended to guide the AI chatbot."
   :type 'string
   :group 'ai-mode)
 
+(defcustom ai--result-action-prompts-names
+  '("result_action_replace"
+    "result_action_show"
+    "result_action_eval"
+    "result_action_complete")
+  "List of result action prompt file names to load instructions from.
+
+These files should contain instructions for how to format and apply results."
+  :type 'string
+  :group 'ai-mode)
+
 (defcustom ai--query-type-config-map
   '(("modify" . (:template "" :instructions nil :user-input t :result-action replace))
     ("generate code" . (:instructions nil :result-action replace))
@@ -258,6 +269,7 @@ These files should contain context or prompts intended to guide the AI chatbot."
   (with-current-buffer (current-buffer)
     (let* ((actions (mapcar #'car ai--query-type-config-map))
            (actions (append actions ai-mode--base-additional-context-prompts-names))
+           (actions (append actions ai--result-action-prompts-names))
            (root-path (ai-utils--get-buffer-root-path (current-buffer)))
            (library-root-path (file-name-directory (locate-library "ai-mode")))
            (instructions-table (make-hash-table :test 'equal)))
@@ -285,6 +297,7 @@ These files should contain context or prompts intended to guide the AI chatbot."
   (let* ((root-path (file-name-directory (locate-library "ai-mode")))
          (actions (mapcar #'car ai--query-type-config-map))
          (actions (append actions ai-mode--base-additional-context-prompts-names))
+         (actions (append actions ai--result-action-prompts-names))
          (instructions-table (make-hash-table :test 'equal)))
 
     (message "ai-mode library path: %s" root-path)
@@ -330,10 +343,10 @@ CONFIG contains configuration details and FULL-CONTEXT includes information for 
   (mapcar (lambda (content) (ai-utils--render-template content context)) items))
 
 (defun ai--get-action-type-for-config (config)
-  "Determine the action type from CONFIG, defaulting to \"modify\"."
-  (let* ((action-type (map-elt config :action-type))
-         (action-type (if action-type action-type "modify")))
-    action-type))
+  "Determine the action type from CONFIG based on result-action, defaulting to \"modify\"."
+  (let* ((result-action (map-elt config :result-action))
+         (action-type (ai--get-container-type-by-result-action result-action)))
+    (or action-type "modify")))
 
 (defun ai--get-container-type-by-result-action (result-action)
   "Determine the container type based on RESULT-ACTION.
@@ -369,6 +382,11 @@ Returns the container name or nil if no specific container is needed."
   (when ai--current-buffer-additional-context
     (ai-common--make-file-context)))
 
+(defun ai--get-result-action-prompt (result-action context)
+  "Get the prompt for RESULT-ACTION rendered with CONTEXT."
+  (let ((prompt-name (format "result_action_%s" (symbol-name result-action))))
+    (ai--get-rendered-action-prompt prompt-name context)))
+
 (cl-defun ai--get-execution-context (buffer config query-type &key
                                             (preceding-context-size ai--current-context-size)
                                             (following-context-size ai--current-following-context-size)
@@ -402,6 +420,12 @@ CONFIG specifies configuration, QUERY-TYPE indicates the query, and options for 
            (action-type-object-prompt (ai-common--make-typed-struct
                                        (ai--get-action-type-object-prompt (ai--get-action-type-for-config config) full-context)
                                        'agent-instructions))
+
+           (result-action-prompt (let ((result-action (map-elt config :result-action)))
+                                   (when result-action
+                                     (ai-common--make-typed-struct
+                                      (ai--get-result-action-prompt result-action full-context)
+                                      'agent-instructions))))
 
            (action-config-prompt (when-let ((instructions (map-elt config :instructions)))
                                    (ai-common--make-typed-struct instructions 'agent-instructions)))
@@ -447,6 +471,7 @@ CONFIG specifies configuration, QUERY-TYPE indicates the query, and options for 
                       file-metadata-context
                       current-buffer-content-context
                       action-config-prompt
+                      result-action-prompt
                       additional-context
                       (ai-common--get-buffer-bound-prompts)
                       action-examples-prompt
@@ -599,29 +624,8 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
   (interactive)
   (let* ((query-type (ai--get-executable-query-type))
          (context (ai--get-executions-context-for-query-type query-type :default-result-action 'eval)))
-    (ai--execute-context context 'ai--show-and-eval-response)))
+    (ai--execute-context context 'ai-utils--show-and-eval-response)))
 
-(defun ai--show-and-eval-response (response)
-  "Show RESPONSE in a buffer and ask user for permission to evaluate the Emacs Lisp code."
-  (let* ((buffer-name "*AI Generated Code*")
-         (buffer (get-buffer-create buffer-name)))
-    (with-current-buffer buffer
-      (erase-buffer)
-      (emacs-lisp-mode)
-      (insert response)
-      (goto-char (point-min))
-      (when (fboundp 'font-lock-ensure)
-        (font-lock-ensure)))
-
-    (pop-to-buffer buffer)
-
-    (when (yes-or-no-p "The AI has generated Emacs Lisp code. Do you want to evaluate it? ")
-      (condition-case err
-          (progn
-            (eval-buffer buffer)
-            (message "Code evaluated successfully."))
-        (error
-         (message "Error evaluating code: %s" (error-message-string err)))))))
 
 (defun ai-perform ()
   "Execute request and apply the result based on query type's specified result action or default to replace.
@@ -641,7 +645,7 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
      ((eq result-action 'eval)
       ;; Show response and ask for permission to evaluate
       (message "Query type '%s' will generate code for evaluation." query-type)
-      (ai--execute-context context 'ai--show-and-eval-response))
+      (ai--execute-context context 'ai-utils--show-and-eval-response))
      ((eq result-action 'replace)
       ;; Default replace behavior
       (ai--execute-context context (ai-utils--replace-region-or-insert-in-current-buffer)))
