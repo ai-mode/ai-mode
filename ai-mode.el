@@ -170,7 +170,7 @@ These files should contain context or prompts intended to guide the AI chatbot."
 
 
 (defcustom ai--completion-config
-  `(:action "complete" :instructions nil :action-type "complete")
+  `(:action "complete" :instructions nil :action-type "complete" :result-action complete)
   "Configuration for code completion."
   :group 'ai-mode)
 
@@ -335,18 +335,33 @@ CONFIG contains configuration details and FULL-CONTEXT includes information for 
          (action-type (if action-type action-type "modify")))
     action-type))
 
-(cl-defun ai--get-rendered-action-context (config &key preceding-context-size following-context-size)
-  "Render the action context based on CONFIG and optional context sizes PRECEDING-CONTEXT-SIZE and FOLLOWING-CONTEXT-SIZE."
+(defun ai--get-container-type-by-result-action (result-action)
+  "Determine the container type based on RESULT-ACTION.
+Returns the container name or nil if no specific container is needed."
+  (cond
+   ((eq result-action 'complete)    "complete")
+   ((eq result-action 'show)        "explain")
+   ((eq result-action 'eval)        "eval")
+   ((eq result-action 'replace)     "modify")
+   (t                               nil)))
+
+(cl-defun ai--get-contextual-action-object (config &key preceding-context-size following-context-size)
+  "Generate contextual action object based on CONFIG and optional context sizes PRECEDING-CONTEXT-SIZE and FOLLOWING-CONTEXT-SIZE."
   (let* ((action (map-elt config :action))
-         (action-type (ai--get-action-type-for-config config)))
-    (if (equal action "complete")
+         (result-action (map-elt config :result-action))
+         (container-type (ai--get-container-type-by-result-action result-action))
+         (action-object-name (if container-type
+                                 (format "%s-action-object" container-type)
+                               "action-object")))
+
+    (if (equal container-type "complete")
         (ai-common--render-container-from-elements
-         "complete-action-object"
+         action-object-name
          (ai-common--assemble-completion-context
           :preceding-context-size preceding-context-size
           :following-context-size following-context-size))
       (ai-common--render-container-from-elements
-       (format "%s-action-object" action-type)
+       action-object-name
        (ai-common--assemble-edit-context)))))
 
 (defun ai--get-current-buffer-context ()
@@ -412,7 +427,7 @@ CONFIG specifies configuration, QUERY-TYPE indicates the query, and options for 
                            (ai-common--make-typed-struct query-text 'user-input 'user-input)))
 
            (rendered-action-context (ai-common--make-typed-struct
-                                     (ai--get-rendered-action-context
+                                     (ai--get-contextual-action-object
                                       config
                                       :preceding-context-size preceding-context-size
                                       :following-context-size following-context-size)
@@ -471,17 +486,20 @@ If no prompt is found for QUERY-TYPE, returns nil."
   "Get the prompt for ACTION-TYPE rendered with CONTEXT."
   (ai--get-rendered-action-prompt (format "%s_action_type_object" action-type) context))
 
-(defun ai--get-query-config-by-type (query-type)
-  "Get query config by QUERY-TYPE."
+(defun ai--get-query-config-by-type (query-type &optional default-result-action)
+  "Get query config by QUERY-TYPE, applying DEFAULT-RESULT-ACTION for unknown types."
   (if-let (config (cdr (assoc query-type ai--query-type-config-map)))
       (append config `(:action ,query-type))
     (if (string= query-type "complete")
         ai--completion-config
-      (append ai--query-config `(:query ,query-type)))))
+      (let ((base-config (append ai--query-config `(:query ,query-type))))
+        (if default-result-action
+            (append base-config `(:result-action ,default-result-action))
+          base-config)))))
 
-(cl-defun ai--get-executions-context-for-query-type (query-type &key (model nil))
-  "Get execution context for QUERY-TYPE with an optional MODEL."
-  (let* ((config (ai--get-query-config-by-type query-type))
+(cl-defun ai--get-executions-context-for-query-type (query-type &key (model nil) (default-result-action nil))
+  "Get execution context for QUERY-TYPE with optional MODEL and DEFAULT-RESULT-ACTION."
+  (let* ((config (ai--get-query-config-by-type query-type default-result-action))
          (execution-context (ai--get-execution-context (current-buffer) config query-type :model model)))
     execution-context))
 
@@ -498,24 +516,36 @@ If no prompt is found for QUERY-TYPE, returns nil."
 (defun ai--get-informational-query-type ()
   "Prompt the user to select an informational type of request, filtering by :result-action 'show'."
   (interactive)
-  (let* ((available-query-types
+  (let* ((show-query-types
           (mapcar #'car
                   (cl-remove-if-not
                    (lambda (item)
                      (eq (map-elt (cdr item) :result-action) 'show))
                    ai--query-type-config-map))))
-    (completing-read ai--query-type-prompt available-query-types)))
+    (completing-read ai--query-type-prompt show-query-types nil nil nil nil)))
 
 (defun ai--get-executable-query-type ()
   "Prompt the user to select an executable type of request, filtering by :result-action 'eval'."
   (interactive)
-  (let* ((available-query-types
+  (let* ((eval-query-types
           (mapcar #'car
                   (cl-remove-if-not
                    (lambda (item)
                      (eq (map-elt (cdr item) :result-action) 'eval))
                    ai--query-type-config-map))))
-    (completing-read ai--query-type-prompt available-query-types)))
+    (completing-read ai--query-type-prompt eval-query-types nil nil nil nil)))
+
+(defun ai--get-all-available-query-types ()
+  "Get all available query types including those from config and additional actions."
+  (let* ((config-types (mapcar #'car ai--query-type-config-map))
+         (additional-types '("complete"))
+         (all-types (append config-types additional-types)))
+    (delete-dups all-types)))
+
+(defun ai--get-query-type-unrestricted ()
+  "Prompt the user to select any available query type without restrictions."
+  (interactive)
+  (completing-read ai--query-type-prompt (ai--get-all-available-query-types) nil nil nil nil))
 
 (defun ai--set-execution-model (model)
   "Set the execution model and execute hooks.
@@ -558,17 +588,18 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
              :fail-callback fail-callback)))
 
 (defun ai-show ()
-  "Execute query and show the response in a special buffer, limited to informational commands."
+  "Execute query and show the response in a special buffer, filtering by show-compatible query types."
   (interactive)
-  (ai--execute-command (ai--get-informational-query-type) 'ai-utils--show-response-buffer))
+  (let* ((query-type (ai--get-informational-query-type))
+         (context (ai--get-executions-context-for-query-type query-type :default-result-action 'show)))
+    (ai--execute-context context 'ai-utils--show-response-buffer)))
 
 (defun ai-execute ()
-  "Execute query and show the response for evaluation, limited to executable commands."
+  "Execute query and show the response for evaluation, filtering by eval-compatible query types."
   (interactive)
-  (let ((query-type (ai--get-executable-query-type)))
-    (if query-type
-        (ai--execute-command query-type 'ai--show-and-eval-response)
-      (message "No executable query types available. Consider adding query types with :result-action 'eval'."))))
+  (let* ((query-type (ai--get-executable-query-type))
+         (context (ai--get-executions-context-for-query-type query-type :default-result-action 'eval)))
+    (ai--execute-context context 'ai--show-and-eval-response)))
 
 (defun ai--show-and-eval-response (response)
   "Show RESPONSE in a buffer and ask user for permission to evaluate the Emacs Lisp code."
@@ -593,40 +624,41 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
          (message "Error evaluating code: %s" (error-message-string err)))))))
 
 (defun ai-perform ()
-  "Execute request and apply the result based on query type's specified result action.
+  "Execute request and apply the result based on query type's specified result action or default to replace.
    If result action is 'replace', it replaces the selected region or inserts in current buffer.
    If result action is 'show', it shows the response in a special buffer.
    If result action is 'eval', it shows the response and asks for permission to evaluate."
   (interactive)
-  (let* ((query-type (ai--get-query-type))
-         (config (ai--get-query-config-by-type query-type))
+  (let* ((query-type (ai--get-query-type-unrestricted))
+         (context (ai--get-executions-context-for-query-type query-type :default-result-action 'replace))
+         (config (ai--get-query-config-by-type query-type 'replace))
          (result-action (map-elt config :result-action)))
     (cond
      ((eq result-action 'show)
       ;; If the selected query type is meant to be shown, delegate
       (message "Query type '%s' is informational. Displaying in a new buffer." query-type)
-      (ai--execute-command query-type 'ai-utils--show-response-buffer))
+      (ai--execute-context context 'ai-utils--show-response-buffer))
      ((eq result-action 'eval)
       ;; Show response and ask for permission to evaluate
       (message "Query type '%s' will generate code for evaluation." query-type)
-      (ai--execute-command query-type 'ai--show-and-eval-response))
+      (ai--execute-context context 'ai--show-and-eval-response))
      ((eq result-action 'replace)
       ;; Default replace behavior
-      (ai--execute-command query-type (ai-utils--replace-region-or-insert-in-current-buffer)))
+      (ai--execute-context context (ai-utils--replace-region-or-insert-in-current-buffer)))
      (t
       ;; Fallback for unconfigured or new actions
       (message "Unknown or unspecified result action for query type '%s'. Defaulting to replace." query-type)
-      (ai--execute-command query-type (ai-utils--replace-region-or-insert-in-current-buffer))))))
+      (ai--execute-context context (ai-utils--replace-region-or-insert-in-current-buffer))))))
 
 (defun ai-perform-coordinator ()
   "Decide whether to continue the previous process of supplementation or to start a new one."
   (interactive)
-  (ai-completions--coordinator :action-type (ai--get-query-type) :strategy 'replace))
+  (ai-completions--coordinator :action-type (ai--get-query-type-unrestricted) :strategy 'replace))
 
 (defun ai-debug ()
   "Debug AI mode by printing region status and execution context."
   (interactive)
-  (ai-utils--show-context-debug (ai--get-executions-context-for-query-type (ai--get-query-type) :model (ai--get-current-model))))
+  (ai-utils--show-context-debug (ai--get-executions-context-for-query-type (ai--get-query-type-unrestricted) :model (ai--get-current-model))))
 
 (defun ai--get-current-model ()
   "Return the currently selected execution model or set a default if none is selected."
