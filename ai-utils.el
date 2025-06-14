@@ -767,6 +767,72 @@ with `ai-utils--instruction-file-extension'."
        nil))))
 
 
+(defun ai-utils--user-input-minibuffer-with-preview ()
+  "Get user input from minibuffer with dynamic resizing and multiline support.
+Returns the input string or nil if cancelled.
+Features:
+- Dynamic minibuffer resizing up to 50% of screen height
+- Visual line wrapping for long lines
+- Empty line finishes input
+- C-g cancels input"
+  (let ((input "")
+        (continue t)
+        (max-mini-window-height 0.5))  ; Allow minibuffer to use up to 50% of screen
+    (while continue
+      (let* ((prompt (if (string-empty-p input)
+                        "Enter your text (empty line to finish): "
+                      (format "Current input:\n%s\n\nContinue (empty line to finish): " input)))
+             (line (condition-case nil
+                       (read-string prompt nil nil nil t)  ; Enable history
+                     (quit
+                      (setq continue nil)
+                      nil))))
+        (cond
+         ;; User cancelled
+         ((not continue)
+          (setq input nil))
+         ;; Empty line finishes input
+         ((string-empty-p line)
+          (setq continue nil))
+         ;; Add line to input
+         (t
+          (setq input (if (string-empty-p input)
+                          line
+                        (concat input "\n" line)))))))
+    input))
+
+(defun ai-utils--user-input-ctrl-enter ()
+  "Get user input using minibuffer with C-RET to finish.
+Features:
+- C-RET (C-<return>) sends message and finishes input
+- C-g cancels input
+- RET creates new line
+Returns the input string or nil if cancelled."
+  (let ((input "")
+        (continue t)
+        (keymap (copy-keymap minibuffer-local-map)))
+    ;; Set up custom keymap for minibuffer
+    (define-key keymap (kbd "C-<return>")
+                (lambda ()
+                  (interactive)
+                  (setq continue nil)
+                  (exit-minibuffer)))
+    (define-key keymap (kbd "RET")
+                (lambda ()
+                  (interactive)
+                  (insert "\n")))
+
+    ;; Get input using minibuffer with custom keymap
+    (condition-case nil
+        (progn
+          (setq input (read-from-minibuffer
+                       "Type your message (C-RET to send, C-g to cancel): "
+                       nil keymap nil nil nil t))
+          input)
+      (quit
+       (message "Input cancelled.")
+       nil))))
+
 (defun ai-utils-escape-format-specifiers (str)
   "Escape all '%' specifiers in STR by replacing them with '%%'."
   (replace-regexp-in-string "%" "%%" str))
