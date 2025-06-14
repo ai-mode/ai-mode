@@ -188,6 +188,18 @@
   :type 'boolean
   :group 'ai-chat)
 
+(defcustom ai-chat--progress-indicator-enabled t
+  "Enable progress indicator for AI chat requests."
+  :type 'boolean
+  :group 'ai-chat)
+
+(defcustom ai-chat--progress-indicator-style 'spinner
+  "Style of progress indicator to use for AI chat requests."
+  :type '(choice (const :tag "Spinner animation" spinner)
+                 (const :tag "Progress dots" dots)
+                 (const :tag "Message only" message))
+  :group 'ai-chat)
+
 ;;; Variables
 
 (defvar ai-chat--buffer-name "*ai-chat*"
@@ -220,6 +232,22 @@
 
 (defvar ai-chat--current-session-id nil
   "Unique identifier for the current chat session.")
+
+;; Progress indicator variables (buffer-local)
+(defvar-local ai-chat--progress-timer nil
+  "Timer for progress indicator animation.")
+
+(defvar-local ai-chat--progress-counter 0
+  "Counter for progress indicator animation.")
+
+(defvar-local ai-chat--progress-active nil
+  "Flag indicating if progress indicator is currently active.")
+
+(defvar-local ai-chat--progress-message "AI request in progress"
+  "Message to display during AI request progress.")
+
+(defvar-local ai-chat--progress-start-time nil
+  "Start time of the current AI request.")
 
 ;;; Hook variables
 
@@ -357,6 +385,77 @@
   (format "%s-%04x"
           (format-time-string "%Y%m%d%H%M%S")
           (random 65536)))
+
+;;; Progress indicator functions
+
+(defun ai-chat--format-elapsed-time (start-time)
+  "Format elapsed time since START-TIME as a human-readable string."
+  (let* ((elapsed (- (float-time) start-time))
+         (minutes (floor (/ elapsed 60)))
+         (seconds (floor (mod elapsed 60))))
+    (if (> minutes 0)
+        (format "%dm%ds" minutes seconds)
+      (format "%ds" seconds))))
+
+(defun ai-chat--progress-start (&optional message buffer)
+  "Start progress indicator with optional MESSAGE in specified BUFFER or current buffer."
+  (when ai-chat--progress-indicator-enabled
+    (with-current-buffer (or buffer (current-buffer))
+      (setq ai-chat--progress-active t
+            ai-chat--progress-counter 0
+            ai-chat--progress-start-time (float-time)
+            ai-chat--progress-message (or message "AI request in progress"))
+
+      (cond
+       ((eq ai-chat--progress-indicator-style 'spinner)
+        (ai-chat--progress-start-spinner))
+       ((eq ai-chat--progress-indicator-style 'dots)
+        (ai-chat--progress-start-dots))
+       ((eq ai-chat--progress-indicator-style 'message)
+        (ai-chat-mode-update-mode-line-info))))))
+
+(defun ai-chat--progress-stop (&optional buffer)
+  "Stop progress indicator in specified BUFFER or current buffer."
+  (with-current-buffer (or buffer (current-buffer))
+    (when ai-chat--progress-active
+      (setq ai-chat--progress-active nil
+            ai-chat--progress-start-time nil)
+      (when ai-chat--progress-timer
+        (cancel-timer ai-chat--progress-timer)
+        (setq ai-chat--progress-timer nil))
+      (ai-chat-mode-update-mode-line-info))))
+
+(defun ai-chat--progress-start-spinner ()
+  "Start spinner-style progress indicator."
+  (let ((current-buffer (current-buffer)))
+    (setq ai-chat--progress-timer
+          (run-with-timer 0 0.5
+                          (lambda ()
+                            (when (buffer-live-p current-buffer)
+                              (with-current-buffer current-buffer
+                                (when ai-chat--progress-active
+                                  (setq ai-chat--progress-counter (1+ ai-chat--progress-counter))
+                                  (ai-chat-mode-update-mode-line-info)))))))))
+
+(defun ai-chat--progress-start-dots ()
+  "Start dots-style progress indicator."
+  (let ((current-buffer (current-buffer)))
+    (setq ai-chat--progress-timer
+          (run-with-timer 0 0.5
+                          (lambda ()
+                            (when (buffer-live-p current-buffer)
+                              (with-current-buffer current-buffer
+                                (when ai-chat--progress-active
+                                  (setq ai-chat--progress-counter (1+ ai-chat--progress-counter))
+                                  (ai-chat-mode-update-mode-line-info)))))))))
+
+(defun ai-chat--progress-wrap-callback (original-callback &optional buffer)
+  "Wrap ORIGINAL-CALLBACK to stop progress indicator when called in specified BUFFER."
+  (let ((target-buffer (or buffer (current-buffer))))
+    (lambda (&rest args)
+      (ai-chat--progress-stop target-buffer)
+      (when original-callback
+        (apply original-callback args)))))
 
 ;;; Font lock functions
 
@@ -736,11 +835,35 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
 
 (defun ai-chat-mode-line-info ()
   "Construct and return formatted mode line information for AI chat."
-  (let* ((model (ai-chat--get-current-model)))
-    (format "AI-CHAT[%s|%d%s]"
-            (map-elt model :name)
-            (ai-chat-get-context-size)
-            (if ai-chat--auto-save-enabled "|AS" ""))))
+  (let* ((model (ai-chat--get-current-model))
+         (progress-indicator (cond
+                              ((and ai-chat--progress-active
+                                    (eq ai-chat--progress-indicator-style 'spinner))
+                               (let ((spinner-chars '("○" "◔" "◑" "◕" "●" "◕" "◑" "◔"))
+                                     (elapsed-time (when ai-chat--progress-start-time
+                                                     (ai-chat--format-elapsed-time ai-chat--progress-start-time))))
+                                 (format "%s%s"
+                                         (nth (% ai-chat--progress-counter (length spinner-chars)) spinner-chars)
+                                         (if elapsed-time (format ":%s" elapsed-time) ""))))
+                              ((and ai-chat--progress-active
+                                    (eq ai-chat--progress-indicator-style 'dots))
+                               (let ((elapsed-time (when ai-chat--progress-start-time
+                                                     (ai-chat--format-elapsed-time ai-chat--progress-start-time))))
+                                 (format "%s%s"
+                                         (make-string (% ai-chat--progress-counter 4) ?.)
+                                         (if elapsed-time (format ":%s" elapsed-time) ""))))
+                              (ai-chat--progress-active "⚡")
+                              (t "")))
+         (context-info (if ai-chat--progress-active
+                           (when ai-chat--progress-start-time
+                             (format "%s" (if (string-empty-p progress-indicator) "" (format "%s" progress-indicator))))
+                         (format "%d" (ai-chat-get-context-size))))
+         (ai-chat-mode-line-section
+          (format "AI-CHAT[%s|%s%s]"
+                  (map-elt model :name)
+                  context-info
+                  (if ai-chat--auto-save-enabled "|AS" ""))))
+    ai-chat-mode-line-section))
 
 (defun ai-chat-get-context-size ()
   "Return the current context size for AI chat."
@@ -793,12 +916,19 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
           (condition-case processing-error
               (let* ((execution-model (ai-chat--get-current-model))
                      (execution-backend (map-elt execution-model :execution-backend))
-                     (context (ai-chat--get-execution-context)))
+                     (context (ai-chat--get-execution-context))
+                     (current-buffer (current-buffer))
+                     (wrapped-success-callback (ai-chat--progress-wrap-callback 'ai-chat--request-success-callback current-buffer))
+                     (wrapped-fail-callback (ai-chat--progress-wrap-callback 'ai-chat--request-fail-callback current-buffer)))
+
+                ;; Start progress indicator
+                (ai-chat--progress-start (format "Chatting with %s" (map-elt execution-model :name)) current-buffer)
+
                 (funcall execution-backend
                          context
                          execution-model
-                         :success-callback 'ai-chat--request-success-callback
-                         :fail-callback 'ai-chat--request-fail-callback))
+                         :success-callback wrapped-success-callback
+                         :fail-callback wrapped-fail-callback))
 
             (error (error  "Evaluation input error: %s" (error-message-string processing-error) ))))))
     (error "AI busy")))
@@ -857,6 +987,7 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
                                               'invisible (not ai-chat--show-invisible-markers))
                                   "\n"
                                   ai-chat--prompt-internal))
+    (ai-chat--progress-stop)
     (setq ai-chat--busy nil)))
 
 (defun ai-chat-change-backend (&optional model-name)
