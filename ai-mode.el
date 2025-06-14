@@ -108,6 +108,15 @@
   :type 'boolean
   :group 'ai)
 
+(defcustom ai--user-input-method 'ai-utils--user-input-minibuffer-with-preview
+  "Function to use for collecting user input.
+Should be a function symbol that returns a string or nil."
+  :type '(choice (const :tag "Simple minibuffer" ai-utils--user-input)
+                 (const :tag "Minibuffer with preview" ai-utils--user-input-minibuffer-with-preview)
+                 (const :tag "Ctrl-Enter to send" ai-utils--user-input-ctrl-enter)
+                 (function :tag "Custom function"))
+  :group 'ai)
+
 (defvar-local ai--buffer-file-instructions (make-hash-table :test 'equal))
 (defvar ai-mode--actions-instructions (make-hash-table :test 'equal))
 
@@ -387,6 +396,13 @@ Returns the container name or nil if no specific container is needed."
   (let ((prompt-name (format "result_action_%s" (symbol-name result-action))))
     (ai--get-rendered-action-prompt prompt-name context)))
 
+(defun ai--get-user-input ()
+  "Get user input using the configured function."
+  (if (functionp ai--user-input-method)
+      (funcall ai--user-input-method)
+    (error "ai--user-input-method is not a valid function: %s" ai--user-input-method)))
+
+
 (cl-defun ai--get-execution-context (buffer config query-type &key
                                             (preceding-context-size ai--current-context-size)
                                             (following-context-size ai--current-following-context-size)
@@ -440,7 +456,7 @@ CONFIG specifies configuration, QUERY-TYPE indicates the query, and options for 
               (ai--get-current-buffer-context)))
 
            (user-input (when (map-elt config :user-input)
-                         (let ((input-text (ai-utils--user-input)))
+                         (let ((input-text (ai--get-user-input)))
                            (when input-text
                              (ai-common--make-typed-struct
                               (ai-utils--render-template input-text full-context)
