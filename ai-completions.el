@@ -271,7 +271,12 @@ STRATEGY may alter the completion behavior."
          (success-callback (lambda (candidates)
                              (with-current-buffer buffer
                                (ai-completions--add-candidates candidates)
-                               (ai-completions--show-candidate)))))
+                               (ai-completions--show-candidate))))
+         (fail-callback (lambda (request-data response-error)
+                          (with-current-buffer buffer
+                            (when ai-utils--verbose-log
+                              (message "Error struct: %s" (pp-to-string response-error)))
+                            (error (format "Response error: %s" (ai-common--get-text-content-from-struct response-error)))))))
 
     (when (not execution-backend)
       (error (message "Model execution backend not defined"))
@@ -279,15 +284,14 @@ STRATEGY may alter the completion behavior."
 
     (message (format "Attempting to execute backend for action \"%s\"" (ai-utils-escape-format-specifiers action-type)))
 
+    ;; Start progress indicator
+    (ai--progress-start (format "Completing with %s" (map-elt execution-model :name)) buffer)
+
     (funcall execution-backend
              execution-context
              execution-model
-             :success-callback success-callback
-             :fail-callback (lambda (request-data response-error)
-                              (with-current-buffer buffer
-                                (when ai-utils--verbose-log
-                                  (message "Error struct: %s" (pp-to-string response-error)))
-                                (error (format "Response error: %s" (ai-common--get-text-content-from-struct response-error)))))
+             :success-callback (ai--progress-wrap-callback success-callback buffer)
+             :fail-callback (ai--progress-wrap-callback fail-callback buffer)
              :extra-params execution-context)))
 
 (defun ai-completions--get-current-buffer-clone ()
@@ -332,6 +336,7 @@ STRATEGY may alter the completion behavior."
 (defun ai-completions--abort ()
   "Abort the completion process."
   (interactive)
+  (ai--progress-stop)
   (ai-completions--reset-variables-to-defaults)
   (ai-completions--cancel))
 
@@ -344,6 +349,7 @@ STRATEGY may alter the completion behavior."
 
 (defun ai-completions--cancel ()
   "Cancel the ongoing completion process, resetting the state."
+  (ai--progress-stop)
   (ai-completions--preview-hide)
   (ai-completions--clear-buffer-clone)
   (setq-local ai-completions--current-candidate 0
@@ -427,7 +433,6 @@ STRATEGY may alter the completion behavior."
 
 (define-minor-mode ai-completions-mode
   "AI completion mode."
-  :lighter (:eval (ai-completions-line-info))
   :after-hook (force-mode-line-update t)
   (if ai-completions-mode
       (progn
@@ -537,20 +542,6 @@ STRATEGY may alter the completion behavior."
   (interactive)
   (with-current-buffer (current-buffer)
     (setq-local ai-completions--global-system-instructions '())))
-
-(defun ai-completions-line-info ()
-  "Format and return a line info string for AI completions mode."
-  (let* ((model (ai-completions--get-current-model)))
-    (format " AIC[%s|%d/%d/%d]" (map-elt model :name) ai-completions--context-size ai-completions--current-forwarding-context-size ai-completions--context-size-step)))
-
-(when (require 'doom-modeline nil 'noerror)
-
-  (doom-modeline-def-segment ai-mode-line-info
-    "Display AI mode line information."
-    (ai-mode-line-info))
-
-  (add-hook 'ai-mode-change-model-hook 'doom-modeline-refresh-bars)
-  (add-to-list 'mode-line-misc-info  '(:eval (ai-mode-line-info)) t))
 
 (provide 'ai-completions)
 

@@ -117,6 +117,18 @@ Should be a function symbol that returns a string or nil."
                  (function :tag "Custom function"))
   :group 'ai)
 
+(defcustom ai--progress-indicator-enabled t
+  "Enable progress indicator for AI requests."
+  :type 'boolean
+  :group 'ai)
+
+(defcustom ai--progress-indicator-style 'spinner
+  "Style of progress indicator to use for AI requests."
+  :type '(choice (const :tag "Spinner animation" spinner)
+                 (const :tag "Progress dots" dots)
+                 (const :tag "Message only" message))
+  :group 'ai)
+
 (defvar-local ai--buffer-file-instructions (make-hash-table :test 'equal))
 (defvar ai-mode--actions-instructions (make-hash-table :test 'equal))
 
@@ -138,6 +150,22 @@ Should be a function symbol that returns a string or nil."
 
 (defvar ai-mode-change-model-hook nil
   "Hook that is run when execution model changes.")
+
+;; Progress indicator variables (buffer-local)
+(defvar-local ai--progress-timer nil
+  "Timer for progress indicator animation.")
+
+(defvar-local ai--progress-counter 0
+  "Counter for progress indicator animation.")
+
+(defvar-local ai--progress-active nil
+  "Flag indicating if progress indicator is currently active.")
+
+(defvar-local ai--progress-message "AI request in progress"
+  "Message to display during AI request progress.")
+
+(defvar-local ai--progress-start-time nil
+  "Start time of the current AI request.")
 
 (defcustom ai-mode--base-additional-context-prompts-names
   '("basic"
@@ -224,6 +252,76 @@ These files should contain instructions for how to format and apply results."
       (define-key keymap (kbd ai-keymap-prefix) ai-command-map))
     keymap)
   "Keymap used by `ai-mode`.")
+
+;; Progress indicator functions (buffer-local operations)
+(defun ai--format-elapsed-time (start-time)
+  "Format elapsed time since START-TIME as a human-readable string."
+  (let* ((elapsed (- (float-time) start-time))
+         (minutes (floor (/ elapsed 60)))
+         (seconds (floor (mod elapsed 60))))
+    (if (> minutes 0)
+        (format "%dm%ds" minutes seconds)
+      (format "%ds" seconds))))
+
+(defun ai--progress-start (&optional message buffer)
+  "Start progress indicator with optional MESSAGE in specified BUFFER or current buffer."
+  (when ai--progress-indicator-enabled
+    (with-current-buffer (or buffer (current-buffer))
+      (setq ai--progress-active t
+            ai--progress-counter 0
+            ai--progress-start-time (float-time)
+            ai--progress-message (or message "AI request in progress"))
+
+      (cond
+       ((eq ai--progress-indicator-style 'spinner)
+        (ai--progress-start-spinner))
+       ((eq ai--progress-indicator-style 'dots)
+        (ai--progress-start-dots))
+       ((eq ai--progress-indicator-style 'message)
+        (force-mode-line-update))))))
+
+(defun ai--progress-stop (&optional buffer)
+  "Stop progress indicator in specified BUFFER or current buffer."
+  (with-current-buffer (or buffer (current-buffer))
+    (when ai--progress-active
+      (setq ai--progress-active nil
+            ai--progress-start-time nil)
+      (when ai--progress-timer
+        (cancel-timer ai--progress-timer)
+        (setq ai--progress-timer nil))
+      (force-mode-line-update))))
+
+(defun ai--progress-start-spinner ()
+  "Start spinner-style progress indicator."
+  (let ((current-buffer (current-buffer)))
+    (setq ai--progress-timer
+          (run-with-timer 0 0.5
+                          (lambda ()
+                            (when (buffer-live-p current-buffer)
+                              (with-current-buffer current-buffer
+                                (when ai--progress-active
+                                  (setq ai--progress-counter (1+ ai--progress-counter))
+                                  (force-mode-line-update)))))))))
+
+(defun ai--progress-start-dots ()
+  "Start dots-style progress indicator."
+  (let ((current-buffer (current-buffer)))
+    (setq ai--progress-timer
+          (run-with-timer 0 0.5
+                          (lambda ()
+                            (when (buffer-live-p current-buffer)
+                              (with-current-buffer current-buffer
+                                (when ai--progress-active
+                                  (setq ai--progress-counter (1+ ai--progress-counter))
+                                  (force-mode-line-update)))))))))
+
+(defun ai--progress-wrap-callback (original-callback &optional buffer)
+  "Wrap ORIGINAL-CALLBACK to stop progress indicator when called in specified BUFFER."
+  (let ((target-buffer (or buffer (current-buffer))))
+    (lambda (&rest args)
+      (ai--progress-stop target-buffer)
+      (when original-callback
+        (apply original-callback args)))))
 
 ;;;###autoload
 (define-minor-mode ai-mode
@@ -628,12 +726,19 @@ MODEL is the model configuration to be set."
   "Execute CONTEXT by current backend asynchronously.
 After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL-CALLBACK if provided. EXTRA-PARAMS is a list of additional parameters for backend configuration."
   (let* ((execution-model (if model model (ai--get-current-model)))
-         (execution-backend (map-elt execution-model :execution-backend)))
+         (execution-backend (map-elt execution-model :execution-backend))
+         (current-buffer (current-buffer))
+         (wrapped-success-callback (ai--progress-wrap-callback success-callback current-buffer))
+         (wrapped-fail-callback (ai--progress-wrap-callback fail-callback current-buffer)))
+
+    ;; Start progress indicator in current buffer
+    (ai--progress-start (format "Processing with %s" (map-elt execution-model :name)) current-buffer)
+
     (funcall execution-backend
              context
              execution-model
-             :success-callback success-callback
-             :fail-callback fail-callback)))
+             :success-callback wrapped-success-callback
+             :fail-callback wrapped-fail-callback)))
 
 (defun ai-show ()
   "Execute query and show the response in a special buffer, filtering by show-compatible query types."
@@ -702,11 +807,32 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
 (defun ai-mode-line-info ()
   "Return a formatted string describing the current AI mode state for the mode line."
   (let* ((model (ai--get-current-model))
+         (progress-indicator (cond
+                              ((and ai--progress-active
+                                    (eq ai--progress-indicator-style 'spinner))
+                               (let ((spinner-chars '("○" "◔" "◑" "◕" "●" "◕" "◑" "◔"))
+                                     (elapsed-time (when ai--progress-start-time
+                                                     (ai--format-elapsed-time ai--progress-start-time))))
+                                 (format "%s%s"
+                                         (nth (% ai--progress-counter (length spinner-chars)) spinner-chars)
+                                         (if elapsed-time (format ":%s" elapsed-time) ""))))
+                              ((and ai--progress-active
+                                    (eq ai--progress-indicator-style 'dots))
+                               (let ((elapsed-time (when ai--progress-start-time
+                                                     (ai--format-elapsed-time ai--progress-start-time))))
+                                 (format "%s%s"
+                                         (make-string (% ai--progress-counter 4) ?.)
+                                         (if elapsed-time (format ":%s" elapsed-time) ""))))
+                              (ai--progress-active "⚡")
+                              (t "")))
+         (context-info (if ai--progress-active
+                           (when ai--progress-start-time
+                             (format "%s" (if (string-empty-p progress-indicator) "" (format "%s" progress-indicator))))
+                         (format "%d/%d" ai--current-context-size ai--current-following-context-size)))
          (ai-mode-line-section
-          (format " AI[%s|%d/%d]"
+          (format " AI[%s|%s]"
                   (map-elt model :name)
-                  ai--current-context-size
-                  ai--current-following-context-size)))
+                  context-info)))
     ai-mode-line-section))
 
 (defun ai-mode-update-mode-line-info ()
