@@ -64,7 +64,7 @@ INPUT is a string representing the context or information to be remembered globa
    (list (if (region-active-p)
              (buffer-substring-no-properties (region-beginning) (region-end))
            (read-string "Enter instruction: "))))
-  (let ((struct (ai-common--make-typed-struct input 'global-memory-item)))
+  (let ((struct (ai-common--make-typed-struct input 'global-memory-item 'user-input)))
     (setq ai--global-memo-context (append ai--global-memo-context `(,struct)))
     (message "AI memory context added")))
 
@@ -87,7 +87,7 @@ INPUT can be entered by the user or taken from the active region."
            (read-string "Enter buffer bound prompt: "))))
 
   (with-current-buffer (current-buffer)
-    (let ((struct (ai-common--make-typed-struct input 'buffer-bound-prompt)))
+    (let ((struct (ai-common--make-typed-struct input 'buffer-bound-prompt 'user-input)))
       (message "AI buffer bound context added")
       (setq-local ai-common--buffer-bound-prompts (append ai-common--buffer-bound-prompts `(,struct))))))
 
@@ -111,7 +111,7 @@ INPUT can be entered by the user or taken from the active region."
            (read-string "Enter global system prompt: "))))
 
   (with-current-buffer (current-buffer)
-    (let ((struct (ai-common--make-typed-struct input 'global-system-prompt)))
+    (let ((struct (ai-common--make-typed-struct input 'global-system-prompt 'user-input)))
       (setq ai-common--global-system-prompts
             (append ai-common--global-system-prompts `(,struct))))))
 
@@ -152,6 +152,7 @@ This includes metadata such as file name, buffer name, and timestamps."
                   :end-pos    ,end
                   :mode       ,(symbol-name major-mode)
                   :timestamp  ,ts
+                  :source     buffer-content
                   :id         ,id)))
 
 (defun ai-common--make-snippet-from-region (&optional tag-type)
@@ -183,6 +184,7 @@ If TAG-TYPE is provided, it is used as the :type value instead of 'snippet."
                            :end-column        ,col-end
                            :mode              ,mode
                            :timestamp         ,ts
+                           :source            region-selection
                            :id                ,id))))
 
 (defun ai-common--generate-id (type)
@@ -252,6 +254,7 @@ Optional SOURCE parameter specifies the source of the context."
                          :end-column        ,end-col
                          :mode              ,mode
                          :timestamp         ,ts
+                         :source            preceding-context
                          :id                ,id)))
 
 (defun ai-common--make-following-context (size)
@@ -280,6 +283,7 @@ Optional SOURCE parameter specifies the source of the context."
       :end-column        ,end-col
       :mode              ,mode
       :timestamp         ,ts
+      :source            following-context
       :id                ,id)))
 
 (defun ai-common--add-to-context-pool (item)

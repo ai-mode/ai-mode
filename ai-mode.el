@@ -419,37 +419,43 @@ CONFIG specifies configuration, QUERY-TYPE indicates the query, and options for 
 
            (basic-file-prompt (ai-common--make-typed-struct
                                (ai--get-rendered-action-prompt "basic" full-context)
-                               'agent-instructions))
+                               'agent-instructions
+                               'basic-prompt))
 
            (file-metadata-context (ai-common--make-typed-struct
                                    (ai--get-rendered-action-prompt "_file_metadata" full-context)
-                                   'additional-context))
+                                   'additional-context
+                                   'file-metadata))
 
            (action-file-prompt (ai-common--make-typed-struct
                                 (ai--get-rendered-action-prompt query-type full-context)
-                                'agent-instructions))
+                                'agent-instructions
+                                'action-specific-prompt))
 
            (action-examples-prompt (ai-common--make-typed-struct
                                     (ai--get-rendered-action-prompt (format "%s-examples" query-type) full-context)
-                                    'agent-instructions))
+                                    'agent-instructions
+                                    'action-examples))
 
            (action-type-object-prompt (ai-common--make-typed-struct
                                        (ai--get-action-type-object-prompt (ai--get-action-type-for-config config) full-context)
-                                       'agent-instructions))
+                                       'agent-instructions
+                                       'action-object-rules))
 
            (result-action-prompt (let ((result-action (map-elt config :result-action)))
                                    (when result-action
                                      (ai-common--make-typed-struct
                                       (ai--get-result-action-prompt result-action full-context)
-                                      'agent-instructions))))
+                                      'agent-instructions
+                                      'result-action-format))))
 
            (action-config-prompt (when-let ((instructions (map-elt config :instructions)))
-                                   (ai-common--make-typed-struct instructions 'agent-instructions)))
+                                   (ai-common--make-typed-struct instructions 'agent-instructions 'config-instructions)))
 
            (additional-context
             (let ((context-pool-content (ai-common--render-struct-to-string (ai-common--get-context-pool))))
               (when context-pool-content
-                (ai-common--make-typed-struct context-pool-content 'additional-context))))
+                (ai-common--make-typed-struct context-pool-content 'additional-context 'context-pool))))
 
            (current-buffer-content-context
             (when (use-region-p)
@@ -464,14 +470,15 @@ CONFIG specifies configuration, QUERY-TYPE indicates the query, and options for 
                               'user-input)))))
 
            (query-struct (when-let ((query-text (map-elt config :query)))
-                           (ai-common--make-typed-struct query-text 'user-input 'user-input)))
+                           (ai-common--make-typed-struct query-text 'user-input 'config-query)))
 
            (rendered-action-context (ai-common--make-typed-struct
                                      (ai--get-contextual-action-object
                                       config
                                       :preceding-context-size preceding-context-size
                                       :following-context-size following-context-size)
-                                     'action-context))
+                                     'action-context
+                                     'contextual-action))
 
            (messages
             (append
