@@ -93,6 +93,9 @@
                                                 ai-completions--increase-current-context
                                                 ai-completions--maximize-current-context
                                                 ai-completions--add-instruction
+                                                ai-completions--complete-at-point-with-full-context
+                                                ai-completions-complete-code-at-point
+                                                ai-completions--complete-at-point-with-limited-context
                                                 self-insert-command
                                                 exit-minibuffer
                                                 delete-backward-char
@@ -155,7 +158,8 @@
     (define-key keymap (kbd "RET") 'ai-completions--select-current)
     (define-key keymap (kbd "C-i") 'ai-completions--increase-current-context)
     (define-key keymap (kbd "C-f") 'ai-completions--maximize-current-context)
-    (define-key keymap (kbd "C-<tab>") 'ai-completions--select-next-or-abort)
+    (define-key keymap (kbd "C-<tab>") 'ai-completions--complete-at-point-with-limited-context)
+    (define-key keymap (kbd "C-M-<tab>") 'ai-completions--complete-at-point-with-full-context)
     (define-key keymap (kbd "C-a") 'ai-completions--add-instruction)
     keymap)
   "Keymap used for managing complete candidates.")
@@ -195,6 +199,7 @@ STRATEGY may be specified to alter completion behavior."
   "Initiate a new completion session.
 ACTION-TYPE specifies the action to be completed.
 STRATEGY may alter the completion behavior."
+
   (ai-completions--cancel)
   (setq-local ai-completions--complete-at-point (ai-completions--get-completion-point strategy)
               ai-completions--preview-at-point (ai-completions--get-preview-point strategy)
@@ -234,8 +239,10 @@ STRATEGY may alter the completion behavior."
 
 (defun ai-completions--continue ()
   "Continue an ongoing completion session."
+  (message "ai-completions--continue: ")
   (condition-case-unless-debug err
-      (progn)
+      (progn
+        (ai-completions--select-next-or-abort))
     (error (message "AI completion: An error occurred in ai-completions--continue => %s" (error-message-string err))
            (ai-completions--cancel))))
 
