@@ -328,6 +328,10 @@ If TRIM is non-nil, trims content passed to the CALLBACK."
       (with-current-buffer buffer-name
         (let ((beginning (point-min))
               (end (point-max)))
+          (erase-buffer)
+          (insert content)
+          (when (fboundp 'markdown-mode)
+            (markdown-mode))
           (ai-utils--replace-or-insert content beginning end))))))
 
 
