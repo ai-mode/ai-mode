@@ -27,6 +27,8 @@
 
 AI mode for Emacs is a comprehensive package that integrates powerful artificial intelligence capabilities directly into your Emacs workflow. This package transforms Emacs into an AI-enhanced development environment, providing intelligent assistance for coding, writing, and general text manipulation tasks.
 
+![ai-mode-overview](https://github.com/ai-mode/media/blob/master/01-generate-from-selection.gif "ai-mode-overview")
+
 ### Key Features
 
 -   **Interactive AI Chat**: Directly engage with AI models for real-time problem-solving, code review, and general assistance within Emacs, with session management and auto-save capabilities.
@@ -40,8 +42,6 @@ AI mode for Emacs is a comprehensive package that integrates powerful artificial
 -   **Real-time Previews & Progress Indicators**: Get instant visual feedback for completions and track the progress of ongoing AI requests.
 
 Whether you're debugging complex code, exploring new technologies, or enhancing your documentation, AI mode provides the tools to accelerate your productivity and enhance your Emacs experience.
-
-![ai-mode-completion](https://github.com/ai-mode/ai-mode/blob/master/media/ai-mode-completion.gif "ai-mode-completion")
 
 ## Installation
 
@@ -178,6 +178,8 @@ AI Mode provides a rich set of interactive commands, many of which are accessibl
 
 AI Mode offers intelligent code completion at the cursor position. You can use the primary entry point `ai-completions-complete-code-at-point` to initiate a completion session, which can be further refined with context-specific commands.
 
+![code-completion](https://github.com/ai-mode/media/blob/master/02-code-completion.gif "code-completion")
+
 | Command | Description |
 |---|---|
 | `ai-completions-complete-code-at-point` | Start code completion at the cursor position. This is the primary entry point for code completion. |
@@ -185,6 +187,8 @@ AI Mode offers intelligent code completion at the cursor position. You can use t
 | `ai-completions--complete-at-point-with-full-context` | Perform completion using the entire file content as context. |
 
 When a completion session is active, the following interactive commands are available to navigate and manage candidates:
+
+![code-completion-with-navigation](https://github.com/ai-mode/media/blob/master/03-code-completion-with-navigation.gif "code-completion-with-navigation")
 
 | Binding | Command | Description |
 |---|---|---|
@@ -204,6 +208,8 @@ When a completion session is active, the following interactive commands are avai
 ### Interactive AI Chat
 
 The `ai-chat` package provides a full-featured interactive chat interface with AI models, built on Emacs's `comint-mode` for a familiar and extensible experience. It supports asynchronous interaction with various AI backends, allowing you to ask questions, review code, or get general assistance in real-time.
+
+![ai-chat](https://github.com/ai-mode/media/blob/master/09-ai-mode-chat.gif "ai-chat")
 
 **How to Use:**
 
@@ -231,15 +237,19 @@ The `ai-chat` package provides a full-featured interactive chat interface with A
 | `C-c C-a` | `ai-chat-toggle-auto-save` | Toggle automatic saving of chat sessions. |
 | `C-c C-c` | `ai-chat--interrupt` | Interrupt the current AI request. |
 
-![ai-chat](https://github.com/ai-mode/ai-mode/blob/master/media/ai-chat.gif "ai-chat")
-
 ### Code Manipulation
 
-![ai-mode-replace-number](https://github.com/ai-mode/ai-mode/blob/master/media/ai-mode-replace-number.gif "ai-mode-replace-number")
-![ai-mode-translation](https://github.com/ai-mode/ai-mode/blob/master/media/ai-mode-translation.gif "ai-mode-translation")
-![ai-mode-translation-2](https://github.com/ai-mode/ai-mode/blob/master/media/ai-mode-translation-2.gif "ai-mode-translation-2")
-
 These commands apply AI operations to selected regions or the entire buffer, modifying, improving, or generating code. When invoked, you might be prompted to select a specific *query type* (e.g., "modify", "generate code", "fix", "improve", "optimize", "doc", "explain", "simplify", "spellcheck", "elaborate") from `ai--query-type-config-map`.
+
+![code-generation-from-user-input](https://github.com/ai-mode/media/blob/master/04-generate-code-from-user-input.gif "code-generation-from-user-input")
+
+![code-modification](https://github.com/ai-mode/media/blob/master/05-code-modification.gif "code-modification")
+
+![code-refactoring](https://github.com/ai-mode/media/blob/master/06-code-refactoring.gif "code-refactoring")
+
+![advanced-code-generation](https://github.com/ai-mode/media/blob/master/07-generate-code-from-user-input.gif "advanced-code-generation")
+
+![code-explanation](https://github.com/ai-mode/media/blob/master/08-explain-code.gif "code-explanation")
 
 | Command | Description |
 |---|---|
