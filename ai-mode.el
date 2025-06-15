@@ -24,9 +24,13 @@
 
 ;;; Commentary:
 ;;
-;; AI Mode is a comprehensive Emacs package that provides seamless integration
-;; with various AI engines and language models. This package transforms Emacs
-;; into a powerful AI-assisted development environment.
+;; AI Mode is a comprehensive Emacs package that integrates various AI engines
+;; and language models, transforming Emacs into a powerful AI-assisted
+;; development environment. It offers intelligent code completion, refactoring,
+;; bug detection, documentation generation, and interactive code explanations.
+;; The package supports conversational AI interactions, multiple backends,
+;; customizable prompts, and flexible context management, all with real-time
+;; previews.
 ;;
 ;; Features include:
 ;; - Intelligent code completion with context awareness
@@ -202,7 +206,7 @@ These files should contain instructions for how to format and apply results."
     ("generate code from user input" . (:instructions nil :user-input t :result-action insert-at-point :needs-buffer-context t))
     ("execute prompt inplace" . (:instructions nil :result-action replace))
     ("explain" . (:instructions nil :result-action show))
-    ("explain with full context" . (:instructions nil :result-action show :needs-buffer-context t))
+    ("explain with full context" . (:instructions nil :user-input t :result-action show :needs-buffer-context t))
     ("explain with user input" . (:instructions nil :user-input t :result-action show))
     ("doc" . (:instructions nil :result-action replace))
     ("fix" . (:instructions nil :result-action replace))
@@ -211,8 +215,20 @@ These files should contain instructions for how to format and apply results."
     ("optimize" . (:instructions nil :result-action replace))
     ("spellcheck" . (:instructions nil :result-action replace)))
 
-  "An association list that maps query types to their corresponding format strings.
-   The `:result-action` key specifies the default handling of the AI's response."
+  "An association list mapping AI query types to their configurations.
+Each entry is a pair: `(QUERY-TYPE . CONFIG-PLIST)`.
+
+`QUERY-TYPE` is a string (e.g., \"modify\", \"explain\").
+`CONFIG-PLIST` is a property list with the following keys:
+- `:template` (string, optional): A template string for the query.
+- `:instructions` (string, optional): Specific instructions for the AI for this query type.
+- `:user-input` (boolean): `t` if the query requires additional user input.
+- `:action-type` (string, optional): The high-level action type (e.g., \"modify\", \"complete\") used for structuring the request.
+- `:result-action` (symbol): Specifies how the AI's response should be handled.
+  Possible values: `show` (display in a buffer), `replace` (replace selection/buffer),
+  `eval` (display and offer to evaluate), `insert-at-point` (insert at cursor).
+- `:needs-buffer-context` (boolean, optional): `t` if the full buffer content
+  is required for context, even if a region is active."
   :type '(alist :key-type (string :tag "Query Type")
                 :value-type (plist :tag "Format Specification"
                                    :options ((:template (string :tag "Template") :optional t)
@@ -235,8 +251,6 @@ These files should contain instructions for how to format and apply results."
 
 (defvar ai-command-map
   (let ((keymap (make-sparse-keymap)))
-    (define-key keymap (kbd "o") 'ai-optimize-code-region)
-    (define-key keymap (kbd "e") 'ai-explain-code-region)
     (define-key keymap (kbd "c c") 'ai-chat)
     (define-key keymap (kbd "b c") 'ai--change-execution-backend)
     (define-key keymap (kbd "f") 'ai--switch-file-instructions-enabled)
