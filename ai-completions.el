@@ -24,8 +24,19 @@
 
 ;;; Commentary:
 ;;
-;; The package provides functionalities for text completion using various AI engines.
-;; It facilitates integration and utilization of AI models for code completion and related tasks within Emacs, enhancing coding efficiency and productivity.
+;; This package provides interactive, multi-candidate code completion capabilities
+;; using various AI engines within Emacs. It manages the full lifecycle of a
+;; completion session, including:
+;; - Requesting completion candidates from AI models based on buffer context.
+;; - Displaying real-time previews of suggestions using overlays.
+;; - Allowing users to navigate through multiple candidates (next/previous).
+;; - Applying the selected completion to the buffer.
+;; - Dynamic adjustment of preceding and following context sizes.
+;; - Integration of user instructions during an active session.
+;; - A dedicated minor mode (`ai-completions-mode`) with custom keybindings
+;;   for seamless interaction and session management.
+;; This enhances coding efficiency by providing an intuitive and powerful AI-driven
+;; code suggestion system.
 ;;
 
 ;;; Code:
@@ -35,11 +46,6 @@
 (defgroup ai-completions nil
   "AI code completion tool for Emacs."
   :group 'ai-mode)
-
-(defcustom ai-completions--context-size 20
-  "Number of lines used as context for code completion."
-  :type 'integer
-  :group 'ai-completions)
 
 (defcustom ai-completions--current-precending-context-size 20
   "Current number of lines used as context for code completion."
