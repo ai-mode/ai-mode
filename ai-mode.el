@@ -129,6 +129,9 @@ Should be a function symbol that returns a string or nil."
                  (const :tag "Message only" message))
   :group 'ai)
 
+(defvar ai--progress-spinner-chars '("○" "◔" "◑" "◕" "●" "◕" "◑" "◔")
+  "Characters used for spinner animation in progress indicator.")
+
 (defvar-local ai--buffer-file-instructions (make-hash-table :test 'equal))
 (defvar ai-mode--actions-instructions (make-hash-table :test 'equal))
 
@@ -850,11 +853,10 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
          (progress-indicator (cond
                               ((and ai--progress-active
                                     (eq ai--progress-indicator-style 'spinner))
-                               (let ((spinner-chars '("○" "◔" "◑" "◕" "●" "◕" "◑" "◔"))
-                                     (elapsed-time (when ai--progress-start-time
+                               (let ((elapsed-time (when ai--progress-start-time
                                                      (ai--format-elapsed-time ai--progress-start-time))))
                                  (format "%s%s"
-                                         (nth (% ai--progress-counter (length spinner-chars)) spinner-chars)
+                                         (nth (% ai--progress-counter (length ai--progress-spinner-chars)) ai--progress-spinner-chars)
                                          (if elapsed-time (format ":%s" elapsed-time) ""))))
                               ((and ai--progress-active
                                     (eq ai--progress-indicator-style 'dots))
