@@ -138,12 +138,12 @@ Should be a function symbol that returns a string or nil."
   "The current backend used to execute requests asynchronously."
   :group 'ai-mode)
 
-(defcustom ai--current-context-size 10
+(defcustom ai--current-precending-context-size 10
   "Number of lines for context."
   :type 'integer
   :group 'ai-completions)
 
-(defcustom ai--current-following-context-size 10
+(defcustom ai--current-forwarding-context-size 10
   "Following context size."
   :type 'integer
   :group 'ai-completions)
@@ -185,7 +185,8 @@ These files should contain context or prompts intended to guide the AI chatbot."
   '("result_action_replace"
     "result_action_show"
     "result_action_eval"
-    "result_action_complete")
+    "result_action_complete"
+    "result_action_insert-at-point")
   "List of result action prompt file names to load instructions from.
 
 These files should contain instructions for how to format and apply results."
@@ -194,10 +195,12 @@ These files should contain instructions for how to format and apply results."
 
 (defcustom ai--query-type-config-map
   '(("modify" . (:template "" :instructions nil :user-input t :result-action replace))
-    ("generate code" . (:instructions nil :result-action replace))
+    ("generate code from selection" . (:instructions nil :result-action replace))
+    ("generate code from user input" . (:instructions nil :user-input t :result-action insert-at-point :needs-buffer-context t))
     ("execute prompt inplace" . (:instructions nil :result-action replace))
-    ("explain" . (:instructions nil :action-type "explain" :result-action show))
-    ("explain with user input" . (:instructions nil :action-type "explain" :result-action show))
+    ("explain" . (:instructions nil :result-action show))
+    ("explain with full context" . (:instructions nil :result-action show :needs-buffer-context t))
+    ("explain with user input" . (:instructions nil :user-input t :result-action show))
     ("doc" . (:instructions nil :result-action replace))
     ("fix" . (:instructions nil :result-action replace))
     ("simplify" . (:instructions nil :result-action replace))
@@ -213,9 +216,9 @@ These files should contain instructions for how to format and apply results."
                                              (:instructions (string :tag "Instructions") :optional t)
                                              (:user-input (boolean :tag "User input"))
                                              (:action-type (string :tag "Action Type") :optional t)
-                                             (:result-action (symbol :tag "Result Action" :value-type (choice (const show) (const replace) (const eval)))))))
+                                             (:result-action (symbol :tag "Result Action" :value-type (choice (const show) (const replace) (const eval) (const insert-at-point))))
+                                             (:needs-buffer-context (boolean :tag "Needs Buffer Context") :optional t))))
   :group 'ai-mode)
-
 
 (defcustom ai--completion-config
   `(:action "complete" :instructions nil :action-type "complete" :result-action complete)
@@ -459,11 +462,12 @@ CONFIG contains configuration details and FULL-CONTEXT includes information for 
   "Determine the container type based on RESULT-ACTION.
 Returns the container name or nil if no specific container is needed."
   (cond
-   ((eq result-action 'complete)    "complete")
-   ((eq result-action 'show)        "explain")
-   ((eq result-action 'eval)        "eval")
-   ((eq result-action 'replace)     "modify")
-   (t                               nil)))
+   ((eq result-action 'complete)        "complete")
+   ((eq result-action 'show)            "explain")
+   ((eq result-action 'eval)            "eval")
+   ((eq result-action 'replace)         "modify")
+   ((eq result-action 'insert-at-point) "complete")
+   (t                                   nil)))
 
 (cl-defun ai--get-contextual-action-object (config &key preceding-context-size following-context-size)
   "Generate contextual action object based on CONFIG and optional context sizes PRECEDING-CONTEXT-SIZE and FOLLOWING-CONTEXT-SIZE."
@@ -489,6 +493,21 @@ Returns the container name or nil if no specific container is needed."
   (when ai--current-buffer-additional-context
     (ai-common--make-file-context)))
 
+(defun ai--should-include-current-buffer-content-context-p (config query-type full-context)
+  "Determine if current-buffer-content-context should be included.
+CONFIG is the query configuration, QUERY-TYPE is the type of query being executed,
+and FULL-CONTEXT contains the complete context information.
+Returns t if context should be included, nil otherwise."
+  (let* ((result-action (map-elt config :result-action))
+         (needs-buffer-context (map-elt config :needs-buffer-context))
+         (container-type (ai--get-container-type-by-result-action result-action))
+         (has-region (use-region-p)))
+
+    (and ai--current-buffer-additional-context
+         (or (and needs-buffer-context
+                  (not (string= container-type "complete")))
+             (and (eq result-action 'replace) has-region)))))
+
 (defun ai--get-result-action-prompt (result-action context)
   "Get the prompt for RESULT-ACTION rendered with CONTEXT."
   (let ((prompt-name (format "result_action_%s" (symbol-name result-action))))
@@ -500,17 +519,19 @@ Returns the container name or nil if no specific container is needed."
       (funcall ai--user-input-method)
     (error "ai--user-input-method is not a valid function: %s" ai--user-input-method)))
 
-
 (cl-defun ai--get-execution-context (buffer config query-type &key
-                                            (preceding-context-size ai--current-context-size)
-                                            (following-context-size ai--current-following-context-size)
+                                            (preceding-context-size ai--current-precending-context-size)
+                                            (following-context-size ai--current-forwarding-context-size)
                                             model)
   "Get full execution context for BUFFER.
 CONFIG specifies configuration, QUERY-TYPE indicates the query, and options for context sizes are PRECEDING-CONTEXT-SIZE and FOLLOWING-CONTEXT-SIZE."
   (with-current-buffer buffer
-    (let* ((completion-context (ai-utils--get-completion-params
-                                :preceding-context-size preceding-context-size
-                                :following-context-size following-context-size))
+    (let* ((needs-buffer-context (map-elt config :needs-buffer-context))
+           (actual-preceding-size (if needs-buffer-context nil preceding-context-size))
+           (actual-following-size (if needs-buffer-context nil following-context-size))
+           (completion-context (ai-utils--get-completion-params
+                                :preceding-context-size actual-preceding-size
+                                :following-context-size actual-following-size))
            (buffer-context (ai-utils--get-buffer-context (current-buffer)))
            (model-context (ai-utils--get-model-context model))
            (full-context (append completion-context buffer-context model-context))
@@ -551,30 +572,42 @@ CONFIG specifies configuration, QUERY-TYPE indicates the query, and options for 
                                    (ai-common--make-typed-struct instructions 'agent-instructions 'config-instructions)))
 
            (additional-context
-            (let ((context-pool-content (ai-common--render-struct-to-string (ai-common--get-context-pool))))
-              (when context-pool-content
-                (ai-common--make-typed-struct context-pool-content 'additional-context 'context-pool))))
+            (when-let ((context-pool (ai-common--get-context-pool)))
+              (when context-pool
+                (let ((context-pool-content (ai-common--render-struct-to-string context-pool)))
+                  (when context-pool-content
+                    (ai-common--make-typed-struct context-pool-content 'additional-context 'context-pool))))))
 
            (current-buffer-content-context
-            (when (use-region-p)
-              (ai--get-current-buffer-context)))
+            (when (ai--should-include-current-buffer-content-context-p config query-type full-context)
+              (when-let ((context (ai--get-current-buffer-context)))
+                (when-let ((rendered-context (ai-common--render-struct-to-string context)))
+                  (ai-common--make-typed-struct rendered-context 'additional-context 'current-buffer-content)))))
 
            (user-input (when (map-elt config :user-input)
                          (let ((input-text (ai--get-user-input)))
                            (when input-text
-                             (ai-common--make-typed-struct
-                              (ai-utils--render-template input-text full-context)
-                              'user-input
-                              'user-input)))))
+                             (let ((user-input-struct (ai-common--make-typed-struct
+                                                       (ai-utils--render-template input-text full-context)
+                                                       'user-input
+                                                       'user-input)))
+                               (ai-common--make-typed-struct
+                                (ai-common--render-struct-to-string user-input-struct)
+                                'user-input
+                                'user-input))))))
 
            (query-struct (when-let ((query-text (map-elt config :query)))
-                           (ai-common--make-typed-struct query-text 'user-input 'config-query)))
+                           (let ((query-struct (ai-common--make-typed-struct query-text 'user-input 'config-query)))
+                             (ai-common--make-typed-struct
+                              (ai-common--render-struct-to-string query-struct)
+                              'user-input
+                              'config-query))))
 
            (rendered-action-context (ai-common--make-typed-struct
                                      (ai--get-contextual-action-object
                                       config
-                                      :preceding-context-size preceding-context-size
-                                      :following-context-size following-context-size)
+                                      :preceding-context-size actual-preceding-size
+                                      :following-context-size actual-following-size)
                                      'action-context
                                      'contextual-action))
 
@@ -759,12 +792,15 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
   "Execute request and apply the result based on query type's specified result action or default to replace.
    If result action is 'replace', it replaces the selected region or inserts in current buffer.
    If result action is 'show', it shows the response in a special buffer.
-   If result action is 'eval', it shows the response and asks for permission to evaluate."
+   If result action is 'eval', it shows the response and asks for permission to evaluate.
+   If result action is 'insert-at-point', it inserts the response at the cursor position."
   (interactive)
   (let* ((query-type (ai--get-query-type-unrestricted))
          (context (ai--get-executions-context-for-query-type query-type :default-result-action 'replace))
          (config (ai--get-query-config-by-type query-type 'replace))
-         (result-action (map-elt config :result-action)))
+         (result-action (map-elt config :result-action))
+         (current-buffer (current-buffer))
+         (cursor-position (point)))
     (cond
      ((eq result-action 'show)
       ;; If the selected query type is meant to be shown, delegate
@@ -774,6 +810,10 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
       ;; Show response and ask for permission to evaluate
       (message "Query type '%s' will generate code for evaluation." query-type)
       (ai--execute-context context 'ai-utils--show-and-eval-response))
+     ((eq result-action 'insert-at-point)
+      ;; Insert at the cursor position captured when the command was invoked
+      (message "Query type '%s' will insert response at cursor position." query-type)
+      (ai--execute-context context (ai-utils--create-insert-at-point-callback current-buffer cursor-position)))
      ((eq result-action 'replace)
       ;; Default replace behavior
       (ai--execute-context context (ai-utils--replace-region-or-insert-in-current-buffer)))
@@ -828,7 +868,7 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
          (context-info (if ai--progress-active
                            (when ai--progress-start-time
                              (format "%s" (if (string-empty-p progress-indicator) "" (format "%s" progress-indicator))))
-                         (format "%d/%d" ai--current-context-size ai--current-following-context-size)))
+                         (format "%d/%d" ai--current-precending-context-size ai--current-forwarding-context-size)))
          (ai-mode-line-section
           (format " AI[%s|%s]"
                   (map-elt model :name)

@@ -225,15 +225,22 @@ If TRIM is non-nil, trims the content passed to CALLBACK."
           (funcall callback (if trim (string-trim-left content) content)))))))
 
 
-(cl-defun ai-utils--replace-region-or-insert-in-current-buffer (&optional (trim t))
+(cl-defun ai-utils--replace-region-or-insert-in-current-buffer (&optional (trim t) insert-mode)
   "Create a function to replace the active region or insert into the current buffer.
 
-Replaces only the selected part if a region is active, otherwise replaces the entire buffer.
-If TRIM is non-nil, trims the content passed to the `ai-replace-or-insert`."
+If a region is active, replaces only the selected part.
+If no region is active and INSERT-MODE is nil, replaces the entire buffer.
+If no region is active and INSERT-MODE is non-nil, inserts at cursor position.
+If TRIM is non-nil, trims the content passed to the function."
   (let* ((buffer (current-buffer))
-        (region-active (region-active-p))
-        (beginning (if region-active (region-beginning) (point-min)))
-        (end (if region-active (region-end) (point-max))))
+         (region-active (region-active-p))
+         (cursor-pos (point))
+         (beginning (cond (region-active (region-beginning))
+                         (insert-mode nil)
+                         (t (point-min))))
+         (end (cond (region-active (region-end))
+                   (insert-mode nil)
+                   (t (point-max)))))
     (lambda (messages)
       (let* ((raw-content (ai-utils--extract-content-from-messages messages))
             (content (if trim (string-trim-left raw-content) raw-content)))
@@ -242,7 +249,25 @@ If TRIM is non-nil, trims the content passed to the `ai-replace-or-insert`."
         (with-current-buffer buffer
           (when region-active
             (deactivate-mark))
-          (ai-utils--replace-or-insert content beginning end))))))
+          (cond
+           ;; Insert mode: insert at cursor position
+           ((and (not region-active) insert-mode)
+            (goto-char cursor-pos)
+            (insert content))
+           ;; Replace mode: replace region or entire buffer
+           (t
+            (ai-utils--replace-or-insert content beginning end))))))))
+
+(defun ai-utils--create-insert-at-point-callback (target-buffer cursor-position)
+  "Create a callback that inserts AI response at CURSOR-POSITION in TARGET-BUFFER."
+  (lambda (messages)
+    (when (buffer-live-p target-buffer)
+      (let ((content (ai-utils--extract-content-from-messages messages)))
+        (when (and content (not (string-empty-p content)))
+          (with-current-buffer target-buffer
+            (save-excursion
+              (goto-char cursor-position)
+              (insert (string-trim-left content)))))))))
 
 
 (cl-defun ai-utils--get-message (messages &optional (message-id 0))

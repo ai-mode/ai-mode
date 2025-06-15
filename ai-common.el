@@ -152,7 +152,7 @@ This includes metadata such as file name, buffer name, and timestamps."
                   :end-pos    ,end
                   :mode       ,(symbol-name major-mode)
                   :timestamp  ,ts
-                  :source     buffer-content
+                  :source     current-buffer-content
                   :id         ,id)))
 
 (defun ai-common--make-snippet-from-region (&optional tag-type)
