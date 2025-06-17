@@ -239,7 +239,6 @@ STRATEGY may alter the completion behavior."
 
 (defun ai-completions--continue ()
   "Continue an ongoing completion session."
-  (message "ai-completions--continue: ")
   (condition-case-unless-debug err
       (progn
         (ai-completions--select-next-or-abort))
@@ -270,16 +269,34 @@ STRATEGY may alter the completion behavior."
   (or (not (equal (point) ai-completions--preview-at-point))
       (not ai-completions--active)))
 
+(defun ai-completions--create-candidates-context ()
+  "Create a structured context containing information about previous candidates."
+  (when (and ai-completions--candidates
+             (> (length ai-completions--candidates) 0))
+    (let ((candidates-list
+           (mapcar (lambda (candidate)
+                     (ai-common--update-typed-struct
+                      candidate
+                      :type 'completion-candidate))
+                   ai-completions--candidates)))
+      (ai-common--make-typed-struct
+       candidates-list
+       'previous-candidates
+       'completion-session))))
+
 (cl-defun ai-completions--update-candidates (buffer)
   "Update the list of candidates for BUFFER."
   (let* ((action-type ai-completions--current-action-type)
          (config (ai--get-query-config-by-type action-type))
          (execution-model (ai-completions--get-current-model))
+         (candidates-context (ai-completions--create-candidates-context))
+         (external-contexts (when candidates-context (list candidates-context)))
          (execution-context
           (ai--get-execution-context (ai-completions--get-current-buffer-clone) config action-type
                                      :preceding-context-size ai-completions--current-precending-context-size
                                      :following-context-size ai-completions--current-forwarding-context-size
-                                     :model execution-model))
+                                     :model execution-model
+                                     :external-contexts external-contexts))
          (execution-backend (map-elt execution-model :execution-backend))
          (success-callback (lambda (candidates)
                              (with-current-buffer buffer
@@ -515,13 +532,13 @@ STRATEGY may alter the completion behavior."
   "Show COMPLETION preview at POS."
   (ai-completions--preview-hide)
 
-  (let* ((completion completion))
+  (let* ((completion-copy (copy-sequence completion)))
 
-    (add-face-text-property 0 (length completion) 'ai-completions--preview-face nil completion)
+    (add-face-text-property 0 (length completion-copy) 'ai-completions--preview-face nil completion-copy)
 
     (and (equal pos (point))
-         (not (equal completion ""))
-         (add-text-properties 0 1 '(cursor 1) completion))
+         (not (equal completion-copy ""))
+         (add-text-properties 0 1 '(cursor 1) completion-copy))
 
     (let* ((beg pos)
            (pto ai-completions--pseudo-tooltip-overlay)
@@ -533,13 +550,13 @@ STRATEGY may alter the completion behavior."
       ;; which may start at the same position if it's at eol.
       (when ptf-workaround
         (cl-decf beg)
-        (setq completion (concat (buffer-substring beg pos) completion)))
+        (setq completion-copy (concat (buffer-substring beg pos) completion-copy)))
 
       (setq ai-completions--preview-overlay (make-overlay beg pos))
 
       (let ((ov ai-completions--preview-overlay))
         (overlay-put ov (if ptf-workaround 'display 'after-string)
-                     completion)
+                     completion-copy)
         (overlay-put ov 'window (selected-window))))))
 
 (defun ai-completions--add-system-instructions (input)

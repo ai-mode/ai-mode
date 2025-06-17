@@ -536,12 +536,29 @@ Returns t if context should be included, nil otherwise."
       (funcall ai--user-input-method)
     (error "ai--user-input-method is not a valid function: %s" ai--user-input-method)))
 
+(defun ai--process-external-context-item (item)
+  "Process a single external context item ITEM for inclusion in execution context.
+Handles both plain contexts and typed structs, including nested structures."
+  (cond
+   ;; Already a typed struct - render directly
+   ((and (listp item) (keywordp (car item)))
+    (ai-common--render-struct-to-string item))
+   ;; Plain string or other format
+   (t
+    (ai-common--make-typed-struct
+     (format "%s" item)
+     'additional-context
+     'external-context))))
+
 (cl-defun ai--get-execution-context (buffer config query-type &key
                                             (preceding-context-size ai--current-precending-context-size)
                                             (following-context-size ai--current-forwarding-context-size)
-                                            model)
+                                            model
+                                            (external-contexts nil))
   "Get full execution context for BUFFER.
-CONFIG specifies configuration, QUERY-TYPE indicates the query, and options for context sizes are PRECEDING-CONTEXT-SIZE and FOLLOWING-CONTEXT-SIZE."
+CONFIG specifies configuration, QUERY-TYPE indicates the query, and options for context sizes are PRECEDING-CONTEXT-SIZE and FOLLOWING-CONTEXT-SIZE.
+EXTERNAL-CONTEXTS is an optional list of additional context structs to include.
+Each context should be a plist with :type, :content, and other metadata."
   (with-current-buffer buffer
     (let* ((needs-buffer-context (map-elt config :needs-buffer-context))
            (actual-preceding-size (if needs-buffer-context nil preceding-context-size))
@@ -591,9 +608,17 @@ CONFIG specifies configuration, QUERY-TYPE indicates the query, and options for 
            (additional-context
             (when-let ((context-pool (ai-common--get-context-pool)))
               (when context-pool
-                (let ((context-pool-content (ai-common--render-struct-to-string context-pool)))
+                (let ((context-pool-content (ai-common--render-container-from-elements "additional-context" context-pool '(("source" . "context-pool")))))
                   (when context-pool-content
                     (ai-common--make-typed-struct context-pool-content 'additional-context 'context-pool))))))
+
+           (external-contexts-structs
+            (when external-contexts
+              (let ((processed-contexts (mapcar #'ai--process-external-context-item external-contexts)))
+                (ai-common--make-typed-struct
+                 (ai-common--render-container-from-elements "additional-context" processed-contexts '(("source" . "external-context")))
+                 'additional-context
+                 'external-context))))
 
            (current-buffer-content-context
             (when (ai--should-include-current-buffer-content-context-p config query-type full-context)
@@ -601,17 +626,20 @@ CONFIG specifies configuration, QUERY-TYPE indicates the query, and options for 
                 (when-let ((rendered-context (ai-common--render-struct-to-string context)))
                   (ai-common--make-typed-struct rendered-context 'additional-context 'current-buffer-content)))))
 
-           (user-input (when (map-elt config :user-input)
+          (user-input (when (map-elt config :user-input)
                          (let ((input-text (ai--get-user-input)))
-                           (when input-text
-                             (let ((user-input-struct (ai-common--make-typed-struct
-                                                       (ai-utils--render-template input-text full-context)
-                                                       'user-input
-                                                       'user-input)))
-                               (ai-common--make-typed-struct
-                                (ai-common--render-struct-to-string user-input-struct)
-                                'user-input
-                                'user-input))))))
+                           ;; If user input is cancelled (ai--get-user-input returns nil),
+                           ;; then stop the execution of the command immediately.
+                           (unless input-text
+                             (user-error "User input cancelled."))
+                           (let ((user-input-struct (ai-common--make-typed-struct
+                                                     (ai-utils--render-template input-text full-context)
+                                                     'user-input
+                                                     'user-input)))
+                             (ai-common--make-typed-struct
+                              (ai-common--render-struct-to-string user-input-struct)
+                              'user-input
+                              'user-input)))))
 
            (query-struct (when-let ((query-text (map-elt config :query)))
                            (let ((query-struct (ai-common--make-typed-struct query-text 'user-input 'config-query)))
@@ -628,27 +656,53 @@ CONFIG specifies configuration, QUERY-TYPE indicates the query, and options for 
                                      'action-context
                                      'contextual-action))
 
+           (global-system-prompts-context
+            (when-let ((global-system-prompts (ai-common--get-global-system-prompts)))
+              (when global-system-prompts
+                (ai-common--make-typed-struct
+                 (ai-common--render-container-from-elements "agent-instructions" global-system-prompts '(("source" . "global-system-prompts")))
+                 'agent-instructions
+                 'global-system-prompts))))
+
+           (global-memory-context
+            (when-let ((global-memory (ai-common--get-global-memory)))
+              (when global-memory
+                (ai-common--make-typed-struct
+                 (ai-common--render-container-from-elements "additional-context" global-memory '(("source" . "global-memory")))
+                 'additional-context
+                 'global-memory))))
+
+           (buffer-bound-prompts-context
+            (when-let ((buffer-bound-prompts (ai-common--get-buffer-bound-prompts)))
+              (when buffer-bound-prompts
+                (ai-common--make-typed-struct
+                 (ai-common--render-container-from-elements "agent-instructions" buffer-bound-prompts '(("source" . "buffer-bound-prompts")))
+                 'agent-instructions
+                 'buffer-bound-prompts))))
+
            (messages
             (append
              '()
              (when ai--extended-instructions-enabled
                (cl-remove-if
                 #'null
-                (list basic-file-prompt
-                      action-type-object-prompt
-                      (ai-common--get-global-system-prompts)
-                      (ai-common--get-global-memory)
-                      action-file-prompt
-                      file-metadata-context
-                      current-buffer-content-context
-                      action-config-prompt
-                      result-action-prompt
-                      additional-context
-                      (ai-common--get-buffer-bound-prompts)
-                      action-examples-prompt
-                      rendered-action-context
-                      user-input
-                      query-struct)))))
+                (append
+                 (list basic-file-prompt
+                       action-type-object-prompt
+                       global-system-prompts-context
+                       global-memory-context
+                       action-file-prompt
+                       file-metadata-context
+                       current-buffer-content-context
+                       action-config-prompt
+                       result-action-prompt
+                       additional-context
+                       external-contexts-structs
+                       buffer-bound-prompts-context
+                       action-examples-prompt
+                       rendered-action-context
+                       user-input
+                       query-struct))))))
 
            (messages (ai-utils-filter-non-empty-content messages))
            (_ (ai-utils-write-context-to-prompt-buffer messages))
@@ -693,10 +747,11 @@ If no prompt is found for QUERY-TYPE, returns nil."
             (append base-config `(:result-action ,default-result-action))
           base-config)))))
 
-(cl-defun ai--get-executions-context-for-query-type (query-type &key (model nil) (default-result-action nil))
-  "Get execution context for QUERY-TYPE with optional MODEL and DEFAULT-RESULT-ACTION."
+(cl-defun ai--get-executions-context-for-query-type (query-type &key (model nil) (default-result-action nil) (external-contexts nil))
+  "Get execution context for QUERY-TYPE with optional MODEL, DEFAULT-RESULT-ACTION, and EXTERNAL-CONTEXTS.
+EXTERNAL-CONTEXTS is a list of additional context structs to include in the execution context."
   (let* ((config (ai--get-query-config-by-type query-type default-result-action))
-         (execution-context (ai--get-execution-context (current-buffer) config query-type :model model)))
+         (execution-context (ai--get-execution-context (current-buffer) config query-type :model model :external-contexts external-contexts)))
     execution-context))
 
 (defun ai-explain-code-region ()

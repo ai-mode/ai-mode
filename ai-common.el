@@ -479,22 +479,6 @@ Handles nested structures recursively."
    ;; Fallback for other types
    (t (format "%s" struct))))
 
-(defun ai-common--render-context-entry (tag context-entry)
-  "Convert CONTEXT-ENTRY into an XML string, wrapping it in TAG.
-TAG is the name of the tag (a string or symbol), CONTEXT-ENTRY is a plist-structure
-(such as returned by `ai-common--make-snippet-from-region` or
-`ai-common--get-user-input`), containing all necessary fields."
-  (when (and tag context-entry)
-    (let* ((tag-symbol (if (symbolp tag) tag (intern tag)))
-           ;; Make a copy of the plist to avoid modifying the original
-           (entry-copy (copy-sequence context-entry))
-           ;; Replace "type" with the required tag
-           (_           (plist-put entry-copy :type tag-symbol))
-           ;; Form the inner S-expression (TAG ((attr . val)…) CONTENT)
-           (xml-element (ai-common--make-xml-element-from-plist-or-symbol entry-copy))
-           ;; Serialize to string
-           (xml-string  (ai-common--render-tag-to-string xml-element)))
-      xml-string)))
 
 (cl-defun ai-common--assemble-completion-context
     (&key
@@ -561,16 +545,32 @@ ATTRS is an alist of the form '((\"attr\" . \"val\") …) for the container itse
          (body
           (mapconcat
            (lambda (el)
-             (ai-common--render-tag-to-string
-              (ai-common--make-xml-element-from-plist-or-symbol el)))
+             (ai-common--render-struct-to-string el))
            elements
            "")))
     (format "<%s%s>%s</%s>"
             container-tag attrs-str body container-tag)))
 
 (defun ai-common--get-text-content-from-struct (typed-struct)
-  "Extract the text content from a TYPED-STRUCT plist."
-  (plist-get typed-struct :content))
+  "Extract the text content from a TYPED-STRUCT plist, stripping any text properties.
+If the content is not a string, it is returned as is."
+  (let ((content (plist-get typed-struct :content)))
+    (if (stringp content)
+        (substring-no-properties content)
+      content)))
+
+
+(defun ai-common--update-typed-struct (typed-struct &rest updates)
+  "Create a new typed struct based on TYPED-STRUCT with UPDATES applied.
+UPDATES should be key-value pairs that will override or add properties.
+Returns a new plist with the updated values."
+  (let ((new-struct (copy-sequence typed-struct)))
+    (while updates
+      (let ((key (car updates))
+            (value (cadr updates)))
+        (setq new-struct (plist-put new-struct key value))
+        (setq updates (cddr updates))))
+    new-struct))
 
 (provide 'ai-common)
 
