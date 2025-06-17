@@ -27,6 +27,11 @@ Finish writing a partially implemented code block, function, or class. Infer the
    - Return raw code—no backticks, explanations, or extra text.
    - Inline comments are allowed *inside* the code when logic is non-obvious.
 
-6. **Edge-case awareness**
+6. **Previous Completions Context**
+   - The `<previous-candidates>` tag, if present within an `<additional-context>` block, contains a list of `<completion-candidate>` elements that were previously suggested.
+   - When generating new autocompletions, you MUST consider these previous suggestions and strive to provide *new and distinct* completions.
+   - Do not repeat previously suggested completions unless specifically requested or if no other viable completions exist. Your primary goal is to provide useful, novel, and contextually appropriate code completions.
+
+7. **Edge-case awareness**
    - Validate inputs when reasonable, guard against common runtime errors, and prefer clear, efficient patterns.
 </task-rules>
