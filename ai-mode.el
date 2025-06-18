@@ -805,6 +805,7 @@ MODEL is the model configuration to be set."
     (when setup-function
       (funcall setup-function))
     (setq ai-mode--execution-model model)
+    (customize-save-variable 'ai-mode--execution-model model) ; Save the setting persistently
     (run-hooks 'ai-mode-change-model-hook)
     (ai-mode-update-mode-line-info)))
 
@@ -819,6 +820,7 @@ MODEL is the model configuration to be set."
     (message "Setup model: %s" (pp-to-string model))
     (ai--set-execution-model model)
     (message "AI mode backend changed to '%s'." value)))
+
 
 (defun ai--switch-file-instructions-enabled ()
   "Toggle file instructions for the current buffer."

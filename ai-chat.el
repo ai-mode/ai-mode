@@ -553,6 +553,7 @@
     (when setup-function
       (funcall setup-function))
     (setq ai-chat--execution-model model)
+    (customize-save-variable 'ai-chat--execution-model model) ; Save the setting persistently
     (run-hooks 'ai-chat-change-model-hook)))
 
 ;;; Context management
