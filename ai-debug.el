@@ -334,6 +334,7 @@ Creates expandable sections for complex data structures."
                (id (condition-case nil (plist-get struct :id) (error (format "id-%d" (random 10000)))))
                (source (condition-case nil (plist-get struct :source) (error nil)))
                (timestamp (condition-case nil (plist-get struct :timestamp) (error nil)))
+               (file (condition-case nil (plist-get struct :file) (error nil)))
                (section-title (format "%s" (or type "unknown")))
                (metadata-parts '()))
 
@@ -342,6 +343,9 @@ Creates expandable sections for complex data structures."
             (push (format "type: %s" type) metadata-parts))
           (when source
             (push (format "source: %s" source) metadata-parts))
+          ;; Show file path for file-context type
+          (when (and file (eq type 'file-context))
+            (push (format "file: %s" file) metadata-parts))
           (when timestamp
             (push (format "time: %s" timestamp) metadata-parts))
 
