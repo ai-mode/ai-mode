@@ -33,6 +33,7 @@
 ;;; Code:
 
 (require 'ai-utils)
+(require 'projectile nil 'noerror) ; Ensure projectile is loaded for project root detection.
 
 ;;; Memory and context variables for AI interaction
 
@@ -56,6 +57,11 @@ These define the fundamental behavior and capabilities of the AI assistant
 across all interactions and buffers."
   :type 'string
   :group 'ai)
+
+(defcustom ai-common-ignore-file-name ".ai-ignore"
+  "Name of the AI ignore file, typically in the project root."
+  :type 'string
+  :group 'ai-common)
 
 (defun ai-common--add-to-global-memory (input)
   "Add INPUT to `ai--global-memo-context'.
@@ -135,25 +141,43 @@ INPUT can be entered by the user or taken from the active region."
   "Return the current context pool."
   ai-common--context-pool)
 
-(defun ai-common--make-file-context ()
-  "Create a plist containing the full content of the current buffer as a file context.
-This includes metadata such as file name, buffer name, and timestamps."
-  (let* ((beg  (point-min))
-         (end  (point-max))
-         (file (or (buffer-file-name) (buffer-name)))
-         (buf  (buffer-name))
-         (ts   (format-time-string "%Y-%m-%dT%H:%M:%S"))
-         (id   (ai-common--generate-id 'file-context)))
-    `(:type       file-context
-                  :content    ,(buffer-substring-no-properties beg end)
-                  :file       ,file
-                  :buffer     ,buf
-                  :start-pos  ,beg
-                  :end-pos    ,end
-                  :mode       ,(symbol-name major-mode)
-                  :timestamp  ,ts
-                  :source     current-buffer-content
-                  :id         ,id)))
+(defun ai-common--make-file-context-from-buffer (&optional buffer &rest additional-props)
+  "Create a file-context structure from BUFFER.
+If BUFFER is not provided, uses the current buffer.
+This includes metadata such as file name, buffer name, and timestamps.
+ADDITIONAL-PROPS are key-value pairs to be included in the resulting structure."
+  (with-current-buffer (or buffer (current-buffer))
+    (let ((content (buffer-substring-no-properties (point-min) (point-max))))
+      (apply #'ai-common--make-typed-struct
+             content 'file-context 'current-buffer-content
+             :file (or (buffer-file-name) (buffer-name))
+             :buffer (buffer-name)
+             :start-pos (point-min)
+             :end-pos (point-max)
+             :file-size (length content)
+             additional-props))))
+
+
+(defun ai-common--make-file-context-from-file (file-path &rest additional-props)
+  "Create a file-context structure from FILE-PATH.
+The file must exist and be readable.
+ADDITIONAL-PROPS are key-value pairs to be included in the resulting structure."
+  (unless (file-exists-p file-path)
+    (error "File does not exist: %s" file-path))
+  (unless (file-readable-p file-path)
+    (error "File is not readable: %s" file-path))
+
+  (let ((content (with-temp-buffer
+                   (insert-file-contents file-path)
+                   (buffer-substring-no-properties (point-min) (point-max)))))
+    (apply #'ai-common--make-typed-struct
+           content 'file-context 'external-file-content
+           :file (expand-file-name file-path)
+           :buffer (file-name-nondirectory file-path)
+           :start-pos 1
+           :end-pos (1+ (length content))
+           :file-size (length content)
+           additional-props)))
 
 (defun ai-common--make-snippet-from-region (&optional tag-type)
   "Create a plist structure from the current region.
@@ -290,12 +314,49 @@ Optional SOURCE parameter specifies the source of the context."
   "Add ITEM (plist-structure) to `ai-common--context-pool`."
   (push item ai-common--context-pool))
 
+(defun ai-common--format-context-pool-item-for-selection (item)
+  "Format a context pool ITEM for display in completing-read.
+Returns a string representation of the item for user selection."
+  (let* ((type (plist-get item :type))
+         (source (plist-get item :source))
+         (id (plist-get item :id))
+         (content (plist-get item :content))
+         (file (plist-get item :file))
+         (preview (if (stringp content)
+                      (substring content 0 (min 50 (length content)))
+                    ""))
+         (preview (replace-regexp-in-string "\n" " " preview)))
+    (format "%s | %s | %s%s%s"
+            (or type "unknown")
+            (or source "unknown")
+            (if file (format "%s | " (file-name-nondirectory file)) "")
+            preview
+            (if (> (length content) 50) "..." ""))))
+
+(defun ai-common--remove-from-context-pool ()
+  "Remove selected item from context pool via minibuffer selection."
+  (interactive)
+  (if (null ai-common--context-pool)
+      (message "Context pool is empty")
+    (let* ((items-with-display (mapcar (lambda (item)
+                                         (cons (ai-common--format-context-pool-item-for-selection item) item))
+                                       ai-common--context-pool))
+           (selected-display (completing-read "Remove from context pool: "
+                                              (mapcar #'car items-with-display)
+                                              nil t))
+           (selected-item (cdr (assoc selected-display items-with-display))))
+      (when selected-item
+        (setq ai-common--context-pool
+              (cl-remove selected-item ai-common--context-pool :test #'equal))
+        (message "Removed item from context pool: %s"
+                 (ai-common--format-context-pool-item-for-selection selected-item))))))
+
 (defun ai-common--capture-region-snippet ()
   "Create a snippet from the region and add it to the context pool."
   (interactive)
   (let ((snippet (ai-common--make-snippet-from-region)))
     (when snippet
-        (ai-common--add-to-context-pool snippet))))
+      (ai-common--add-to-context-pool snippet))))
 
 (defun ai-common--capture-user-input ()
   "Capture user input and add it to the context pool."
@@ -305,7 +366,7 @@ Optional SOURCE parameter specifies the source of the context."
 (defun ai-common--capture-file-context ()
   "Adds the entire file content to the context pool."
   (interactive)
-  (let ((file-context (ai-common--make-file-context)))
+  (let ((file-context (ai-common--make-file-context-from-buffer)))
     (ai-common--add-to-context-pool file-context)
     (message "File content added to context pool.")))
 
@@ -530,7 +591,7 @@ Modes of operation:
        (ai-common--make-snippet-from-region 'selection))
     ;; Otherwise, the whole buffer as <file-context>
     (list
-     (ai-common--make-file-context))))
+     (ai-common--make-file-context-from-buffer))))
 
 (defun ai-common--render-container-from-elements
     (container-tag elements &optional attrs)
@@ -571,6 +632,217 @@ Returns a new plist with the updated values."
         (setq new-struct (plist-put new-struct key value))
         (setq updates (cddr updates))))
     new-struct))
+
+;; Project file filtering methods
+
+(defun ai-common--get-project-root ()
+  "Return the project root directory using Projectile, or nil if not in a project.
+Requires Projectile to be loaded and active."
+  (when (fboundp 'projectile-project-root)
+    (projectile-project-root)))
+
+(defun ai-common--read-ai-ignore-patterns (project-root)
+  "Read patterns from PROJECT-ROOT/.ai-ignore.
+Returns a list of cons cells: (PATTERN-STRING . IS-NEGATED-P).
+Each pattern string is kept as read from the file.
+Lines starting with '#' are comments and are ignored. Empty lines are also ignored."
+  (let ((ignore-file (expand-file-name ai-common-ignore-file-name project-root))
+        (patterns nil))
+    (when (file-exists-p ignore-file)
+      (with-temp-buffer
+        (insert-file-contents ignore-file)
+        (goto-char (point-min))
+        (while (not (eobp))
+          (let* ((line (buffer-substring (point) (line-end-position)))
+                 (trimmed-line (string-trim line)))
+            (unless (or (string-empty-p trimmed-line)
+                        (string-prefix-p "#" trimmed-line))
+              (let* ((is-negated (string-prefix-p "!" trimmed-line))
+                     (pattern (if is-negated (substring trimmed-line 1) trimmed-line)))
+                (push (cons pattern is-negated) patterns)))
+          (forward-line 1))))
+    (nreverse patterns))))
+
+(defun ai-common--pattern-to-regexp (pattern)
+  "Convert a gitignore-style PATTERN to an Emacs Lisp regexp string.
+Handles '*' (wildcard), '**' (recursive wildcard), '/' (directory separators), and anchoring rules."
+  (let* ((has-slash (string-match-p "/" pattern))
+         (leading-slash (string-prefix-p "/" pattern))
+         (trailing-slash (string-suffix-p "/" pattern))
+         (clean-pattern (if leading-slash (substring pattern 1) pattern))
+         (clean-pattern (if trailing-slash (substring clean-pattern 0 -1) clean-pattern)))
+
+    ;; Handle special cases first
+    (cond
+     ;; Simple filename pattern without slashes (e.g., ".DS_Store", "*.txt")
+     ((not has-slash)
+      ;; Replace wildcards with placeholders before escaping
+      (let ((with-placeholders (replace-regexp-in-string "\\*\\*" "DOUBLE_STAR" clean-pattern t))
+            (escaped nil))
+        (setq with-placeholders (replace-regexp-in-string "\\*" "SINGLE_STAR" with-placeholders t))
+        (setq escaped (regexp-quote with-placeholders))
+        ;; Restore wildcards as regexp patterns
+        (setq escaped (replace-regexp-in-string "DOUBLE_STAR" ".*" escaped t))
+        (setq escaped (replace-regexp-in-string "SINGLE_STAR" "[^/]*" escaped t))
+        (concat "\\(?:^\\|/\\)" escaped "$")))
+
+     ;; Directory wildcard pattern (e.g., "dir/*", "dir/**")
+     ((and has-slash (string-match-p "\\*" pattern))
+      ;; Replace wildcards with placeholders before escaping
+      (let ((with-placeholders (replace-regexp-in-string "\\*\\*" "DOUBLE_STAR" clean-pattern t))
+            (escaped nil))
+        (setq with-placeholders (replace-regexp-in-string "\\*" "SINGLE_STAR" with-placeholders t))
+        (setq escaped (regexp-quote with-placeholders))
+        ;; Restore wildcards as regexp patterns
+        (setq escaped (replace-regexp-in-string "DOUBLE_STAR" ".*" escaped t))
+        (setq escaped (replace-regexp-in-string "SINGLE_STAR" "[^/]*" escaped t))
+        (if leading-slash
+            (concat "^" escaped (if trailing-slash "\\(?:/.*\\)?$" "$"))
+          (concat "\\(?:^\\|/\\)" escaped (if trailing-slash "\\(?:/.*\\)?$" "$")))))
+
+     ;; Exact path pattern with slashes but no wildcards
+     (t
+      (let ((escaped (regexp-quote clean-pattern)))
+        (if leading-slash
+            (concat "^" escaped (if trailing-slash "\\(?:/.*\\)?$" "$"))
+          (concat "\\(?:^\\|/\\)" escaped (if trailing-slash "\\(?:/.*\\)?$" "$"))))))))
+
+
+(defun ai-common--get-all-project-paths (project-root)
+  "Recursively list all files and directories in PROJECT-ROOT, returning relative paths.
+  Directories will have a trailing slash."
+  (let ((all-paths nil))
+    (unless (file-directory-p project-root)
+      (error "Project root '%s' is not a directory." project-root))
+    (letrec ((traverse (lambda (dir relative-dir-path)
+                         (dolist (entry (directory-files dir t))
+                           (let* ((full-path (expand-file-name entry dir))
+                                  (relative-entry-name (file-name-nondirectory entry)))
+                             ;; Ignore '.' and '..' directories
+                             (unless (member relative-entry-name '("." ".."))
+                               (let ((current-relative-path
+                                      (if (string-empty-p relative-dir-path)
+                                          relative-entry-name
+                                        (concat relative-dir-path "/" relative-entry-name))))
+                                 (cond
+                                  ((file-regular-p full-path)
+                                   (push current-relative-path all-paths))
+                                  ((file-directory-p full-path)
+                                   (push (concat current-relative-path "/") all-paths) ;; Add trailing slash for directories
+                                   (funcall traverse full-path current-relative-path))))))))))
+      (funcall traverse project-root ""))
+    (nreverse all-paths)))
+
+(defun ai-common--filter-paths-by-patterns (paths patterns)
+  "Filter PATHS based on PATTERNS from .ai-ignore.
+PATHS should be relative paths from project root.
+PATTERNS is a list of (PATTERN . IS-NEGATED) pairs.
+Returns filtered list of paths."
+  (let ((filtered-paths nil)
+        (compiled-patterns nil))
+
+    ;; Compile all patterns once
+    (dolist (pattern-cons patterns)
+      (let* ((pattern-str (car pattern-cons))
+             (is-negated (cdr pattern-cons))
+             (regexp (ai-common--pattern-to-regexp pattern-str)))
+        (push (list regexp pattern-str is-negated) compiled-patterns)))
+    (setq compiled-patterns (nreverse compiled-patterns))
+
+    ;; Filter each path
+    (dolist (path paths)
+      (let ((should-include t)
+            (matched-rule "default (no ignore rule matched)"))
+
+        ;; Apply each pattern in order
+        (dolist (compiled-pattern compiled-patterns)
+          (let* ((regexp (nth 0 compiled-pattern))
+                 (pattern-str (nth 1 compiled-pattern))
+                 (is-negated (nth 2 compiled-pattern)))
+            (when (string-match-p regexp path)
+              (setq should-include is-negated)
+              (setq matched-rule (format "rule '%s' (negated: %s)" pattern-str is-negated)))))
+
+        (when should-include
+          (push path filtered-paths))))
+
+    (nreverse filtered-paths)))
+
+(defun ai-common--get-filtered-project-files ()
+  "Get a list of all relevant files in the current project, filtered by .ai-ignore.
+  Returns a list of absolute file paths.
+  Requires Projectile to be loaded."
+  (interactive)
+  (let ((project-root (ai-common--get-project-root)))
+    (if project-root
+        (let* ((all-relative-paths (ai-common--get-all-project-paths project-root))
+               (ignore-patterns (ai-common--read-ai-ignore-patterns project-root))
+               (filtered-relative-paths (ai-common--filter-paths-by-patterns
+                                         all-relative-paths ignore-patterns))
+               (absolute-file-paths nil))
+          ;; Convert filtered relative paths back to absolute paths,
+          ;; keeping only regular files (paths without trailing slashes).
+          (dolist (rel-path filtered-relative-paths)
+            (unless (string-suffix-p "/" rel-path) ;; Exclude directories themselves
+              (push (expand-file-name rel-path project-root) absolute-file-paths)))
+          (nreverse absolute-file-paths))
+      (message "Not in a Projectile project. Cannot get project files."))))
+
+(defun ai-common--test-get-filtered-project-files ()
+  "Test function for `ai-common--get-filtered-project-files`.
+  Displays the list of filtered project files in a new buffer."
+  (interactive)
+  (let ((files (ai-common--get-filtered-project-files)))
+    (if files
+        (with-temp-buffer
+          (insert (mapconcat 'identity files "\n"))
+          (display-buffer (current-buffer)))
+      (message "No files found or not in a Projectile project."))))
+
+(defun ai-common--list-filtered-project-files-to-console ()
+  "List all relevant files in the current project, filtered by .ai-ignore, to the *Messages* buffer."
+  (interactive)
+  (let ((files (ai-common--get-filtered-project-files)))
+    (if files
+        (message "Filtered project files:\n%s" (mapconcat 'identity files "\n"))
+      (message "No files found or not in a Projectile project."))
+    nil))
+
+
+(defun ai-common--get-filtered-project-files-as-structs ()
+  "Get a list of typed structs containing filtered project files.
+Each struct contains file path, content, and metadata.
+Returns a list of typed structs with :type 'project-file."
+  (interactive)
+  (let ((project-root (ai-common--get-project-root))
+        (file-structs nil))
+    (if project-root
+        (let ((filtered-files (ai-common--get-filtered-project-files)))
+          (dolist (file-path filtered-files)
+            (when (file-readable-p file-path)
+              (condition-case err
+                  (let* ((relative-path (file-relative-name file-path project-root))
+                         (file-struct (ai-common--make-file-context-from-file
+                                       file-path
+                                       :type 'project-file
+                                       :source 'project-scan
+                                       :relative-path relative-path
+                                       :project-root project-root)))
+                    (push file-struct file-structs))
+                (error
+                 (message "Warning: Could not read file %s: %s" file-path (error-message-string err))))))
+          (nreverse file-structs))
+      (progn
+        (message "Not in a Projectile project. Cannot get project files.")
+        nil))))
+
+(defun ai-common--add-project-files-to-context-pool ()
+  "Add all filtered project files as typed structs to the context pool."
+  (interactive)
+  (let ((file-structs (ai-common--get-filtered-project-files-as-structs)))
+    (dolist (struct file-structs)
+      (ai-common--add-to-context-pool struct))
+    (message "Added %d project files to context pool" (length file-structs))))
 
 (provide 'ai-common)
 

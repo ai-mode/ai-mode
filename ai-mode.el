@@ -112,6 +112,15 @@
   :type 'boolean
   :group 'ai)
 
+(defcustom ai--project-context-mode 'disabled
+  "Project context inclusion mode for AI execution context.
+Controls how project-wide context is included in AI requests:
+- `disabled': No project context is included
+- `full-project': Include all filtered project files as context"
+  :type '(choice (const :tag "Disabled" disabled)
+                 (const :tag "Full Project Files" full-project))
+  :group 'ai)
+
 (defcustom ai--user-input-method 'ai-utils--user-input-minibuffer-with-preview
   "Function to use for collecting user input.
 Should be a function symbol that returns a string or nil."
@@ -204,6 +213,8 @@ These files should contain instructions for how to format and apply results."
   '(("modify" . (:template "" :instructions nil :user-input t :result-action replace))
     ("generate code from selection" . (:instructions nil :result-action replace))
     ("generate code from user input" . (:instructions nil :user-input t :result-action insert-at-point :needs-buffer-context t))
+    ("create from user input" . (:instructions nil :user-input t :result-action insert-at-point :needs-buffer-context t))
+    ("create from selection" . (:instructions nil :result-action replace))
     ("execute prompt inplace" . (:instructions nil :result-action replace))
     ("explain" . (:instructions nil :result-action show))
     ("explain with full context" . (:instructions nil :user-input t :result-action show :needs-buffer-context t))
@@ -508,7 +519,7 @@ Returns the container name or nil if no specific container is needed."
 (defun ai--get-current-buffer-context ()
   "Get the additional context for the current buffer if enabled."
   (when ai--current-buffer-additional-context
-    (ai-common--make-file-context)))
+    (ai-common--make-file-context-from-buffer)))
 
 (defun ai--should-include-current-buffer-content-context-p (config query-type full-context)
   "Determine if current-buffer-content-context should be included.
@@ -549,6 +560,25 @@ Handles both plain contexts and typed structs, including nested structures."
      (format "%s" item)
      'additional-context
      'external-context))))
+
+(defun ai--get-full-project-context ()
+  "Get project context by collecting all filtered project files.
+Returns a typed struct containing the project files context, or nil if no project is detected."
+  (when-let ((project-files (ai-common--get-filtered-project-files-as-structs)))
+    (when project-files
+      (let ((processed-contexts (mapcar #'ai--process-external-context-item project-files)))
+        (ai-common--make-typed-struct
+         (ai-common--render-container-from-elements "project" processed-contexts '(("source" . "full-project")))
+         'additional-context
+         'project-context)))))
+
+(defun ai--get-project-context ()
+  "Get project context based on `ai--project-context-mode` setting.
+Returns a typed struct containing the appropriate project context, or nil if disabled."
+  (cond
+   ((eq ai--project-context-mode 'full-project)
+    (ai--get-full-project-context))
+   (t nil)))
 
 (cl-defun ai--get-execution-context (buffer config query-type &key
                                             (preceding-context-size ai--current-precending-context-size)
@@ -619,6 +649,9 @@ Each context should be a plist with :type, :content, and other metadata."
                  (ai-common--render-container-from-elements "additional-context" processed-contexts '(("source" . "external-context")))
                  'additional-context
                  'external-context))))
+
+           (project-context
+            (ai--get-project-context))
 
            (current-buffer-content-context
             (when (ai--should-include-current-buffer-content-context-p config query-type full-context)
@@ -698,6 +731,7 @@ Each context should be a plist with :type, :content, and other metadata."
                        result-action-prompt
                        additional-context
                        external-contexts-structs
+                       project-context
                        buffer-bound-prompts-context
                        action-examples-prompt
                        rendered-action-context
