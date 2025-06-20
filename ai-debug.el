@@ -35,14 +35,17 @@
 ;; - Buffer and selection context analysis
 ;; - Model configuration and parameter display
 ;; - Context source tracking and visualization
+;; - Project context with expandable file sections
 ;; - Performance-optimized content truncation
 ;; - Interactive debugging commands with keyboard shortcuts
+;; - Buffer refresh capability for dynamic content updates
 ;;
 ;; The debugging interface provides detailed insights into:
 ;; - AI model configuration and parameters
 ;; - Buffer context and completion parameters
 ;; - Message structure and prompt composition
 ;; - Context sources including global prompts, memory, and buffer-bound data
+;; - Project files with individual file sections
 ;; - Selection and cursor positioning information
 ;;
 ;; Usage:
@@ -51,6 +54,10 @@
 ;; - `ai-debug-show-sources': Display all available context sources
 ;; - `ai-debug-completion-limited-context': Debug completion with limited context
 ;; - `ai-debug-completion-full-context': Debug completion with full buffer context
+;;
+;; Within debug buffers:
+;; - C-c t: Toggle content truncation for performance optimization
+;; - C-r: Refresh buffer content with current AI context
 ;;
 ;; The interface supports content truncation for performance, which can be
 ;; toggled with 'C-c t' within debug buffers. All debug information is
@@ -121,6 +128,13 @@ When nil, full content is shown which may cause performance issues."
   "Face for empty context sources."
   :group 'ai-debug)
 
+;; Buffer-local variables for refresh functionality
+(defvar-local ai-debug--refresh-function nil
+  "Function to call when refreshing the current debug buffer.")
+
+(defvar-local ai-debug--refresh-args nil
+  "Arguments to pass to the refresh function.")
+
 (defun ai-debug--create-debug-buffer ()
   "Create and return the AI debug buffer.
 Initializes the buffer with magit-section-mode and appropriate keybindings."
@@ -129,10 +143,11 @@ Initializes the buffer with magit-section-mode and appropriate keybindings."
       (setq buffer-read-only nil)
       (erase-buffer)
       (magit-section-mode)
-      (setq header-line-format (format "AI Context Debug - TAB to expand/collapse, truncation: %s (C-c t to toggle)"
+      (setq header-line-format (format "AI Context Debug - TAB to expand/collapse, truncation: %s (C-c t to toggle, C-r to refresh)"
                                        (if ai-debug-truncate-content "ON" "OFF")))
-      ;; Add local keymap for toggling truncation
-      (local-set-key (kbd "C-c t") 'ai-debug-toggle-truncation))
+      ;; Add local keymap for debug buffer operations
+      (local-set-key (kbd "C-c t") 'ai-debug-toggle-truncation)
+      (local-set-key (kbd "C-r") 'ai-debug-refresh-buffer))
     buffer))
 
 (defun ai-debug--create-sources-buffer ()
@@ -143,10 +158,11 @@ Initializes the buffer with magit-section-mode and appropriate keybindings."
       (setq buffer-read-only nil)
       (erase-buffer)
       (magit-section-mode)
-      (setq header-line-format (format "AI Context Sources - TAB to expand/collapse, truncation: %s (C-c t to toggle)"
+      (setq header-line-format (format "AI Context Sources - TAB to expand/collapse, truncation: %s (C-c t to toggle, C-r to refresh)"
                                        (if ai-debug-truncate-content "ON" "OFF")))
-      ;; Add local keymap for toggling truncation
-      (local-set-key (kbd "C-c t") 'ai-debug-toggle-truncation))
+      ;; Add local keymap for debug buffer operations
+      (local-set-key (kbd "C-c t") 'ai-debug-toggle-truncation)
+      (local-set-key (kbd "C-r") 'ai-debug-refresh-buffer))
     buffer))
 
 (defun ai-debug-toggle-truncation ()
@@ -156,12 +172,31 @@ to balance between completeness and performance."
   (interactive)
   (setq ai-debug-truncate-content (not ai-debug-truncate-content))
   (message "AI debug content truncation %s" (if ai-debug-truncate-content "enabled" "disabled"))
-  ;; Refresh current buffer if it's one of our debug buffers
+  ;; Refresh current buffer automatically after toggling truncation
+  (ai-debug-refresh-buffer))
+
+(defun ai-debug-refresh-buffer ()
+  "Refresh the current debug buffer with updated AI context.
+Calls the appropriate refresh function based on the current buffer type."
+  (interactive)
   (cond
+   ;; Context debug buffer
    ((string= (buffer-name) ai-debug-buffer-name)
-    (call-interactively 'ai-debug-show-context))
+    (message "Refreshing AI debug context...")
+    (if ai-debug--refresh-function
+        (apply ai-debug--refresh-function ai-debug--refresh-args)
+      (ai-debug-show-context))
+    (message "AI debug context refreshed"))
+
+   ;; Sources debug buffer
    ((string= (buffer-name) ai-debug-sources-buffer-name)
-    (call-interactively 'ai-debug-show-sources))))
+    (message "Refreshing AI context sources...")
+    (ai-debug-show-sources)
+    (message "AI context sources refreshed"))
+
+   ;; Unknown buffer
+   (t
+    (message "Cannot refresh: not in an AI debug buffer"))))
 
 (defun ai-debug--format-context-metadata (context-item)
   "Format metadata for CONTEXT-ITEM as a readable string.
@@ -443,6 +478,70 @@ Handles large context lists efficiently with safety limits."
       (reverse source-groups))
     (error '(("error" . nil)))))
 
+(defun ai-debug--get-project-context-structs ()
+  "Get project context as list of typed structs for debug display.
+Returns filtered project files as individual structs without container wrapping.
+Similar to `ai--get-project-context` but returns raw structs for debugging."
+  (condition-case nil
+    (when-let ((project-files (ai-common--get-filtered-project-files-as-structs)))
+      project-files)
+    (error nil)))
+
+(defun ai-debug--deduplicate-project-files (project-files)
+  "Remove duplicate project files from PROJECT-FILES based on absolute file paths.
+Returns a list with unique absolute file paths only."
+  (let ((seen-paths (make-hash-table :test 'equal))
+        (unique-files '()))
+    (dolist (file-struct project-files)
+      (let ((file-path (condition-case nil
+                         (plist-get file-struct :file)
+                         (error nil))))
+        (when file-path
+          ;; Ensure we use absolute path
+          (let ((absolute-path (expand-file-name file-path)))
+            (unless (gethash absolute-path seen-paths)
+              (puthash absolute-path t seen-paths)
+              ;; Update the struct with absolute path
+              (setf (plist-get file-struct :file) absolute-path)
+              (push file-struct unique-files))))))
+    (reverse unique-files)))
+
+(defun ai-debug--insert-project-file-section (file-struct)
+  "Insert a collapsible section for a single project FILE-STRUCT.
+Creates an expandable section showing individual project file content
+with filename in the header and absolute path in metadata."
+  (condition-case err
+    (let* ((file-path (condition-case nil (plist-get file-struct :file) (error "unknown")))
+           (file-size (condition-case nil (plist-get file-struct :file-size) (error 0)))
+           (timestamp (condition-case nil (plist-get file-struct :timestamp) (error nil)))
+           (content (condition-case nil (plist-get file-struct :content) (error nil)))
+           (file-name (if file-path (file-name-nondirectory file-path) "unknown"))
+           ;; Use absolute path for consistency
+           (absolute-path (if file-path (expand-file-name file-path) "unknown"))
+           (id (condition-case nil (plist-get file-struct :id) (error (format "file-%d" (random 10000)))))
+           (metadata-parts '()))
+
+      ;; Build metadata parts with absolute path
+      (when absolute-path
+        (push (format "path: %s" absolute-path) metadata-parts))
+      (when (and file-size (> file-size 0))
+        (push (format "size: %d bytes" file-size) metadata-parts))
+      (when timestamp
+        (push (format "scanned: %s" timestamp) metadata-parts))
+
+      (magit-insert-section (ai-project-file id)
+        (magit-insert-heading
+          (propertize file-name 'face 'ai-debug-context-type)
+          (when metadata-parts
+            (concat " " (propertize (format "(%s)" (mapconcat #'identity metadata-parts " | "))
+                                   'face 'ai-debug-context-metadata))))
+
+        (when content
+          (ai-debug--safe-insert-content content ai-debug-max-recursion-depth 0)
+          (insert "\n"))))
+    (error
+     (insert (propertize (format "[Error displaying project file: %s]\n\n" (error-message-string err)) 'face 'ai-debug-empty-source)))))
+
 (defun ai-debug--insert-source-section (source-name source-data description)
   "Insert a section for SOURCE-NAME with SOURCE-DATA and DESCRIPTION.
 Creates a collapsible section showing context source information
@@ -471,6 +570,18 @@ with comprehensive statistics and safe content handling."
          ;; Empty or nil data
          (is-empty
           (insert (propertize "  (empty)\n\n" 'face 'ai-debug-empty-source)))
+
+         ;; Special handling for project context (list of file structs)
+         ((and (string= source-name "Project Context") (listp source-data))
+          (let* ((deduplicated-files (ai-debug--deduplicate-project-files source-data))
+                 (file-count (min (length deduplicated-files) (if ai-debug-truncate-content 10 100))))
+            (dotimes (i file-count)
+              (ai-debug--insert-project-file-section (nth i deduplicated-files)))
+            (when (> (length deduplicated-files) file-count)
+              (insert (propertize (format "  [%d more files not shown%s]\n\n"
+                                         (- (length deduplicated-files) file-count)
+                                         (if ai-debug-truncate-content " - toggle truncation with C-c t" ""))
+                                 'face 'ai-debug-empty-source)))))
 
          ;; Single typed struct
          ((and (listp source-data) (keywordp (car source-data)))
@@ -506,6 +617,10 @@ The interface provides expandable sections for detailed inspection."
 
       (with-current-buffer buffer
         (setq buffer-read-only nil)
+
+        ;; Store refresh function and args for later use
+        (setq-local ai-debug--refresh-function 'ai-debug-show-context-debug)
+        (setq-local ai-debug--refresh-args (list context))
 
         ;; Insert main header
         (magit-insert-section (ai-debug-root)
@@ -562,6 +677,13 @@ The interface provides expandable sections for detailed inspection."
                     (insert (format "%-25s: %s\n" key-str value-str))))))
             (insert "\n"))
 
+          ;; Insert project context section with deduplication
+          (when-let ((project-context (ai-debug--get-project-context-structs)))
+            (ai-debug--insert-source-section
+             "Project Context"
+             project-context
+             "Filtered project files available to AI"))
+
           ;; Insert messages grouped by source in execution order
           (when messages
             (let ((grouped-messages (ai-debug--group-context-by-source messages)))
@@ -594,12 +716,16 @@ The interface provides expandable sections for detailed inspection."
 (defun ai-debug-show-sources ()
   "Display all AI context sources in a visual magit-like interface.
 Shows global prompts, memory, buffer-bound prompts, context pool,
-and current buffer/selection information in expandable sections."
+project context, and current buffer/selection information in expandable sections."
   (interactive)
   (condition-case err
     (let ((buffer (ai-debug--create-sources-buffer)))
       (with-current-buffer buffer
         (setq buffer-read-only nil)
+
+        ;; Set up refresh capability for sources buffer
+        (setq-local ai-debug--refresh-function 'ai-debug-show-sources)
+        (setq-local ai-debug--refresh-args nil)
 
         ;; Safely collect sources with comprehensive error handling
         (let* ((global-system-prompts (condition-case nil
@@ -614,6 +740,9 @@ and current buffer/selection information in expandable sections."
                (context-pool (condition-case nil
                                  (ai-common--get-context-pool)
                                (error nil)))
+               (project-context (condition-case nil
+                                    (ai-debug--get-project-context-structs)
+                                  (error nil)))
                (current-buffer-context (condition-case nil
                                            (unless (use-region-p) (ai--get-current-buffer-context))
                                          (error nil)))
@@ -623,7 +752,7 @@ and current buffer/selection information in expandable sections."
 
                ;; Count sources safely
                (all-sources (list global-system-prompts global-memory buffer-bound-prompts
-                                 context-pool current-buffer-context current-selection))
+                                 context-pool project-context current-buffer-context current-selection))
                (total-sources (length (cl-remove-if #'null all-sources)))
                (non-empty-sources (length (cl-remove-if #'ai-debug--is-empty-source all-sources))))
 
@@ -654,6 +783,11 @@ and current buffer/selection information in expandable sections."
              "Context Pool"
              context-pool
              "Temporary context for current interaction session")
+
+            (ai-debug--insert-source-section
+             "Project Context"
+             project-context
+             "Filtered project files available to AI")
 
             (when current-buffer-context
               (ai-debug--insert-source-section
