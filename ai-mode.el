@@ -265,7 +265,7 @@ Each entry is a pair: `(QUERY-TYPE . CONFIG-PLIST)`.
     (define-key keymap (kbd "c c") 'ai-chat)
     (define-key keymap (kbd "b c") 'ai--change-execution-backend)
     (define-key keymap (kbd "f") 'ai--switch-file-instructions-enabled)
-    (define-key keymap (kbd "p") 'ai-perform-coordinator)
+    (define-key keymap (kbd "p c") 'ai-perform-coordinator)
     (define-key keymap (kbd "r") 'ai-perform)
     (define-key keymap (kbd "s") 'ai-show)
     (define-key keymap (kbd "x") 'ai-execute)
@@ -274,6 +274,7 @@ Each entry is a pair: `(QUERY-TYPE . CONFIG-PLIST)`.
     (define-key keymap (kbd "m a") 'ai-common--add-to-global-memory)
     (define-key keymap (kbd "m c") 'ai-common--clear-global-memory)
     (define-key keymap (kbd "a c") 'ai-common--add-to-context-pool)
+    (define-key keymap (kbd "p s") 'ai--switch-project-context-mode)
     keymap)
   "Keymap for AI commands.")
 
@@ -583,6 +584,26 @@ Returns a typed struct containing the appropriate project context, or nil if dis
    ((eq ai--project-context-mode 'full-project)
     (ai--get-full-project-context))
    (t nil)))
+
+(defun ai--switch-project-context-mode ()
+  "Interactively switch the project context mode.
+Allows user to select between different project context inclusion modes."
+  (interactive)
+  (let* ((current-mode ai--project-context-mode)
+         (modes '(("disabled" . disabled)
+                  ("full-project" . full-project)))
+         (mode-descriptions '((disabled . "No project context")
+                             (full-project . "Include all filtered project files")))
+         (prompt (format "Current mode: %s. Select new project context mode: "
+                        (cdr (assoc current-mode mode-descriptions))))
+         (selected-name (completing-read prompt (mapcar #'car modes)))
+         (selected-mode (cdr (assoc selected-name modes))))
+
+    (setq ai--project-context-mode selected-mode)
+    (customize-save-variable 'ai--project-context-mode selected-mode)
+    (message "Project context mode changed to: %s (%s)"
+             selected-name
+             (cdr (assoc selected-mode mode-descriptions)))))
 
 (cl-defun ai--get-execution-context (buffer config query-type &key
                                             (preceding-context-size ai--current-precending-context-size)
@@ -959,9 +980,17 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
   (let ((model-funcs ai-mode--models-providers))
     (apply #'append (mapcar #'funcall model-funcs))))
 
+(defun ai--get-project-context-indicator ()
+  "Return a single character indicator for the current project context mode."
+  (cond
+   ((eq ai--project-context-mode 'full-project) "P")
+   ((eq ai--project-context-mode 'disabled) "D")
+   (t "")))
+
 (defun ai-mode-line-info ()
   "Return a formatted string describing the current AI mode state for the mode line."
   (let* ((model (ai--get-current-model))
+         (project-indicator (ai--get-project-context-indicator))
          (progress-indicator (cond
                               ((and ai--progress-active
                                     (eq ai--progress-indicator-style 'spinner))
@@ -982,7 +1011,10 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
          (context-info (if ai--progress-active
                            (when ai--progress-start-time
                              (format "%s" (if (string-empty-p progress-indicator) "" (format "%s" progress-indicator))))
-                         (format "%d/%d" ai--current-precending-context-size ai--current-forwarding-context-size)))
+                         (format "%s|%d/%d"
+                                 project-indicator
+                                 ai--current-precending-context-size
+                                 ai--current-forwarding-context-size)))
          (ai-mode-line-section
           (format " AI[%s|%s]"
                   (map-elt model :name)
