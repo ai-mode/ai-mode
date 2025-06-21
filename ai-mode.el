@@ -564,13 +564,17 @@ Handles both plain contexts and typed structs, including nested structures."
 (defun ai--get-full-project-context ()
   "Get project context by collecting all filtered project files.
 Returns a typed struct containing the project files context, or nil if no project is detected."
-  (when-let ((project-files (ai-common--get-filtered-project-files-as-structs)))
+  (when-let* ((project-root (ai-common--get-project-root))
+              (project-files (ai-common--get-filtered-project-files-as-structs)))
     (when project-files
-      (let ((processed-contexts (mapcar #'ai--process-external-context-item project-files)))
-        (ai-common--make-typed-struct
-         (ai-common--render-container-from-elements "project" processed-contexts '(("source" . "full-project")))
-         'additional-context
-         'project-context)))))
+      (let* ((processed-contexts project-files)
+             ;; (processed-contexts (mapcar #'ai--process-external-context-item project-files))
+             (files-struct (ai-common--make-typed-struct processed-contexts 'files 'project-files))
+             (project-struct (ai-common--make-typed-struct files-struct 'project nil
+                                                           :source "full-project"
+                                                           :root project-root)))
+        project-struct))))
+
 
 (defun ai--get-project-context ()
   "Get project context based on `ai--project-context-mode` setting.
@@ -648,7 +652,8 @@ Each context should be a plist with :type, :content, and other metadata."
                 (ai-common--make-typed-struct
                  (ai-common--render-container-from-elements "additional-context" processed-contexts '(("source" . "external-context")))
                  'additional-context
-                 'external-context))))
+                 'external-context
+                 :rendered t))))
 
            (project-context
             (ai--get-project-context))
@@ -659,7 +664,7 @@ Each context should be a plist with :type, :content, and other metadata."
                 (when-let ((rendered-context (ai-common--render-struct-to-string context)))
                   (ai-common--make-typed-struct rendered-context 'additional-context 'current-buffer-content)))))
 
-          (user-input (when (map-elt config :user-input)
+           (user-input (when (map-elt config :user-input)
                          (let ((input-text (ai--get-user-input)))
                            ;; If user input is cancelled (ai--get-user-input returns nil),
                            ;; then stop the execution of the command immediately.
@@ -739,7 +744,9 @@ Each context should be a plist with :type, :content, and other metadata."
                        query-struct))))))
 
            (messages (ai-utils-filter-non-empty-content messages))
-           (_ (ai-utils-write-context-to-prompt-buffer messages))
+
+           (_ (ai-utils-write-context-to-prompt-buffer-debug messages))
+
            (full-context (append full-context `(:messages ,messages))))
 
       full-context)))

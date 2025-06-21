@@ -63,6 +63,12 @@ across all interactions and buffers."
   :type 'string
   :group 'ai-common)
 
+(defcustom ai-common--render-ignore-fields '(:id :timestamp)
+  "List of plist keys (fields) to ignore when rendering a typed struct to a string.
+Fields specified here will not be included as attributes in the XML-like output."
+  :type '(repeat (keyword :tag "Field to ignore"))
+  :group 'ai-common)
+
 (defun ai-common--add-to-global-memory (input)
   "Add INPUT to `ai--global-memo-context'.
 INPUT is a string representing the context or information to be remembered globally."
@@ -260,8 +266,8 @@ Optional SOURCE parameter specifies the source of the context."
          (buf    (buffer-name))
          (start-line   (line-number-at-pos beg))
          (end-line     (line-number-at-pos end))
-         (start-col    (car (posn-col-row (posn-at-point beg))))
-         (end-col      (car (posn-col-row (posn-at-point end))))
+         (col-beg    (car (posn-col-row (posn-at-point beg))))
+         (col-end    (car (posn-col-row (posn-at-point end))))
          (mode         (symbol-name major-mode))
          (ts           (format-time-string "%Y-%m-%dT%H:%M:%S"))
          (id           (ai-common--generate-id 'preceding-context))
@@ -274,8 +280,8 @@ Optional SOURCE parameter specifies the source of the context."
                          :end-pos           ,end
                          :start-line        ,start-line
                          :end-line          ,end-line
-                         :start-column      ,start-col
-                         :end-column        ,end-col
+                         :start-column      ,col-beg
+                         :end-column        ,col-end
                          :mode              ,mode
                          :timestamp         ,ts
                          :source            preceding-context
@@ -389,7 +395,8 @@ If ITEM is a plist, return an XML element with attributes and content."
     (let* ((tag-name (plist-get item :type))
            (content  (plist-get item :content))
            (attrs    (cl-loop for (k v) on item by #'cddr
-                              unless (memq k '(:type :content))
+                              ;; Exclude :type, :content, :rendered, and fields in ai-common--render-ignore-fields
+                              unless (memq k (append '(:type :content :rendered) ai-common--render-ignore-fields))
                               collect (cons
                                        (substring (symbol-name k) 1)
                                        (ai-common--stringify v)))))
@@ -483,6 +490,13 @@ STRUCT can be a plist, a symbol or a list of other structures.
 For plists, tag name is determined by :type property.
 Handles nested structures recursively."
   (cond
+   ;; Handle nil and t specifically as per user request to return empty string
+   ((or (eq struct nil) (eq struct t)) "")
+
+   ;; If the structure has a :rendered property and it's non-nil, return its content directly
+   ((and (listp struct) (plist-get struct :rendered))
+    (plist-get struct :content))
+
    ;; Simple symbol case (like :cursor)
    ((symbolp struct)
     (let* ((tag-name (if (keywordp struct)
@@ -516,7 +530,8 @@ Handles nested structures recursively."
              ;; No content
              (t "")))
            (attrs (cl-loop for (k v) on struct by #'cddr
-                           unless (memq k '(:type :content))
+                           ;; Exclude :type, :content, :rendered, and fields in ai-common--render-ignore-fields
+                           unless (memq k (append '(:type :content :rendered) ai-common--render-ignore-fields))
                            collect (cons (substring (symbol-name k) 1)
                                          (ai-common--stringify v)))))
 
@@ -814,13 +829,13 @@ Returns filtered list of paths."
 Each struct contains file path, content, and metadata.
 Returns a list of typed structs with :type 'project-file."
   (interactive)
-  (let ((project-root (ai-common--get-project-root))
+  (let ((project-root (ai-common--get-project-root()))
         (file-structs nil))
     (if project-root
         (let ((filtered-files (ai-common--get-filtered-project-files)))
           (dolist (file-path filtered-files)
             (when (file-readable-p file-path)
-              (condition-case err
+              (condition-case-unless-debug err
                   (let* ((relative-path (file-relative-name file-path project-root))
                          (file-struct (ai-common--make-file-context-from-file
                                        file-path

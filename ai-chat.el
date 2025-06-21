@@ -562,7 +562,7 @@
   "Retrieve a slice of the chat history based on SIZE.
 
 SIZE is the number of historical messages to include. If SIZE is less than or equal to 0, return the full history."
-  (condition-case _
+  (condition-case-unless-debug _
       (with-current-buffer (ai-chat--buffer)
         (if (or (<= size 0) (> size (length ai-chat--buffer-history)))
             ai-chat--buffer-history
@@ -695,7 +695,7 @@ MESSAGE-TYPE specifies the type of message and is optional."
       (with-temp-buffer
         (insert-file-contents filepath)
         (goto-char (point-min))
-        (condition-case err
+        (condition-case-unless-debug err
             (let* ((read-form (read (current-buffer)))
                    (temp-session-data-quoted (if (and (listp read-form) (eq (car read-form) 'setq)
                                                       (eq (cadr read-form) 'ai-chat--session-data))
@@ -914,7 +914,7 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
                                             'invisible (not ai-chat--show-invisible-markers)))
           (ai-chat--add-entry-to-history input-string 'user-input)
 
-          (condition-case processing-error
+          (condition-case-unless-debug processing-error
               (let* ((execution-model (ai-chat--get-current-model))
                      (execution-backend (map-elt execution-model :execution-backend))
                      (context (ai-chat--get-execution-context))
@@ -1059,7 +1059,7 @@ This mode allows users to interact with AI models through `comint-mode`."
   (unless (comint-check-proc (current-buffer))
     ;; Was cat, but on non-Unix platforms that might not exist, so
     ;; use hexl instead, which is part of the Emacs distribution.
-    (condition-case nil
+    (condition-case-unless-debug nil
         (start-process "ai-chat" (current-buffer) "hexl")
       (file-error (start-process "ai-chat" (current-buffer) "cat")))
     (set-process-query-on-exit-flag (ai-chat--process) nil)

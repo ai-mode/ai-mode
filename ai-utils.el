@@ -323,16 +323,14 @@ If TRIM is non-nil, trims content passed to the CALLBACK."
 (defun ai-utils--show-response-buffer (messages)
   "Display MESSAGES content in the response buffer."
   (let ((content (ai-utils--extract-content-from-messages messages))
-        (buffer-name (ai-utils--get-response-buffer)))
-    (with-help-window buffer-name
-      (with-current-buffer buffer-name
+        (buffer (ai-utils--get-response-buffer)))
+    (with-help-window buffer
+      (with-current-buffer buffer
         (let ((beginning (point-min))
               (end (point-max)))
-          (erase-buffer)
-          (insert content)
+          (ai-utils--replace-or-insert content beginning end)
           (when (fboundp 'markdown-mode)
-            (markdown-mode))
-          (ai-utils--replace-or-insert content beginning end))))))
+            (markdown-mode)))))))
 
 
 (defun ai-utils--show-context-debug (context)
@@ -387,7 +385,7 @@ TIMEOUT specifies the request timeout."
                     (progn
                       (ai-utils--log-response request-id (buffer-string))
                       (goto-char url-http-end-of-headers)
-                      (condition-case request-error
+                      (condition-case-unless-debug request-error
                           (let ((result (json-read-from-string
                                          (decode-coding-string
                                           (buffer-substring-no-properties url-http-end-of-headers (point-max))
@@ -415,7 +413,7 @@ TIMEOUT specifies the request timeout."
         (with-current-buffer buffer
           (ai-utils--log-response request-id (buffer-string))
           (goto-char url-http-end-of-headers)
-          (condition-case _request-error
+          (condition-case-unless-debug _request-error
               (json-read-from-string
                (decode-coding-string
                 (buffer-substring-no-properties url-http-end-of-headers (point-max))
@@ -777,7 +775,7 @@ with `ai-utils--instruction-file-extension'."
     (pop-to-buffer buffer)
     (message "Type your text and press C-c C-c to finish. Press C-g to cancel.")
     ;; Handle input and cancel
-    (condition-case nil
+    (condition-case-unless-debug nil
         (progn
           (recursive-edit) ;; Wait for completion
           (let ((input-text (with-current-buffer buffer
@@ -811,7 +809,7 @@ Features:
       (let* ((prompt (if (string-empty-p input)
                         "Enter your text (empty line to finish): "
                       (format "Current input:\n%s\n\nContinue (empty line to finish): " input)))
-             (line (condition-case nil
+             (line (condition-case-unless-debug nil
                        (read-string prompt nil nil nil t)  ; Enable history
                      (quit
                       (setq continue nil)
@@ -852,7 +850,7 @@ Returns the input string or nil if cancelled."
                   (insert "\n")))
 
     ;; Get input using minibuffer with custom keymap
-    (condition-case nil
+    (condition-case-unless-debug nil
         (progn
           (setq input (read-from-minibuffer
                        "Type your message (C-RET to send, C-g to cancel): "
@@ -868,10 +866,11 @@ Returns the input string or nil if cancelled."
 
 
 (defun ai-utils--is-empty-message (message)
-  "Determine if MESSAGE has an empty or missing :content field."
+  "Determine if MESSAGE has an empty or missing :content field.
+Handles cases where :content might not be a string."
   (let ((content (plist-get message :content)))
     (or (null content)
-        (string-empty-p content))))
+        (and (stringp content) (string-empty-p content)))))
 
 
 (defun ai-utils-filter-non-empty-content (messages)
@@ -908,10 +907,23 @@ Returns the input string or nil if cancelled."
       (with-current-buffer buffer
         (erase-buffer)   ; Clear the buffer before writing new content
         (dolist (message messages)
-          (let ((content (ai-common--get-text-content-from-struct message)))
+          (let ((content (ai-common--render-struct-to-string message)))
             (when content
               (insert content "\n"))))))))
 
+(defun ai-utils-write-context-to-prompt-buffer-debug (messages)
+  "Extract 'context' from MESSAGES and display it in the debug buffer without switching focus.
+This is an alternative to `ai-utils-write-context-to-prompt-buffer` that uses
+`ai-debug-show-context-debug` for richer display, but does not switch the
+current window to the debug buffer.
+Requires `ai-debug` to be loaded."
+  (when (and ai-utils--write-to-prompt-buffer (fboundp 'ai-debug-show-context-debug))
+    (let ((debug-context (plist-put '() :messages messages)))
+      (save-selected-window
+        ;; Ensure ai-debug is loaded before calling its function
+        (require 'ai-debug nil 'noerror)
+        (when (fboundp 'ai-debug-show-context-debug)
+          (ai-debug-show-context-debug debug-context))))))
 
 
 (defun ai-utils--show-and-eval-response (messages)
@@ -930,7 +942,7 @@ Returns the input string or nil if cancelled."
     (pop-to-buffer buffer)
 
     (when (yes-or-no-p "The AI has generated Emacs Lisp code. Do you want to evaluate it? ")
-      (condition-case err
+      (condition-case-unless-debug err
           (progn
             (eval-buffer buffer)
             (message "Code evaluated successfully."))
