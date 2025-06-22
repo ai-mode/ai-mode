@@ -771,9 +771,7 @@ Uses model information from CONTEXT's :model-context key if available."
                                   (:version . "Model Version")
                                   (:max-tokens . "Max Tokens")
                                   (:temperature . "Temperature")
-                                  (:num-choices . "Number of Choices")
-                                  (:execution-backend . "Execution Backend")
-                                  (:setup-function . "Setup Function"))))
+                                  (:num-choices . "Number of Choices"))))
                 ;; Use cl-loop for clearer iteration over key-label pairs,
                 ;; which can sometimes resolve subtle variable binding issues.
                 (cl-loop for (param-key . label) in key-params
@@ -829,11 +827,11 @@ Uses model information from CONTEXT's :model-context key if available."
         (insert (propertize "No model configuration found in context\n" 'face 'ai-debug-empty-source))))
     (insert "\n")))
 
-(defun ai-debug--insert-messages-by-category (messages)
-  "Insert MESSAGES grouped by type/category in expandable sections.
-Creates organized categories for better navigation and understanding."
-  (let* ((category-groups (make-hash-table :test 'equal))
-         (category-order '()))
+(defun ai-debug--group-messages-by-type (messages)
+  "Group MESSAGES by their :type field.
+Returns a hash table where keys are type strings and values are lists of messages."
+  (let ((category-groups (make-hash-table :test 'equal))
+        (category-order '()))
 
     ;; Group messages by their type
     (dolist (message messages)
@@ -850,59 +848,83 @@ Creates organized categories for better navigation and understanding."
         (let ((existing (gethash category-key category-groups)))
           (puthash category-key (append existing (list message)) category-groups))))
 
+    (values category-groups (reverse category-order))))
+
+(defun ai-debug--calculate-category-file-count (category items)
+  "Calculate file count for project-context CATEGORY from ITEMS.
+Returns the total number of files found in project-context items, or nil for other categories."
+  (when (string= category "project-context")
+    (condition-case-unless-debug nil
+        (let ((total-files 0))
+          (dolist (item items)
+            (let ((content (plist-get item :content)))
+              (when (and content (listp content))
+                (dolist (sub-element content)
+                  (when (and (listp sub-element)
+                             (keywordp (car sub-element))
+                             (eq (plist-get sub-element :type) 'files))
+                    (let ((files-data (plist-get sub-element :content)))
+                      (when (and files-data (listp files-data))
+                        (setq total-files (+ total-files (length files-data))))))))))
+          total-files)
+      (error 0))))
+
+(defun ai-debug--format-category-header (category item-count file-count)
+  "Format header text for a message category.
+CATEGORY is the category name, ITEM-COUNT is the number of items,
+FILE-COUNT is the number of files (if applicable, nil otherwise)."
+  (let ((category-display-name (ai-debug--capitalize-category-name category)))
+    (if file-count
+        (format "%s (%d items, %d files)" category-display-name item-count file-count)
+      (format "%s (%d items)" category-display-name item-count))))
+
+(defun ai-debug--insert-project-context-category (items)
+  "Insert project-context category items with special subsection handling.
+ITEMS should be a list of project-context type messages."
+  (dolist (item items)
+    (let ((content (plist-get item :content)))
+      (when (and content (listp content))
+        (dolist (sub-element content)
+          (when (and (listp sub-element) (keywordp (car sub-element)))
+            (let* ((sub-type (plist-get sub-element :type))
+                   (subsection-name (ai-debug--capitalize-category-name (symbol-name sub-type))))
+              (ai-debug--insert-project-context-subsection sub-element subsection-name))))))))
+
+(defun ai-debug--insert-regular-category (items item-count)
+  "Insert regular category items (non-project-context) with truncation handling.
+ITEMS is the list of category items, ITEM-COUNT is the total number of items."
+  (let ((max-items (if ai-debug-truncate-content 5 50)))
+    (dotimes (i (min item-count max-items))
+      (let ((item (nth i items)))
+        (ai-debug--insert-context-section item 2)))
+
+    (when (and ai-debug-truncate-content (> item-count max-items))
+      (insert (propertize
+               (format "  [%d more items not shown - toggle truncation with C-c t]\n\n"
+                       (- item-count max-items))
+               'face 'ai-debug-context-metadata)))))
+
+(defun ai-debug--insert-messages-by-category (messages)
+  "Insert MESSAGES grouped by type/category in expandable sections.
+Creates organized categories for better navigation and understanding."
+  (multiple-value-bind (category-groups category-order)
+      (ai-debug--group-messages-by-type messages)
+
     ;; Insert each category with file counts in headers
-    (dolist (category (reverse category-order))
+    (dolist (category category-order)
       (let* ((items (gethash category category-groups))
-             (category-display-name (ai-debug--capitalize-category-name category))
              (item-count (length items))
-             ;; Count files if this is project-context category
-             (file-count (when (string= category "project-context")
-                           (condition-case-unless-debug nil
-                               (let ((total-files 0))
-                                 (dolist (item items)
-                                   (let ((content (plist-get item :content)))
-                                     (when (and content (listp content))
-                                       (dolist (sub-element content)
-                                         (when (and (listp sub-element)
-                                                    (keywordp (car sub-element))
-                                                    (eq (plist-get sub-element :type) 'files))
-                                           (let ((files-data (plist-get sub-element :content)))
-                                             (when (and files-data (listp files-data))
-                                               (setq total-files (+ total-files (length files-data)))))))))
-                                   total-files)
-                                 (error 0)))))
-             ;; Format header with counts
-             (header-text (if file-count
-                              (format "%s (%d items, %d files)" category-display-name item-count file-count)
-                            (format "%s (%d items)" category-display-name item-count))))
+             (file-count (ai-debug--calculate-category-file-count category items))
+             (header-text (ai-debug--format-category-header category item-count file-count)))
 
         (magit-insert-section (ai-message-category category)
           (magit-insert-heading
             (propertize header-text 'face 'ai-debug-category-header))
 
-          ;; Special handling for project-context type
+          ;; Choose appropriate insertion method based on category
           (if (string= category "project-context")
-              ;; For project-context, decompose and show subsections
-              (dolist (item items)
-                (let ((content (plist-get item :content)))
-                  (when (and content (listp content))
-                    (dolist (sub-element content)
-                      (when (and (listp sub-element) (keywordp (car sub-element)))
-                        (let* ((sub-type (plist-get sub-element :type))
-                               (subsection-name (ai-debug--capitalize-category-name (symbol-name sub-type))))
-                          (ai-debug--insert-project-context-subsection sub-element subsection-name)))))))
-
-            ;; Normal handling for other categories - with child sections collapsed by default
-            (let ((max-items (if ai-debug-truncate-content 5 50)))
-              (dotimes (i (min item-count max-items))
-                (let ((item (nth i items)))
-                  (ai-debug--insert-context-section item 2)))
-
-              (when (and ai-debug-truncate-content (> item-count max-items))
-                (insert (propertize
-                         (format "  [%d more items not shown - toggle truncation with C-c t]\n\n"
-                                 (- item-count max-items))
-                         'face 'ai-debug-context-metadata))))))))))
+              (ai-debug--insert-project-context-category items)
+            (ai-debug--insert-regular-category items item-count)))))))
 
 (defun ai-debug-show-context-debug (context)
     "Display CONTEXT in a visual magit-like interface.
@@ -967,7 +989,6 @@ The interface provides expandable sections for detailed inspection."
                   (magit-insert-heading
                     (propertize (format "AI Messages (%d total)" (length messages))
                                 'face 'ai-debug-category-header))
-
                   (ai-debug--insert-messages-by-category messages))))
 
             (setq buffer-read-only t)
@@ -1023,7 +1044,9 @@ project context, and current buffer/selection information in expandable sections
                                     (ai-debug--get-project-context-structs)
                                   (error nil)))
                (current-buffer-context (condition-case-unless-debug nil
-                                           (unless (use-region-p) (ai--get-current-buffer-context))
+                                           (unless (use-region-p)
+                                             (when (fboundp 'ai--get-current-buffer-context)
+                                               (ai--get-current-buffer-context)))
                                          (error nil)))
                (current-selection (condition-case-unless-debug nil
                                       (when (use-region-p) (ai-common--make-snippet-from-region 'selection))
@@ -1153,7 +1176,6 @@ Useful for debugging completion performance and context truncation issues."
   (condition-case-unless-debug err
     (when (bound-and-true-p ai-mode)
       (let* ((context (condition-case-unless-debug nil
-
                           (when (and (fboundp 'ai--get-execution-context)
                                      (fboundp 'ai--get-command-config-by-type)
                                      (fboundp 'ai--get-current-model))
@@ -1189,6 +1211,7 @@ Useful for debugging issues with full-buffer completion strategies."
                             (ai--get-execution-context
                              (current-buffer)
                              (ai--get-command-config-by-type "complete")
+
                              "complete"
                              :preceding-context-size nil
                              :following-context-size nil
