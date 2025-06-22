@@ -1047,6 +1047,26 @@ Creates organized categories for better navigation and understanding."
               (ai-debug--insert-project-context-category items)
             (ai-debug--insert-regular-category items item-count)))))))
 
+(defun ai-debug--hide-child-sections (section types-to-hide)
+  "Hide child sections of SECTION that match TYPES-TO-HIDE list."
+  (when section
+    (dolist (child (oref section children))
+      (when (memq (oref child type) types-to-hide)
+        (magit-section-hide child)))))
+
+(defun ai-debug--hide-empty-sections ()
+  "Hide empty sections in the current buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((count 0)
+          (max-iterations (if ai-debug-truncate-content 100 1000)))
+      (while (and (< count max-iterations) (re-search-forward "^" nil t))
+        (setq count (1+ count))
+        (when-let ((section (condition-case-unless-debug nil (magit-current-section) (error nil))))
+          (when (and (condition-case-unless-debug nil (eq (oref section type) 'ai-source-section) (error nil))
+                     (condition-case-unless-debug nil (oref section value) (error nil)))
+            (condition-case-unless-debug nil (magit-section-hide section) (error nil))))))))
+
 (defun ai-debug-show-context-debug (context)
     "Display CONTEXT in a visual magit-like interface.
 Creates a comprehensive debug view showing all AI context information
@@ -1126,11 +1146,9 @@ The interface provides expandable sections for detailed inspection."
                     (goto-char (point-min))
                     (let ((section (magit-current-section)))
                       (when section
-                        (magit-section-children-map
-                         (lambda (child)
-                           (when (memq (oref child type) '(ai-message-category ai-project-subsection ai-context-item ai-typed-struct ai-project-file ai-model-key-params ai-model-rest-params ai-model-role-mapping ai-model-full-config ai-ignore-hardcoded ai-ignore-global-files ai-ignore-gitignore ai-ignore-ai-ignore ai-ignore-aggregated))
-                             (magit-section-hide child)))
-                         section t)))))
+                        (ai-debug--hide-child-sections
+                         section
+                         '(ai-message-category ai-project-subsection ai-context-item ai-typed-struct ai-project-file ai-model-key-params ai-model-rest-params ai-model-role-mapping ai-model-full-config ai-ignore-hardcoded ai-ignore-global-files ai-ignore-gitignore ai-ignore-ai-ignore ai-ignore-aggregated))))))
               (error nil)))
 
           (pop-to-buffer buffer))
@@ -1241,24 +1259,13 @@ project context, and current buffer/selection information in expandable sections
               (goto-char (point-min))
               (let ((section (magit-current-section)))
                 (when section
-                  (magit-section-children-map
-                   (lambda (child)
-                     (when (memq (oref child type) '(ai-project-file ai-context-item ai-typed-struct))
-                       (magit-section-hide child)))
-                   section t)))))
+                  (ai-debug--hide-child-sections
+                   section
+                   '(ai-project-file ai-context-item ai-typed-struct))))))
           (error nil))
         ;; Hide empty sections with comprehensive error protection
         (condition-case-unless-debug nil
-            (save-excursion
-              (goto-char (point-min))
-              (let ((count 0)
-                    (max-iterations (if ai-debug-truncate-content 100 1000)))
-                (while (and (< count max-iterations) (re-search-forward "^" nil t))
-                  (setq count (1+ count))
-                  (when-let ((section (condition-case-unless-debug nil (magit-current-section) (error nil))))
-                    (when (and (condition-case-unless-debug nil (eq (oref section type) 'ai-source-section) (error nil))
-                               (condition-case-unless-debug nil (oref section value) (error nil)))  ; value is is-empty flag
-                      (condition-case-unless-debug nil (magit-section-hide section) (error nil)))))))
+            (ai-debug--hide-empty-sections)
           (error nil)))  ; Ignore errors in section hiding
 
       (pop-to-buffer buffer))
