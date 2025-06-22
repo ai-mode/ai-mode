@@ -652,6 +652,127 @@ with comprehensive statistics and safe content handling."
     (error
      (insert (propertize (format "[Error displaying source %s: %s]\n\n" source-name (error-message-string err)) 'face 'ai-debug-empty-source)))))
 
+(defun ai-debug--insert-ignore-patterns-section ()
+  "Insert file ignore patterns section with subsections for each source.
+Shows patterns from global hardcoded, global files, project .gitignore, and project .ai-ignore,
+followed by an aggregated result section."
+  (condition-case-unless-debug err
+      (let ((project-root (condition-case-unless-debug nil
+                            (ai-common--get-project-root)
+                            (error nil))))
+        (magit-insert-section (ai-ignore-patterns)
+          (magit-insert-heading
+            (propertize "File Ignore Patterns" 'face 'ai-debug-category-header))
+
+          ;; Global hardcoded patterns subsection
+          (let ((hardcoded-patterns (condition-case-unless-debug nil
+                                      (ai-common--get-global-hardcoded-patterns)
+                                      (error nil))))
+            (magit-insert-section (ai-ignore-hardcoded)
+              (magit-insert-heading
+                (propertize (format "Global Hardcoded Patterns (%d patterns)"
+                                   (if hardcoded-patterns (length hardcoded-patterns) 0))
+                           'face 'ai-debug-context-type))
+
+              (if hardcoded-patterns
+                  (dolist (pattern-cons hardcoded-patterns)
+                    (let ((pattern (car pattern-cons))
+                          (is-negated (cdr pattern-cons)))
+                      (insert (format "  %s%s\n"
+                                     (if is-negated "!" "")
+                                     pattern))))
+                (insert (propertize "  (no patterns)\n" 'face 'ai-debug-empty-source)))
+              (insert "\n")))
+
+          ;; Global ignore files patterns subsection
+          (let ((global-file-patterns (condition-case-unless-debug nil
+                                        (ai-common--get-global-ignore-file-patterns)
+                                        (error nil))))
+            (magit-insert-section (ai-ignore-global-files)
+              (magit-insert-heading
+                (propertize (format "Global Ignore Files Patterns (%d patterns)"
+                                   (if global-file-patterns (length global-file-patterns) 0))
+                           'face 'ai-debug-context-type))
+
+              (if global-file-patterns
+                  (dolist (pattern-cons global-file-patterns)
+                    (let ((pattern (car pattern-cons))
+                          (is-negated (cdr pattern-cons)))
+                      (insert (format "  %s%s\n"
+                                     (if is-negated "!" "")
+                                     pattern))))
+                (insert (propertize "  (no patterns)\n" 'face 'ai-debug-empty-source)))
+              (insert "\n")))
+
+          ;; Project .gitignore patterns subsection
+          (when project-root
+            (let ((gitignore-patterns (condition-case-unless-debug nil
+                                        (ai-common--get-project-gitignore-patterns project-root)
+                                        (error nil))))
+              (magit-insert-section (ai-ignore-gitignore)
+                (magit-insert-heading
+                  (propertize (format "Project .gitignore Patterns (%d patterns)"
+                                     (if gitignore-patterns (length gitignore-patterns) 0))
+                             'face 'ai-debug-context-type))
+
+                (if gitignore-patterns
+                    (dolist (pattern-cons gitignore-patterns)
+                      (let ((pattern (car pattern-cons))
+                            (is-negated (cdr pattern-cons)))
+                        (insert (format "  %s%s\n"
+                                       (if is-negated "!" "")
+                                       pattern))))
+                  (insert (propertize "  (no patterns)\n" 'face 'ai-debug-empty-source)))
+                (insert "\n"))))
+
+          ;; Project .ai-ignore patterns subsection
+          (when project-root
+            (let ((ai-ignore-patterns (condition-case-unless-debug nil
+                                        (ai-common--get-project-ai-ignore-patterns project-root)
+                                        (error nil))))
+              (magit-insert-section (ai-ignore-ai-ignore)
+                (magit-insert-heading
+                  (propertize (format "Project .ai-ignore Patterns (%d patterns)"
+                                     (if ai-ignore-patterns (length ai-ignore-patterns) 0))
+                             'face 'ai-debug-context-type))
+
+                (if ai-ignore-patterns
+                    (dolist (pattern-cons ai-ignore-patterns)
+                      (let ((pattern (car pattern-cons))
+                            (is-negated (cdr pattern-cons)))
+                        (insert (format "  %s%s\n"
+                                       (if is-negated "!" "")
+                                       pattern))))
+                  (insert (propertize "  (no patterns)\n" 'face 'ai-debug-empty-source)))
+                (insert "\n"))))
+
+          ;; Aggregated patterns section
+          (when project-root
+            (let ((all-patterns (condition-case-unless-debug nil
+                                  (ai-common--get-all-ignore-patterns project-root)
+                                  (error nil))))
+              (magit-insert-section (ai-ignore-aggregated)
+                (magit-insert-heading
+                  (propertize (format "Aggregated All Patterns (%d patterns total)"
+                                     (if all-patterns (length all-patterns) 0))
+                             'face 'ai-debug-context-type))
+
+                (if all-patterns
+                    (progn
+                      (insert (propertize "  Pattern processing order (later patterns can override earlier ones):\n"
+                                         'face 'ai-debug-context-metadata))
+                      (dolist (pattern-cons all-patterns)
+                        (let ((pattern (car pattern-cons))
+                              (is-negated (cdr pattern-cons)))
+                          (insert (format "  %s%s\n"
+                                         (if is-negated "!" "")
+                                         pattern)))))
+                  (insert (propertize "  (no patterns)\n" 'face 'ai-debug-empty-source)))
+                (insert "\n"))))
+
+          (insert "\n")))
+    (error
+     (insert (propertize (format "[Error displaying ignore patterns: %s]\n\n" (error-message-string err)) 'face 'ai-debug-empty-source)))))
 
 (defun ai-debug--capitalize-category-name (name)
   "Capitalize and format category NAME for display.
@@ -954,6 +1075,9 @@ The interface provides expandable sections for detailed inspection."
               ;; Model Configuration Category (enhanced to use context)
               (ai-debug--insert-model-configuration context)
 
+              ;; File Ignore Patterns Category
+              (ai-debug--insert-ignore-patterns-section)
+
               ;; Buffer Context Category
               (magit-insert-section (ai-buffer-info)
                 (magit-insert-heading
@@ -1004,7 +1128,7 @@ The interface provides expandable sections for detailed inspection."
                       (when section
                         (magit-section-children-map
                          (lambda (child)
-                           (when (memq (oref child type) '(ai-message-category ai-project-subsection ai-context-item ai-typed-struct ai-project-file ai-model-key-params ai-model-rest-params ai-model-role-mapping ai-model-full-config))
+                           (when (memq (oref child type) '(ai-message-category ai-project-subsection ai-context-item ai-typed-struct ai-project-file ai-model-key-params ai-model-rest-params ai-model-role-mapping ai-model-full-config ai-ignore-hardcoded ai-ignore-global-files ai-ignore-gitignore ai-ignore-ai-ignore ai-ignore-aggregated))
                              (magit-section-hide child)))
                          section t)))))
               (error nil)))
