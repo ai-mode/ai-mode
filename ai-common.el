@@ -69,6 +69,13 @@ Fields specified here will not be included as attributes in the XML-like output.
   :type '(repeat (keyword :tag "Field to ignore"))
   :group 'ai-common)
 
+(defcustom ai-common--render-content-only-types '(agent-instructions action-context)
+  "List of struct types that should render only their content without XML tags.
+Structs with these types will render as plain text content instead of
+being wrapped in XML-like tags."
+  :type '(repeat (symbol :tag "Struct type"))
+  :group 'ai-common)
+
 (defun ai-common--add-to-global-memory (input)
   "Add INPUT to `ai--global-memo-context'.
 INPUT is a string representing the context or information to be remembered globally."
@@ -164,20 +171,24 @@ ADDITIONAL-PROPS are key-value pairs to be included in the resulting structure."
              additional-props))))
 
 
-(defun ai-common--make-file-context-from-file (file-path &rest additional-props)
+(defun ai-common--make-file-context-from-file (file-path &optional type source &rest additional-props)
   "Create a file-context structure from FILE-PATH.
 The file must exist and be readable.
+TYPE specifies the structure type (defaults to 'file-context').
+SOURCE indicates where the context originated (defaults to 'external-file-content').
 ADDITIONAL-PROPS are key-value pairs to be included in the resulting structure."
   (unless (file-exists-p file-path)
     (error "File does not exist: %s" file-path))
   (unless (file-readable-p file-path)
     (error "File is not readable: %s" file-path))
 
-  (let ((content (with-temp-buffer
-                   (insert-file-contents file-path)
-                   (buffer-substring-no-properties (point-min) (point-max)))))
+  (let* ((content (with-temp-buffer
+                    (insert-file-contents file-path)
+                    (buffer-substring-no-properties (point-min) (point-max))))
+         (struct-type (or type 'file-context))
+         (struct-source (or source 'external-file-content)))
     (apply #'ai-common--make-typed-struct
-           content 'file-context 'external-file-content
+           content struct-type struct-source
            :file (expand-file-name file-path)
            :buffer (file-name-nondirectory file-path)
            :start-pos 1
@@ -246,12 +257,11 @@ Returns a plist with :type, :content, :timestamp, :source, :id fields and any ad
 
     base-plist))
 
-
 (defun ai-common--get-user-input ()
   "Create a plist structure based on user input via minibuffer."
   (let ((text (read-string "Enter instruction or context for AI: ")))
-    (ai-common--make-typed-struct text 'user-input 'user-input)))
-
+    (ai-common--make-typed-struct text 'user-input 'user-input
+                                  :render-ignore-fields '(:source))))
 
 (defun ai-common--make-additional-context (content &optional source)
   "Create a plist structure with type 'additional-context' from CONTENT.
@@ -315,6 +325,33 @@ Optional SOURCE parameter specifies the source of the context."
       :timestamp         ,ts
       :source            following-context
       :id                ,id)))
+
+
+(defun ai-common--make-action-object (action-type elements &optional source &rest additional-props)
+  "Create a typed action-object structure for AI operations.
+ACTION-TYPE is a symbol or string specifying the action type (e.g., 'complete', 'modify').
+If ACTION-TYPE is nil or empty, defaults to 'action-object'.
+ELEMENTS is a list of context elements to include in the action object.
+SOURCE indicates where the action object originated (optional).
+ADDITIONAL-PROPS are key-value pairs to be included in the resulting structure.
+
+Returns a plist with :type set to ACTION-TYPE-action-object format."
+  (let* ((action-type-str (cond
+                           ((null action-type) nil)
+                           ((and (stringp action-type) (string-empty-p action-type)) nil)
+                           ((symbolp action-type) (symbol-name action-type))
+                           (t action-type)))
+         (object-type (if action-type-str
+                          (intern (format "%s-action-object" action-type-str))
+                        'action-object))
+         (source-val (or source 'contextual-action)))
+    (apply #'ai-common--make-typed-struct
+           elements
+           object-type
+           source-val
+           :render-ignore-fields '(:source)
+           additional-props)))
+
 
 (defun ai-common--add-to-context-pool (item)
   "Add ITEM (plist-structure) to `ai-common--context-pool`."
@@ -394,95 +431,17 @@ If ITEM is a plist, return an XML element with attributes and content."
     ;; plist → (tag-name attrs content)
     (let* ((tag-name (plist-get item :type))
            (content  (plist-get item :content))
+           (struct-ignore-fields (plist-get item :render-ignore-fields))
+           (all-ignore-fields (append ai-common--render-ignore-fields
+                                      struct-ignore-fields
+                                      '(:type :content :rendered :render-ignore-fields)))
            (attrs    (cl-loop for (k v) on item by #'cddr
-                              ;; Exclude :type, :content, :rendered, and fields in ai-common--render-ignore-fields
-                              unless (memq k (append '(:type :content :rendered) ai-common--render-ignore-fields))
+                              unless (memq k all-ignore-fields)
                               collect (cons
                                        (substring (symbol-name k) 1)
                                        (ai-common--stringify v)))))
       (list tag-name attrs content))))
 
-(defun ai-common--render-tag-to-string (tag)
-  "Serialize TAG into an XML-like string.
-
-– If TAG is a symbol or keyword (e.g. `cursor` or `:cursor`), emits `<cursor/>`.
-– If TAG is a list of the form (name attrs content...), then:
-    • if attrs and content are both empty ⇒ `<name/>`
-    • otherwise ⇒ `<name attr=\"…\">content</name>`."
-  (cond
-   ;; 1) Symbol - self-closing
-   ((symbolp tag)
-    (let* ((raw  (symbol-name tag))
-           (name (if (and (> (length raw) 0)
-                          (eq (aref raw 0) ?:))
-                     (substring raw 1)
-                   raw)))
-      (format "<%s/>" name)))
-
-   ;; 2) List (name attrs content...) - either self-close or full tag
-   ((and (listp tag) (symbolp (car tag)))
-    (let* ((raw-name (symbol-name (car tag)))
-           (name     (if (and (> (length raw-name) 0)
-                               (eq (aref raw-name 0) ?:))
-                         (substring raw-name 1)
-                       raw-name))
-           (attrs    (or (cadr tag) '()))
-           (content  (cddr tag)))
-      (if (and (null attrs) (null content))
-          ;; No attributes and no content
-          (format "<%s/>" name)
-        ;; Attributes or content exist
-        (let ((attrs-str
-               (mapconcat
-                (lambda (a) (format " %s=\"%s\"" (car a) (cdr a)))
-                attrs
-                ""))
-              (inner-str
-               (mapconcat
-                (lambda (c)
-                  (if (and (listp c) (symbolp (car c)))
-                      (ai-common--render-tag-to-string c)
-                    (format "%s" c)))
-                content
-                "")))
-          (format "<%s%s>%s</%s>"
-                  name attrs-str inner-str name)))))
-
-   ;; 3) Anything else - error
-   (t
-    (error "Cannot render tag: %S" tag))))
-
-(defun ai-common--render-context-pool-as-string (context-pool)
-  "Group `ai-common--context-pool` by :source and return an entire XML-string."
-  (let ((groups nil))
-    ;; Gather groups in alist format (("region" . (item1 item2 …)) …)
-    (dolist (item (reverse context-pool))
-      (let* ((src   (ai-common--stringify (plist-get item :source)))
-             (entry (assoc src groups)))
-        (if entry
-            (setcdr entry (append (cdr entry) (list item)))
-          (push (cons src (list item)) groups))))
-    (setq groups (nreverse groups))
-    ;; Build an XML block for each group
-    (let ((xml-blocks nil))
-      (dolist (grp groups)
-        (let ((src   (car grp))
-              (elems (cdr grp)))
-          (let ((inner
-                 (mapconcat
-                  (lambda (itm)
-                    (let ((el (ai-common--make-xml-element-from-plist-or-symbol itm)))
-                      (concat "  " (ai-common--render-tag-to-string el))))
-                  elems
-                  "\n")))
-            (push
-             (concat "<additional-context source=\""
-                     src "\">\n"
-                     inner
-                     "\n</additional-context>")
-             xml-blocks))))
-      ;; Combine all blocks into a final string
-      (mapconcat #'identity (nreverse xml-blocks) "\n\n"))))
 
 (defun ai-common--render-struct-to-string (struct)
   "Render a typed structure STRUCT to an XML-like string.
@@ -512,41 +471,59 @@ Handles nested structures recursively."
                              (symbol-name type)
                            (format "%s" type))
                        "unknown"))
-           (content (plist-get struct :content))
-           (inner-content
-            (cond
-             ;; Content is string - use directly
-             ((stringp content) content)
-             ;; Content is a list of structures - render recursively
-             ((and (listp content) (not (null content)) (keywordp (car content)))
-              (ai-common--render-struct-to-string content))
-             ;; Content is a list of other things - render each separately
-             ((and (listp content) (not (null content)))
-              (mapconcat #'ai-common--render-struct-to-string
-                         content ""))
-             ;; Content is another nested structure
-             ((and content (not (stringp content)))
-              (ai-common--render-struct-to-string content))
-             ;; No content
-             (t "")))
-           (attrs (cl-loop for (k v) on struct by #'cddr
-                           ;; Exclude :type, :content, :rendered, and fields in ai-common--render-ignore-fields
-                           unless (memq k (append '(:type :content :rendered) ai-common--render-ignore-fields))
-                           collect (cons (substring (symbol-name k) 1)
-                                         (ai-common--stringify v)))))
+           (content (plist-get struct :content)))
 
-      ;; Output the tag with attributes and content
-      (if (and (string-empty-p inner-content) (null attrs))
-          ;; Self-closing tag if empty
-          (format "<%s/>" tag-name)
-        ;; Otherwise full tag with attributes and content
-        (format "<%s%s>%s</%s>"
-                tag-name
-                (mapconcat (lambda (attr)
-                            (format " %s=\"%s\"" (car attr) (cdr attr)))
-                          attrs "")
-                inner-content
-                tag-name))))
+      ;; Check if this type should render content only
+      (if (memq type ai-common--render-content-only-types)
+          ;; Render only content without XML tags
+          (cond
+           ((stringp content) content)
+           ((and (listp content) (not (null content)) (keywordp (car content)))
+            (ai-common--render-struct-to-string content))
+           ((and (listp content) (not (null content)))
+            (mapconcat #'ai-common--render-struct-to-string content ""))
+           ((and content (not (stringp content)))
+            (ai-common--render-struct-to-string content))
+           (t ""))
+
+        ;; Normal XML rendering
+        (let* ((inner-content
+                (cond
+                 ;; Content is string - use directly
+                 ((stringp content) content)
+                 ;; Content is a list of structures - render recursively
+                 ((and (listp content) (not (null content)) (keywordp (car content)))
+                  (ai-common--render-struct-to-string content))
+                 ;; Content is a list of other things - render each separately
+                 ((and (listp content) (not (null content)))
+                  (mapconcat #'ai-common--render-struct-to-string
+                             content ""))
+                 ;; Content is another nested structure
+                 ((and content (not (stringp content)))
+                  (ai-common--render-struct-to-string content))
+                 ;; No content
+                 (t "")))
+               (struct-ignore-fields (plist-get struct :render-ignore-fields))
+               (all-ignore-fields (append ai-common--render-ignore-fields
+                                          struct-ignore-fields
+                                          '(:type :content :rendered :render-ignore-fields)))
+               (attrs (cl-loop for (k v) on struct by #'cddr
+                               unless (memq k all-ignore-fields)
+                               collect (cons (substring (symbol-name k) 1)
+                                             (ai-common--stringify v)))))
+
+          ;; Output the tag with attributes and content
+          (if (and (string-empty-p inner-content) (null attrs))
+              ;; Self-closing tag if empty
+              (format "<%s/>" tag-name)
+            ;; Otherwise full tag with attributes and content
+            (format "<%s%s>%s</%s>"
+                    tag-name
+                    (mapconcat (lambda (attr)
+                                (format " %s=\"%s\"" (car attr) (cdr attr)))
+                              attrs "")
+                    inner-content
+                    tag-name))))))
 
    ;; List of structures
    ((listp struct)
@@ -783,10 +760,11 @@ Returns filtered list of paths."
 
     (nreverse filtered-paths)))
 
-(defun ai-common--get-filtered-project-files ()
+(defun ai-common--get-filtered-project-files (&optional relative-paths)
   "Get a list of all relevant files in the current project, filtered by .ai-ignore.
-  Returns a list of absolute file paths.
-  Requires Projectile to be loaded."
+If RELATIVE-PATHS is non-nil, returns relative paths from project root.
+Otherwise, returns absolute file paths.
+Requires Projectile to be loaded."
   (interactive)
   (let ((project-root (ai-common--get-project-root)))
     (if project-root
@@ -794,14 +772,17 @@ Returns filtered list of paths."
                (ignore-patterns (ai-common--read-ai-ignore-patterns project-root))
                (filtered-relative-paths (ai-common--filter-paths-by-patterns
                                          all-relative-paths ignore-patterns))
-               (absolute-file-paths nil))
-          ;; Convert filtered relative paths back to absolute paths,
-          ;; keeping only regular files (paths without trailing slashes).
+               (file-paths nil))
+          ;; Filter to only include regular files (paths without trailing slashes)
           (dolist (rel-path filtered-relative-paths)
             (unless (string-suffix-p "/" rel-path) ;; Exclude directories themselves
-              (push (expand-file-name rel-path project-root) absolute-file-paths)))
-          (nreverse absolute-file-paths))
+              (if relative-paths
+                  (push rel-path file-paths)
+                (push (expand-file-name rel-path project-root) file-paths))))
+          (nreverse file-paths))
       (message "Not in a Projectile project. Cannot get project files."))))
+
+
 
 (defun ai-common--test-get-filtered-project-files ()
   "Test function for `ai-common--get-filtered-project-files`.
@@ -829,7 +810,7 @@ Returns filtered list of paths."
 Each struct contains file path, content, and metadata.
 Returns a list of typed structs with :type 'project-file."
   (interactive)
-  (let ((project-root (ai-common--get-project-root()))
+  (let* ((project-root (ai-common--get-project-root))
         (file-structs nil))
     (if project-root
         (let ((filtered-files (ai-common--get-filtered-project-files)))
@@ -838,9 +819,7 @@ Returns a list of typed structs with :type 'project-file."
               (condition-case-unless-debug err
                   (let* ((relative-path (file-relative-name file-path project-root))
                          (file-struct (ai-common--make-file-context-from-file
-                                       file-path
-                                       :type 'project-file
-                                       :source 'project-scan
+                                       file-path 'file-content 'project-scan
                                        :relative-path relative-path
                                        :project-root project-root)))
                     (push file-struct file-structs))
@@ -858,6 +837,7 @@ Returns a list of typed structs with :type 'project-file."
     (dolist (struct file-structs)
       (ai-common--add-to-context-pool struct))
     (message "Added %d project files to context pool" (length file-structs))))
+
 
 (provide 'ai-common)
 

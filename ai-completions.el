@@ -287,7 +287,7 @@ STRATEGY may alter the completion behavior."
 (cl-defun ai-completions--update-candidates (buffer)
   "Update the list of candidates for BUFFER."
   (let* ((action-type ai-completions--current-action-type)
-         (config (ai--get-query-config-by-type action-type))
+         (config (ai--get-command-config-by-type action-type))
          (execution-model (ai-completions--get-current-model))
          (candidates-context (ai-completions--create-candidates-context))
          (external-contexts (when candidates-context (list candidates-context)))
@@ -453,7 +453,7 @@ STRATEGY may alter the completion behavior."
 (defun ai-completions--add-instruction (input)
   "Add an instruction INPUT to the current query."
   (interactive (list (read-string "Enter query instruction: ")))
-  (ai-common--add-query-instruction input)
+  (ai-common--add-to-context-pool (ai-common--make-typed-struct input 'user-instruction 'user-input))
   (when ai-completions--active
     (condition-case-unless-debug err
         (progn (ai-completions-mode 1)

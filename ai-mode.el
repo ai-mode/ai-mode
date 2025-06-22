@@ -82,12 +82,12 @@
   :group 'ai-mode
   :type 'string)
 
-(defcustom ai--query-type-prompt "Type of Query: "
-  "Prompt for selecting the type of request."
+(defcustom ai--command-prompt "Command or query: "
+  "Prompt for selecting the command."
   :type 'string
   :group 'ai-mode)
 
-(defcustom ai--change-backend-prompt "Select query backend: "
+(defcustom ai--change-execution-backend-prompt "Select execution backend: "
   "Prompt for selecting backend."
   :type 'string
   :group 'ai-mode)
@@ -142,7 +142,7 @@ Should be a function symbol that returns a string or nil."
                  (const :tag "Message only" message))
   :group 'ai)
 
-(defvar ai--progress-spinner-chars '("○" "◔" "◑" "◕" "●" "◕" "◑" "◔")
+(defvar ai--progress-spinner-chars '("○" "◔" "◑" "◕" "●" "○" "◔" "◑" "◕" "●")
   "Characters used for spinner animation in progress indicator.")
 
 (defvar-local ai--buffer-file-instructions (make-hash-table :test 'equal))
@@ -209,7 +209,7 @@ These files should contain instructions for how to format and apply results."
   :type 'string
   :group 'ai-mode)
 
-(defcustom ai--query-type-config-map
+(defcustom ai--commands-config-map
   '(("modify" . (:template "" :instructions nil :user-input t :result-action replace))
     ("generate code from selection" . (:instructions nil :result-action replace))
     ("generate code from user input" . (:instructions nil :user-input t :result-action insert-at-point :needs-buffer-context t))
@@ -226,21 +226,21 @@ These files should contain instructions for how to format and apply results."
     ("optimize" . (:instructions nil :result-action replace))
     ("spellcheck" . (:instructions nil :result-action replace)))
 
-  "An association list mapping AI query types to their configurations.
-Each entry is a pair: `(QUERY-TYPE . CONFIG-PLIST)`.
+  "An association list mapping AI commands to their configurations.
+Each entry is a pair: `(COMMAND . CONFIG-PLIST)`.
 
-`QUERY-TYPE` is a string (e.g., \"modify\", \"explain\").
+`COMMAND` is a string (e.g., \"modify\", \"explain\").
 `CONFIG-PLIST` is a property list with the following keys:
-- `:template` (string, optional): A template string for the query.
-- `:instructions` (string, optional): Specific instructions for the AI for this query type.
-- `:user-input` (boolean): `t` if the query requires additional user input.
+- `:template` (string, optional): A template string for the command.
+- `:instructions` (string, optional): Specific instructions for the AI for this command.
+- `:user-input` (boolean): `t` if the command requires additional user input.
 - `:action-type` (string, optional): The high-level action type (e.g., \"modify\", \"complete\") used for structuring the request.
 - `:result-action` (symbol): Specifies how the AI's response should be handled.
   Possible values: `show` (display in a buffer), `replace` (replace selection/buffer),
   `eval` (display and offer to evaluate), `insert-at-point` (insert at cursor).
 - `:needs-buffer-context` (boolean, optional): `t` if the full buffer content
   is required for context, even if a region is active."
-  :type '(alist :key-type (string :tag "Query Type")
+  :type '(alist :key-type (string :tag "Command")
                 :value-type (plist :tag "Format Specification"
                                    :options ((:template (string :tag "Template") :optional t)
                                              (:instructions (string :tag "Instructions") :optional t)
@@ -255,9 +255,9 @@ Each entry is a pair: `(QUERY-TYPE . CONFIG-PLIST)`.
   "Configuration for code completion."
   :group 'ai-mode)
 
-(defcustom ai--query-config
+(defcustom ai--command-config
   `(:instructions nil)
-  "Configuration for generic queries."
+  "Configuration for generic commands."
   :group 'ai-mode)
 
 (defvar ai-command-map
@@ -406,7 +406,7 @@ Each entry is a pair: `(QUERY-TYPE . CONFIG-PLIST)`.
   (message "Updating AI mode local actions instructions...")
 
   (with-current-buffer (current-buffer)
-    (let* ((actions (mapcar #'car ai--query-type-config-map))
+    (let* ((actions (mapcar #'car ai--commands-config-map))
            (actions (append actions ai-mode--base-additional-context-prompts-names))
            (actions (append actions ai--result-action-prompts-names))
            (root-path (ai-utils--get-buffer-root-path (current-buffer)))
@@ -434,7 +434,7 @@ Each entry is a pair: `(QUERY-TYPE . CONFIG-PLIST)`.
   (message "Updating AI mode global actions instructions...")
 
   (let* ((root-path (file-name-directory (locate-library "ai-mode")))
-         (actions (mapcar #'car ai--query-type-config-map))
+         (actions (mapcar #'car ai--commands-config-map))
          (actions (append actions ai-mode--base-additional-context-prompts-names))
          (actions (append actions ai--result-action-prompts-names))
          (instructions-table (make-hash-table :test 'equal)))
@@ -464,7 +464,7 @@ Each entry is a pair: `(QUERY-TYPE . CONFIG-PLIST)`.
 Optionally use FAIL-CALLBACK and specify a MODEL."
   (let* ((execution-model (if model model (ai--get-current-model)))
          (execution-backend (map-elt execution-model :execution-backend))
-         (context (ai--get-executions-context-for-query-type command :model execution-model)))
+         (context (ai--get-executions-context-for-command command :model execution-model)))
     (funcall execution-backend
              context
              execution-model
@@ -498,33 +498,33 @@ Returns the container name or nil if no specific container is needed."
    ((eq result-action 'insert-at-point) "complete")
    (t                                   nil)))
 
+
 (cl-defun ai--get-contextual-action-object (config &key preceding-context-size following-context-size)
   "Generate contextual action object based on CONFIG and optional context sizes PRECEDING-CONTEXT-SIZE and FOLLOWING-CONTEXT-SIZE."
   (let* ((action (map-elt config :action))
          (result-action (map-elt config :result-action))
-         (container-type (ai--get-container-type-by-result-action result-action))
-         (action-object-name (if container-type
-                                 (format "%s-action-object" container-type)
-                               "action-object")))
+         (container-type (ai--get-container-type-by-result-action result-action)))
 
     (if (equal container-type "complete")
-        (ai-common--render-container-from-elements
-         action-object-name
+        (ai-common--make-action-object
+         container-type
          (ai-common--assemble-completion-context
           :preceding-context-size preceding-context-size
-          :following-context-size following-context-size))
-      (ai-common--render-container-from-elements
-       action-object-name
-       (ai-common--assemble-edit-context)))))
+          :following-context-size following-context-size)
+         'contextual-action)
+      (ai-common--make-action-object
+       container-type
+       (ai-common--assemble-edit-context)
+       'contextual-action))))
 
 (defun ai--get-current-buffer-context ()
   "Get the additional context for the current buffer if enabled."
   (when ai--current-buffer-additional-context
     (ai-common--make-file-context-from-buffer)))
 
-(defun ai--should-include-current-buffer-content-context-p (config query-type full-context)
+(defun ai--should-include-current-buffer-content-context-p (config command full-context)
   "Determine if current-buffer-content-context should be included.
-CONFIG is the query configuration, QUERY-TYPE is the type of query being executed,
+CONFIG is the command configuration, COMMAND is the command being executed,
 and FULL-CONTEXT contains the complete context information.
 Returns t if context should be included, nil otherwise."
   (let* ((result-action (map-elt config :result-action))
@@ -539,8 +539,8 @@ Returns t if context should be included, nil otherwise."
 
 (defun ai--get-result-action-prompt (result-action context)
   "Get the prompt for RESULT-ACTION rendered with CONTEXT."
-  (let ((prompt-name (format "result_action_%s" (symbol-name result-action))))
-    (ai--get-rendered-action-prompt prompt-name context)))
+  (let ((instruction-name (format "result_action_%s" (symbol-name result-action))))
+    (ai--get-rendered-command-instructions instruction-name context)))
 
 (defun ai--get-user-input ()
   "Get user input using the configured function."
@@ -552,9 +552,9 @@ Returns t if context should be included, nil otherwise."
   "Process a single external context item ITEM for inclusion in execution context.
 Handles both plain contexts and typed structs, including nested structures."
   (cond
-   ;; Already a typed struct - render directly
+   ;; Already a typed struct - return as is
    ((and (listp item) (keywordp (car item)))
-    (ai-common--render-struct-to-string item))
+    item)
    ;; Plain string or other format
    (t
     (ai-common--make-typed-struct
@@ -562,20 +562,31 @@ Handles both plain contexts and typed structs, including nested structures."
      'additional-context
      'external-context))))
 
+
+
 (defun ai--get-full-project-context ()
   "Get project context by collecting all filtered project files.
 Returns a typed struct containing the project files context, or nil if no project is detected."
   (when-let* ((project-root (ai-common--get-project-root))
+              (files-list (ai-common--get-filtered-project-files t)) ; Request relative paths
               (project-files (ai-common--get-filtered-project-files-as-structs)))
     (when project-files
-      (let* ((processed-contexts project-files)
-             ;; (processed-contexts (mapcar #'ai--process-external-context-item project-files))
-             (files-struct (ai-common--make-typed-struct processed-contexts 'files 'project-files))
-             (project-struct (ai-common--make-typed-struct files-struct 'project nil
-                                                           :source "full-project"
-                                                           :root project-root)))
+      (let* ((files-list-content (mapconcat (lambda (file-path)
+                                              (format "- %s" file-path))
+                                            files-list "\n"))
+             (files-list-struct (ai-common--make-typed-struct
+                                files-list-content
+                                'files-list
+                                'project-scan
+                                :root project-root
+                                :count (length files-list)))
+             (files-struct (ai-common--make-typed-struct project-files 'files 'project-files))
+             (project-struct (ai-common--make-typed-struct
+                             (list files-list-struct files-struct)
+                             'project-context
+                             'project-indexer
+                             :root project-root)))
         project-struct))))
-
 
 (defun ai--get-project-context ()
   "Get project context based on `ai--project-context-mode` setting.
@@ -605,13 +616,13 @@ Allows user to select between different project context inclusion modes."
              selected-name
              (cdr (assoc selected-mode mode-descriptions)))))
 
-(cl-defun ai--get-execution-context (buffer config query-type &key
+(cl-defun ai--get-execution-context (buffer config command &key
                                             (preceding-context-size ai--current-precending-context-size)
                                             (following-context-size ai--current-forwarding-context-size)
                                             model
                                             (external-contexts nil))
   "Get full execution context for BUFFER.
-CONFIG specifies configuration, QUERY-TYPE indicates the query, and options for context sizes are PRECEDING-CONTEXT-SIZE and FOLLOWING-CONTEXT-SIZE.
+CONFIG specifies configuration, COMMAND indicates the command, and options for context sizes are PRECEDING-CONTEXT-SIZE and FOLLOWING-CONTEXT-SIZE.
 EXTERNAL-CONTEXTS is an optional list of additional context structs to include.
 Each context should be a plist with :type, :content, and other metadata."
   (with-current-buffer buffer
@@ -625,65 +636,58 @@ Each context should be a plist with :type, :content, and other metadata."
            (model-context (ai-utils--get-model-context model))
            (full-context (append completion-context buffer-context model-context))
 
-           (basic-file-prompt (ai-common--make-typed-struct
-                               (ai--get-rendered-action-prompt "basic" full-context)
+           (basic-instructions (ai-common--make-typed-struct
+                               (ai--get-rendered-command-instructions "basic" full-context)
                                'agent-instructions
                                'basic-prompt))
 
            (file-metadata-context (ai-common--make-typed-struct
-                                   (ai--get-rendered-action-prompt "_file_metadata" full-context)
-                                   'additional-context
+                                   (ai--get-rendered-command-instructions "_file_metadata" full-context)
+                                   'file-metadata
                                    'file-metadata))
 
-           (action-file-prompt (ai-common--make-typed-struct
-                                (ai--get-rendered-action-prompt query-type full-context)
+           (command-instructions (ai-common--make-typed-struct
+                                (ai--get-rendered-command-instructions command full-context)
                                 'agent-instructions
-                                'action-specific-prompt))
+                                'command-specific-instructions))
 
-           (action-examples-prompt (ai-common--make-typed-struct
-                                    (ai--get-rendered-action-prompt (format "%s-examples" query-type) full-context)
+           (command-examples-instructions (ai-common--make-typed-struct
+                                    (ai--get-rendered-command-instructions (format "%s-examples" command) full-context)
                                     'agent-instructions
-                                    'action-examples))
+                                    'command-examples))
 
-           (action-type-object-prompt (ai-common--make-typed-struct
-                                       (ai--get-action-type-object-prompt (ai--get-action-type-for-config config) full-context)
+           (action-type-object-instructions (ai-common--make-typed-struct
+                                       (ai--get-action-type-object-instructions (ai--get-action-type-for-config config) full-context)
                                        'agent-instructions
                                        'action-object-rules))
 
-           (result-action-prompt (let ((result-action (map-elt config :result-action)))
+           (result-action-instructions (let ((result-action (map-elt config :result-action)))
                                    (when result-action
                                      (ai-common--make-typed-struct
                                       (ai--get-result-action-prompt result-action full-context)
                                       'agent-instructions
                                       'result-action-format))))
 
-           (action-config-prompt (when-let ((instructions (map-elt config :instructions)))
+           (config-instructions (when-let ((instructions (map-elt config :instructions)))
                                    (ai-common--make-typed-struct instructions 'agent-instructions 'config-instructions)))
 
            (additional-context
             (when-let ((context-pool (ai-common--get-context-pool)))
               (when context-pool
-                (let ((context-pool-content (ai-common--render-container-from-elements "additional-context" context-pool '(("source" . "context-pool")))))
-                  (when context-pool-content
-                    (ai-common--make-typed-struct context-pool-content 'additional-context 'context-pool))))))
+                (ai-common--make-typed-struct context-pool 'additional-context 'context-pool))))
 
            (external-contexts-structs
             (when external-contexts
               (let ((processed-contexts (mapcar #'ai--process-external-context-item external-contexts)))
-                (ai-common--make-typed-struct
-                 (ai-common--render-container-from-elements "additional-context" processed-contexts '(("source" . "external-context")))
-                 'additional-context
-                 'external-context
-                 :rendered t))))
+                (ai-common--make-typed-struct processed-contexts 'additional-context 'external-context))))
 
            (project-context
             (ai--get-project-context))
 
            (current-buffer-content-context
-            (when (ai--should-include-current-buffer-content-context-p config query-type full-context)
+            (when (ai--should-include-current-buffer-content-context-p config command full-context)
               (when-let ((context (ai--get-current-buffer-context)))
-                (when-let ((rendered-context (ai-common--render-struct-to-string context)))
-                  (ai-common--make-typed-struct rendered-context 'additional-context 'current-buffer-content)))))
+                (ai-common--make-typed-struct context 'additional-context 'current-buffer-content))))
 
            (user-input (when (map-elt config :user-input)
                          (let ((input-text (ai--get-user-input)))
@@ -691,21 +695,19 @@ Each context should be a plist with :type, :content, and other metadata."
                            ;; then stop the execution of the command immediately.
                            (unless input-text
                              (user-error "User input cancelled."))
-                           (let ((user-input-struct (ai-common--make-typed-struct
-                                                     (ai-utils--render-template input-text full-context)
-                                                     'user-input
-                                                     'user-input)))
-                             (ai-common--make-typed-struct
-                              (ai-common--render-struct-to-string user-input-struct)
-                              'user-input
-                              'user-input)))))
+                           (let ((user-input-struct
+                                  (ai-common--make-typed-struct
+                                   (ai-utils--render-template input-text full-context)
+                                   'user-input
+                                   'user-input
+                                   :render-ignore-fields '(:source))))
+                             user-input-struct))))
 
-           (query-struct (when-let ((query-text (map-elt config :query)))
-                           (let ((query-struct (ai-common--make-typed-struct query-text 'user-input 'config-query)))
+           (command-struct (when-let ((command-text (map-elt config :command)))
                              (ai-common--make-typed-struct
-                              (ai-common--render-struct-to-string query-struct)
+                              (ai-utils--render-template command-text full-context)
                               'user-input
-                              'config-query))))
+                              'config-command)))
 
            (rendered-action-context (ai-common--make-typed-struct
                                      (ai--get-contextual-action-object
@@ -718,26 +720,17 @@ Each context should be a plist with :type, :content, and other metadata."
            (global-system-prompts-context
             (when-let ((global-system-prompts (ai-common--get-global-system-prompts)))
               (when global-system-prompts
-                (ai-common--make-typed-struct
-                 (ai-common--render-container-from-elements "agent-instructions" global-system-prompts '(("source" . "global-system-prompts")))
-                 'agent-instructions
-                 'global-system-prompts))))
+                (ai-common--make-typed-struct global-system-prompts 'agent-instructions 'global-system-prompts))))
 
            (global-memory-context
             (when-let ((global-memory (ai-common--get-global-memory)))
               (when global-memory
-                (ai-common--make-typed-struct
-                 (ai-common--render-container-from-elements "additional-context" global-memory '(("source" . "global-memory")))
-                 'additional-context
-                 'global-memory))))
+                (ai-common--make-typed-struct global-memory 'additional-context 'global-memory))))
 
            (buffer-bound-prompts-context
             (when-let ((buffer-bound-prompts (ai-common--get-buffer-bound-prompts)))
               (when buffer-bound-prompts
-                (ai-common--make-typed-struct
-                 (ai-common--render-container-from-elements "agent-instructions" buffer-bound-prompts '(("source" . "buffer-bound-prompts")))
-                 'agent-instructions
-                 'buffer-bound-prompts))))
+                (ai-common--make-typed-struct buffer-bound-prompts 'agent-instructions 'buffer-bound-prompts))))
 
            (messages
             (append
@@ -746,119 +739,119 @@ Each context should be a plist with :type, :content, and other metadata."
                (cl-remove-if
                 #'null
                 (append
-                 (list basic-file-prompt
-                       action-type-object-prompt
+                 (list basic-instructions
+                       action-type-object-instructions
                        global-system-prompts-context
                        global-memory-context
-                       action-file-prompt
+                       command-instructions
                        file-metadata-context
                        current-buffer-content-context
-                       action-config-prompt
-                       result-action-prompt
+                       config-instructions
+                       result-action-instructions
                        additional-context
                        external-contexts-structs
                        project-context
                        buffer-bound-prompts-context
-                       action-examples-prompt
+                       command-examples-instructions
                        rendered-action-context
                        user-input
-                       query-struct))))))
+                       command-struct))))))
 
            (messages (ai-utils-filter-non-empty-content messages))
 
-           (_ (ai-utils-write-context-to-prompt-buffer-debug messages))
+           (_ (ai-utils-write-context-to-prompt-buffer messages))
 
            (full-context (append full-context `(:messages ,messages))))
 
       full-context)))
 
-(defun ai--get-local-query-prompt (query-type)
-  "Return instruction for QUERY-TYPE from buffer-local hash table as a string."
-  (gethash query-type ai--buffer-file-instructions))
+(defun ai--get-local-command-instructions (command)
+  "Return instruction for COMMAND from buffer-local hash table as a string."
+  (gethash command ai--buffer-file-instructions))
 
-(defun ai--get-default-action-prompt (query-type)
-  "Return instruction for QUERY-TYPE from global actions hash table as a string."
-  (gethash query-type ai-mode--actions-instructions))
+(defun ai--get-default-command-instructions (command)
+  "Return instruction for COMMAND from global actions hash table as a string."
+  (gethash command ai-mode--actions-instructions))
 
-(defun ai--get-action-prompt (query-type)
-  "Return buffer-specific instructions for QUERY-TYPE if available.
+(defun ai--get-command-instructions (command)
+  "Return buffer-specific instructions for COMMAND if available.
 If not available and `ai--global-prompts-enabled' is non-nil,
-return the global instruction from `ai--get-default-action-prompt'."
-  (or (ai--get-local-query-prompt query-type)
+return the global instruction from `ai--get-default-command-instructions'."
+  (or (ai--get-local-command-instructions command)
       (when ai--global-prompts-enabled
-        (ai--get-default-action-prompt query-type))))
+        (ai--get-default-command-instructions command))))
 
-(defun ai--get-rendered-action-prompt (query-type context)
-  "Get prompt for QUERY-TYPE, render it with CONTEXT, and return the result.
-If no prompt is found for QUERY-TYPE, returns nil."
-  (when-let* ((prompt-content (ai--get-action-prompt query-type)))
-    (ai-utils--render-template prompt-content context)))
+(defun ai--get-rendered-command-instructions (command context)
+  "Get instructions for COMMAND, render it with CONTEXT, and return the result.
+If no instructions are found for COMMAND, returns nil."
+  (when-let* ((instructions-content (ai--get-command-instructions command)))
+    (ai-utils--render-template instructions-content context)))
 
-(defun ai--get-action-type-object-prompt (action-type context)
-  "Get the prompt for ACTION-TYPE rendered with CONTEXT."
-  (ai--get-rendered-action-prompt (format "%s_action_type_object" action-type) context))
+(defun ai--get-action-type-object-instructions (action-type context)
+  "Get the instructions for ACTION-TYPE rendered with CONTEXT."
+  (ai--get-rendered-command-instructions (format "%s_action_type_object" action-type) context))
 
-(defun ai--get-query-config-by-type (query-type &optional default-result-action)
-  "Get query config by QUERY-TYPE, applying DEFAULT-RESULT-ACTION for unknown types."
-  (if-let (config (cdr (assoc query-type ai--query-type-config-map)))
-      (append config `(:action ,query-type))
-    (if (string= query-type "complete")
+(defun ai--get-command-config-by-type (command &optional default-result-action)
+  "Get command config by COMMAND, applying DEFAULT-RESULT-ACTION for unknown commands."
+  (if-let (config (cdr (assoc command ai--commands-config-map)))
+      (append config `(:action ,command))
+    (if (string= command "complete")
         ai--completion-config
-      (let ((base-config (append ai--query-config `(:query ,query-type))))
+      (let ((base-config (append ai--command-config `(:command ,command))))
         (if default-result-action
             (append base-config `(:result-action ,default-result-action))
           base-config)))))
 
-(cl-defun ai--get-executions-context-for-query-type (query-type &key (model nil) (default-result-action nil) (external-contexts nil))
-  "Get execution context for QUERY-TYPE with optional MODEL, DEFAULT-RESULT-ACTION, and EXTERNAL-CONTEXTS.
+(cl-defun ai--get-executions-context-for-command (command &key (model nil) (default-result-action nil) (external-contexts nil))
+  "Get execution context for COMMAND with optional MODEL, DEFAULT-RESULT-ACTION, and EXTERNAL-CONTEXTS.
 EXTERNAL-CONTEXTS is a list of additional context structs to include in the execution context."
-  (let* ((config (ai--get-query-config-by-type query-type default-result-action))
-         (execution-context (ai--get-execution-context (current-buffer) config query-type :model model :external-contexts external-contexts)))
+  (let* ((config (ai--get-command-config-by-type command default-result-action))
+         (execution-context (ai--get-execution-context (current-buffer) config command :model model :external-contexts external-contexts)))
     execution-context))
 
 (defun ai-explain-code-region ()
   "Explain the selected code region and display the explanation in a help buffer."
   (interactive)
-  (ai--execute-context (ai--get-executions-context-for-query-type "explain") 'ai-utils--show-explain-help-buffer))
+  (ai--execute-context (ai--get-executions-context-for-command "explain") 'ai-utils--show-explain-help-buffer))
 
-(defun ai--get-query-type ()
-  "Prompt the user to select the type of request using `completing-read`."
+(defun ai--get-command ()
+  "Prompt the user to select the command using `completing-read`."
   (interactive)
-  (completing-read ai--query-type-prompt (mapcar #'car ai--query-type-config-map)))
+  (completing-read ai--command-prompt (mapcar #'car ai--commands-config-map)))
 
-(defun ai--get-informational-query-type ()
-  "Prompt the user to select an informational type of request, filtering by :result-action 'show'."
+(defun ai--get-informational-command ()
+  "Prompt the user to select an informational command, filtering by :result-action 'show'."
   (interactive)
-  (let* ((show-query-types
+  (let* ((show-commands
           (mapcar #'car
                   (cl-remove-if-not
                    (lambda (item)
                      (eq (map-elt (cdr item) :result-action) 'show))
-                   ai--query-type-config-map))))
-    (completing-read ai--query-type-prompt show-query-types nil nil nil nil)))
+                   ai--commands-config-map))))
+    (completing-read ai--command-prompt show-commands nil nil nil nil)))
 
-(defun ai--get-executable-query-type ()
-  "Prompt the user to select an executable type of request, filtering by :result-action 'eval'."
+(defun ai--get-executable-command ()
+  "Prompt the user to select an executable command, filtering by :result-action 'eval'."
   (interactive)
-  (let* ((eval-query-types
+  (let* ((eval-commands
           (mapcar #'car
                   (cl-remove-if-not
                    (lambda (item)
                      (eq (map-elt (cdr item) :result-action) 'eval))
-                   ai--query-type-config-map))))
-    (completing-read ai--query-type-prompt eval-query-types nil nil nil nil)))
+                   ai--commands-config-map))))
+    (completing-read ai--command-prompt eval-commands nil nil nil nil)))
 
-(defun ai--get-all-available-query-types ()
-  "Get all available query types including those from config and additional actions."
-  (let* ((config-types (mapcar #'car ai--query-type-config-map))
-         (additional-types '("complete"))
-         (all-types (append config-types additional-types)))
-    (delete-dups all-types)))
+(defun ai--get-all-available-commands ()
+  "Get all available commands including those from config and additional actions."
+  (let* ((config-commands (mapcar #'car ai--commands-config-map))
+         (additional-commands '("complete"))
+         (all-commands (append config-commands additional-commands)))
+    (delete-dups all-commands)))
 
-(defun ai--get-query-type-unrestricted ()
-  "Prompt the user to select any available query type without restrictions."
+(defun ai--get-command-unrestricted ()
+  "Prompt the user to select any available command without restrictions."
   (interactive)
-  (completing-read ai--query-type-prompt (ai--get-all-available-query-types) nil nil nil nil))
+  (completing-read ai--command-prompt (ai--get-all-available-commands) nil nil nil nil))
 
 (defun ai--set-execution-model (model)
   "Set the execution model and execute hooks.
@@ -872,11 +865,11 @@ MODEL is the model configuration to be set."
     (ai-mode-update-mode-line-info)))
 
 (defun ai--change-execution-backend (&optional model-name)
-  "Change query backend interactively, or use MODEL-NAME if given."
+  "Change command backend interactively, or use MODEL-NAME if given."
   (interactive)
   (let* ((models (mapcar (lambda (item) `(,(map-elt item :name) ,item)) (ai-mode--get-models)))
          (value (or model-name
-                    (completing-read ai--change-backend-prompt (mapcar #'car models))))
+                    (completing-read ai--change-execution-backend-prompt (mapcar #'car models))))
          (model (ai-utils--find-model-config-by-name value (ai-mode--get-models))))
 
     (message "Setup model: %s" (pp-to-string model))
@@ -910,63 +903,63 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
              :fail-callback wrapped-fail-callback)))
 
 (defun ai-show ()
-  "Execute query and show the response in a special buffer, filtering by show-compatible query types."
+  "Execute command and show the response in a special buffer, filtering by show-compatible commands."
   (interactive)
-  (let* ((query-type (ai--get-informational-query-type))
-         (context (ai--get-executions-context-for-query-type query-type :default-result-action 'show)))
+  (let* ((command (ai--get-informational-command))
+         (context (ai--get-executions-context-for-command command :default-result-action 'show)))
     (ai--execute-context context 'ai-utils--show-response-buffer)))
 
 (defun ai-execute ()
-  "Execute query and show the response for evaluation, filtering by eval-compatible query types."
+  "Execute command and show the response for evaluation, filtering by eval-compatible commands."
   (interactive)
-  (let* ((query-type (ai--get-executable-query-type))
-         (context (ai--get-executions-context-for-query-type query-type :default-result-action 'eval)))
+  (let* ((command (ai--get-executable-command))
+         (context (ai--get-executions-context-for-command command :default-result-action 'eval)))
     (ai--execute-context context 'ai-utils--show-and-eval-response)))
 
 
 (defun ai-perform ()
-  "Execute request and apply the result based on query type's specified result action or default to replace.
+  "Execute request and apply the result based on command's specified result action or default to replace.
    If result action is 'replace', it replaces the selected region or inserts in current buffer.
    If result action is 'show', it shows the response in a special buffer.
    If result action is 'eval', it shows the response and asks for permission to evaluate.
    If result action is 'insert-at-point', it inserts the response at the cursor position."
   (interactive)
-  (let* ((query-type (ai--get-query-type-unrestricted))
-         (context (ai--get-executions-context-for-query-type query-type :default-result-action 'replace))
-         (config (ai--get-query-config-by-type query-type 'replace))
+  (let* ((command (ai--get-command-unrestricted))
+         (context (ai--get-executions-context-for-command command :default-result-action 'replace))
+         (config (ai--get-command-config-by-type command 'replace))
          (result-action (map-elt config :result-action))
          (current-buffer (current-buffer))
          (cursor-position (point)))
     (cond
      ((eq result-action 'show)
-      ;; If the selected query type is meant to be shown, delegate
-      (message "Query type '%s' is informational. Displaying in a new buffer." query-type)
+      ;; If the selected command is meant to be shown, delegate
+      (message "Command '%s' is informational. Displaying in a new buffer." command)
       (ai--execute-context context 'ai-utils--show-response-buffer))
      ((eq result-action 'eval)
       ;; Show response and ask for permission to evaluate
-      (message "Query type '%s' will generate code for evaluation." query-type)
+      (message "Command '%s' will generate code for evaluation." command)
       (ai--execute-context context 'ai-utils--show-and-eval-response))
      ((eq result-action 'insert-at-point)
       ;; Insert at the cursor position captured when the command was invoked
-      (message "Query type '%s' will insert response at cursor position." query-type)
+      (message "Command '%s' will insert response at cursor position." command)
       (ai--execute-context context (ai-utils--create-insert-at-point-callback current-buffer cursor-position)))
      ((eq result-action 'replace)
       ;; Default replace behavior
       (ai--execute-context context (ai-utils--replace-region-or-insert-in-current-buffer)))
      (t
       ;; Fallback for unconfigured or new actions
-      (message "Unknown or unspecified result action for query type '%s'. Defaulting to replace." query-type)
+      (message "Unknown or unspecified result action for command '%s'. Defaulting to replace." command)
       (ai--execute-context context (ai-utils--replace-region-or-insert-in-current-buffer))))))
 
 (defun ai-perform-coordinator ()
   "Decide whether to continue the previous process of supplementation or to start a new one."
   (interactive)
-  (ai-completions--coordinator :action-type (ai--get-query-type-unrestricted) :strategy 'replace))
+  (ai-completions--coordinator :action-type (ai--get-command-unrestricted) :strategy 'replace))
 
 (defun ai-debug ()
   "Debug AI mode by printing region status and execution context."
   (interactive)
-  (ai-utils--show-context-debug (ai--get-executions-context-for-query-type (ai--get-query-type-unrestricted) :model (ai--get-current-model))))
+  (ai-utils--show-context-debug (ai--get-executions-context-for-command (ai--get-command-unrestricted) :model (ai--get-current-model))))
 
 (defun ai--get-current-model ()
   "Return the currently selected execution model or set a default if none is selected."
