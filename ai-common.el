@@ -63,6 +63,58 @@ across all interactions and buffers."
   :type 'string
   :group 'ai-common)
 
+(defcustom ai-common-global-ignore-patterns
+  '(".git/"
+    ".svn/"
+    ".hg/"
+    ".bzr/"
+    "_darcs/"
+    "CVS/"
+    "node_modules/"
+    ".npm/"
+    ".yarn/"
+    "bower_components/"
+    "__pycache__/"
+    "*.pyc"
+    "*.pyo"
+    "*.pyd"
+    ".venv/"
+    "venv/"
+    "env/"
+    ".env/"
+    "target/"
+    "build/"
+    "dist/"
+    ".gradle/"
+    ".idea/"
+    ".vscode/"
+    "*.log"
+    "*.tmp"
+    "*.temp"
+    "*.cache"
+    ".DS_Store"
+    "Thumbs.db"
+    "*.swp"
+    "*.swo"
+    "*~"
+    ".#*"
+    "#*#")
+  "Global hardcoded ignore patterns that are always applied.
+These patterns are used to prevent sensitive or irrelevant files
+from being accidentally included in AI context in any project.
+Includes common version control directories, build artifacts,
+temporary files, and IDE-specific files."
+  :type '(repeat string)
+  :group 'ai-common)
+
+(defcustom ai-common-global-ignore-files
+  (list (expand-file-name "~/.global-gitignore")
+        (expand-file-name "~/.global-ai-ignore"))
+  "List of global ignore files to be processed.
+These files contain patterns that apply to all projects."
+  :type '(repeat file)
+  :group 'ai-common)
+
 (defcustom ai-common--render-ignore-fields '(:id :timestamp)
   "List of plist keys (fields) to ignore when rendering a typed struct to a string.
 Fields specified here will not be included as attributes in the XML-like output."
@@ -633,16 +685,15 @@ Requires Projectile to be loaded and active."
   (when (fboundp 'projectile-project-root)
     (projectile-project-root)))
 
-(defun ai-common--read-ai-ignore-patterns (project-root)
-  "Read patterns from PROJECT-ROOT/.ai-ignore.
+(defun ai-common--read-ignore-patterns-from-file (file-path)
+  "Read patterns from FILE-PATH.
 Returns a list of cons cells: (PATTERN-STRING . IS-NEGATED-P).
 Each pattern string is kept as read from the file.
 Lines starting with '#' are comments and are ignored. Empty lines are also ignored."
-  (let ((ignore-file (expand-file-name ai-common-ignore-file-name project-root))
-        (patterns nil))
-    (when (file-exists-p ignore-file)
+  (when (file-exists-p file-path)
+    (let ((patterns nil))
       (with-temp-buffer
-        (insert-file-contents ignore-file)
+        (insert-file-contents file-path)
         (goto-char (point-min))
         (while (not (eobp))
           (let* ((line (buffer-substring (point) (line-end-position)))
@@ -652,8 +703,76 @@ Lines starting with '#' are comments and are ignored. Empty lines are also ignor
               (let* ((is-negated (string-prefix-p "!" trimmed-line))
                      (pattern (if is-negated (substring trimmed-line 1) trimmed-line)))
                 (push (cons pattern is-negated) patterns)))
-          (forward-line 1))))
-    (nreverse patterns))))
+          (forward-line 1)))
+      (nreverse patterns)))))
+
+(defun ai-common--read-ai-ignore-patterns (project-root)
+  "Read patterns from PROJECT-ROOT/.ai-ignore.
+Returns a list of cons cells: (PATTERN-STRING . IS-NEGATED-P).
+Each pattern string is kept as read from the file.
+Lines starting with '#' are comments and are ignored. Empty lines are also ignored."
+  (let ((ignore-file (expand-file-name ai-common-ignore-file-name project-root)))
+    (ai-common--read-ignore-patterns-from-file ignore-file)))
+
+(defun ai-common--get-global-hardcoded-patterns ()
+  "Get global hardcoded ignore patterns.
+Returns a list of cons cells: (PATTERN-STRING . IS-NEGATED-P).
+These patterns are never negated and come from `ai-common-global-ignore-patterns`."
+  (mapcar (lambda (pattern) (cons pattern nil)) ai-common-global-ignore-patterns))
+
+(defun ai-common--get-global-ignore-file-patterns ()
+  "Get patterns from global ignore files.
+Returns a list of cons cells: (PATTERN-STRING . IS-NEGATED-P).
+Reads patterns from files specified in `ai-common-global-ignore-files`."
+  (let ((all-patterns nil))
+    (dolist (global-file ai-common-global-ignore-files)
+      (when (file-exists-p global-file)
+        (setq all-patterns (append all-patterns
+                                   (ai-common--read-ignore-patterns-from-file global-file)))))
+    all-patterns))
+
+(defun ai-common--get-project-gitignore-patterns (project-root)
+  "Get patterns from PROJECT-ROOT/.gitignore.
+Returns a list of cons cells: (PATTERN-STRING . IS-NEGATED-P).
+Each pattern string is kept as read from the file."
+  (let ((gitignore-file (expand-file-name ".gitignore" project-root)))
+    (when (file-exists-p gitignore-file)
+      (ai-common--read-ignore-patterns-from-file gitignore-file))))
+
+(defun ai-common--get-project-ai-ignore-patterns (project-root)
+  "Get patterns from PROJECT-ROOT/.ai-ignore.
+Returns a list of cons cells: (PATTERN-STRING . IS-NEGATED-P).
+Each pattern string is kept as read from the file."
+  (ai-common--read-ai-ignore-patterns project-root))
+
+(defun ai-common--get-all-ignore-patterns (project-root)
+  "Get all ignore patterns from various sources.
+Returns a list of cons cells: (PATTERN-STRING . IS-NEGATED-P).
+Sources include:
+1. Global hardcoded patterns from `ai-common-global-ignore-patterns`
+2. Global ignore files from `ai-common-global-ignore-files`
+3. Project .gitignore file
+4. Project .ai-ignore file
+
+Patterns are processed in this order, with later patterns potentially
+overriding earlier ones via negation."
+  (let ((all-patterns nil))
+
+    ;; 1. Add global hardcoded patterns
+    (setq all-patterns (append all-patterns (ai-common--get-global-hardcoded-patterns)))
+
+    ;; 2. Add patterns from global ignore files
+    (setq all-patterns (append all-patterns (ai-common--get-global-ignore-file-patterns)))
+
+    ;; 3. Add patterns from project .gitignore
+    (when-let ((gitignore-patterns (ai-common--get-project-gitignore-patterns project-root)))
+      (setq all-patterns (append all-patterns gitignore-patterns)))
+
+    ;; 4. Add patterns from project .ai-ignore (highest priority)
+    (when-let ((ai-ignore-patterns (ai-common--get-project-ai-ignore-patterns project-root)))
+      (setq all-patterns (append all-patterns ai-ignore-patterns)))
+
+    all-patterns))
 
 (defun ai-common--pattern-to-regexp (pattern)
   "Convert a gitignore-style PATTERN to an Emacs Lisp regexp string.
@@ -726,7 +845,7 @@ Handles '*' (wildcard), '**' (recursive wildcard), '/' (directory separators), a
     (nreverse all-paths)))
 
 (defun ai-common--filter-paths-by-patterns (paths patterns)
-  "Filter PATHS based on PATTERNS from .ai-ignore.
+  "Filter PATHS based on PATTERNS from ignore files.
 PATHS should be relative paths from project root.
 PATTERNS is a list of (PATTERN . IS-NEGATED) pairs.
 Returns filtered list of paths."
@@ -761,7 +880,7 @@ Returns filtered list of paths."
     (nreverse filtered-paths)))
 
 (defun ai-common--get-filtered-project-files (&optional relative-paths)
-  "Get a list of all relevant files in the current project, filtered by .ai-ignore.
+  "Get a list of all relevant files in the current project, filtered by all ignore patterns.
 If RELATIVE-PATHS is non-nil, returns relative paths from project root.
 Otherwise, returns absolute file paths.
 Requires Projectile to be loaded."
@@ -769,7 +888,7 @@ Requires Projectile to be loaded."
   (let ((project-root (ai-common--get-project-root)))
     (if project-root
         (let* ((all-relative-paths (ai-common--get-all-project-paths project-root))
-               (ignore-patterns (ai-common--read-ai-ignore-patterns project-root))
+               (ignore-patterns (ai-common--get-all-ignore-patterns project-root))
                (filtered-relative-paths (ai-common--filter-paths-by-patterns
                                          all-relative-paths ignore-patterns))
                (file-paths nil))
@@ -796,7 +915,7 @@ Requires Projectile to be loaded."
       (message "No files found or not in a Projectile project."))))
 
 (defun ai-common--list-filtered-project-files-to-console ()
-  "List all relevant files in the current project, filtered by .ai-ignore, to the *Messages* buffer."
+  "List all relevant files in the current project, filtered by all ignore patterns, to the *Messages* buffer."
   (interactive)
   (let ((files (ai-common--get-filtered-project-files)))
     (if files
