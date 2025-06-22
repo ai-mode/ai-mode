@@ -65,6 +65,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'magit-section)
 (require 'ai-common)
 (require 'ai-utils)
@@ -109,8 +110,13 @@ When nil, full content is shown which may cause performance issues."
   :group 'ai-debug)
 
 (defface ai-debug-context-header
-  '((t :inherit magit-section-heading))
-  "Face for context section headers."
+  '((t :inherit magit-section-heading :foreground "brown"))
+  "Face for top-level context section headers."
+  :group 'ai-debug)
+
+(defface ai-debug-category-header
+  '((t :inherit magit-section-heading :foreground "brown" :weight bold))
+  "Face for main category headers."
   :group 'ai-debug)
 
 (defface ai-debug-context-type
@@ -202,7 +208,7 @@ Calls the appropriate refresh function based on the current buffer type."
   "Format metadata for CONTEXT-ITEM as a readable string.
 Extracts file, buffer, mode, position, and timestamp information
 from the context item and formats them into a human-readable string."
-  (condition-case nil
+  (condition-case-unless-debug nil
     (let ((metadata '()))
       (when-let ((file (plist-get context-item :file)))
         (push (format "file: %s" file) metadata))
@@ -220,11 +226,39 @@ from the context item and formats them into a human-readable string."
         (mapconcat #'identity (reverse metadata) " | ")))
     (error "metadata unavailable")))
 
+(defun ai-debug--format-display-value (value &optional truncate-strings)
+  "Format VALUE for display in debug buffer.
+If TRUNCATE-STRINGS is non-nil, apply string truncation based on `ai-debug-max-content-length`."
+  (cond
+   ((stringp value)
+    (if truncate-strings
+        (let* ((max-len (if ai-debug-truncate-content 100 1000))
+               (display-value (if (> (length value) max-len)
+                                  (substring value 0 max-len)
+                                value)))
+          (format "\"%s%s\"" display-value (if (> (length value) max-len) "..." "")))
+      (format "\"%s\"" value))) ; No truncation, just quote strings
+   ((numberp value) (number-to-string value))
+   ((booleanp value) (if value "t" "nil"))
+   ;; Handle quoted symbols, e.g., 'function-name
+   ((and (listp value) (eq (car value) 'quote) (symbolp (cadr value)))
+    (symbol-name (cadr value)))
+   ;; Handle keywords: remove leading colon for display
+   ((keywordp value)
+    (substring (symbol-name value) 1))
+   ;; Handle other symbols
+   ((symbolp value) (symbol-name value))
+   ;; Handle lists/vectors (e.g., role-mapping) - show count
+   ((listp value) (format "(%d items)" (length value)))
+   ((vectorp value) (format "[%d items]" (length value)))
+   ;; Fallback for other complex types (e.g. hash-tables, objects)
+   (t (prin1-to-string value))))
+
 (defun ai-debug--format-plist-as-table (plist &optional prefix)
   "Format PLIST as a readable table with optional PREFIX for keys.
 Converts property list into human-readable key-value pairs with
 proper formatting and truncation based on debug settings."
-  (condition-case nil
+  (condition-case-unless-debug nil
     (let ((result '())
           (prefix-str (or prefix ""))
           (count 0)
@@ -234,18 +268,7 @@ proper formatting and truncation based on debug settings."
               (value (cadr plist)))
           (when (keywordp key)
             (let ((key-str (concat prefix-str (substring (symbol-name key) 1)))
-                  (value-str (condition-case nil
-                               (cond
-                                ((stringp value)
-                                 (let ((max-len (if ai-debug-truncate-content 100 1000)))
-                                   (format "\"%s\"" (if (> (length value) max-len)
-                                                        (substring value 0 max-len)
-                                                      value))))
-                                ((numberp value) (number-to-string value))
-                                ((symbolp value) (symbol-name value))
-                                ((listp value) (format "(%d items)" (length value)))
-                                (t (format "%s" value)))
-                               (error "unprintable"))))
+                  (value-str (ai-debug--format-display-value value t))) ; Use helper with truncation
               (push (format "%-20s: %s" key-str value-str) result)))
           (setq plist (cddr plist))
           (setq count (1+ count))))
@@ -256,10 +279,10 @@ proper formatting and truncation based on debug settings."
   "Count non-empty items in ITEMS list.
 Used for statistics in debug interface headers. Handles various
 data types and structures safely with error protection."
-  (condition-case nil
+  (condition-case-unless-debug nil
     (if (listp items)
         (length (cl-remove-if (lambda (item)
-                                (condition-case nil
+                                (condition-case-unless-debug nil
                                   (or (null item)
                                       (and (listp item)
                                            (keywordp (car item))
@@ -277,7 +300,7 @@ data types and structures safely with error protection."
   "Check if SOURCE-DATA is empty.
 Handles various data types including lists, strings, and plists.
 Returns t if the source contains no meaningful data."
-  (condition-case nil
+  (condition-case-unless-debug nil
     (cond
      ((null source-data) t)
      ((and (listp source-data) (= (length source-data) 0)) t)
@@ -294,7 +317,7 @@ Returns t if the source contains no meaningful data."
 MAX-DEPTH limits recursion depth, CURRENT-DEPTH tracks current level.
 Prevents infinite recursion and handles various content types safely
 with comprehensive error handling and performance optimizations."
-  (condition-case err
+  (condition-case-unless-debug err
     (progn
       (let ((effective-max-depth (if ai-debug-truncate-content
                                      (min max-depth ai-debug-max-recursion-depth)
@@ -354,7 +377,7 @@ with comprehensive error handling and performance optimizations."
 PARENT-SECTION-NAME provides context for nested structures.
 Includes protection against infinite recursion and handles errors gracefully.
 Creates expandable sections for complex data structures."
-  (condition-case err
+  (condition-case-unless-debug err
     (progn
       (let ((max-level (if ai-debug-truncate-content 3 10)))
         (when (> level max-level)
@@ -364,13 +387,16 @@ Creates expandable sections for complex data structures."
       (cond
        ;; Handle individual typed struct (plist with type information)
        ((and (listp struct) (keywordp (car struct)))
-        (let* ((type (condition-case nil (plist-get struct :type) (error "unknown")))
-               (content (condition-case nil (plist-get struct :content) (error nil)))
-               (id (condition-case nil (plist-get struct :id) (error (format "id-%d" (random 10000)))))
-               (source (condition-case nil (plist-get struct :source) (error nil)))
-               (timestamp (condition-case nil (plist-get struct :timestamp) (error nil)))
-               (file (condition-case nil (plist-get struct :file) (error nil)))
-               (section-title (format "%s" (or type "unknown")))
+        (let* ((type (condition-case-unless-debug nil (plist-get struct :type) (error "unknown")))
+               (content (condition-case-unless-debug nil (plist-get struct :content) (error nil)))
+               (id (condition-case-unless-debug nil (plist-get struct :id) (error (format "id-%d" (random 10000)))))
+               (source (condition-case-unless-debug nil (plist-get struct :source) (error nil)))
+               (timestamp (condition-case-unless-debug nil (plist-get struct :timestamp) (error nil)))
+               (file (condition-case-unless-debug nil (plist-get struct :file) (error nil)))
+               ;; Use source as title if available and type is agent-instructions
+               (section-title (if (and source (eq type 'agent-instructions))
+                                  (format "%s" source)
+                                (format "%s" (or type "unknown"))))
                (metadata-parts '()))
 
           ;; Build metadata parts safely
@@ -391,9 +417,12 @@ Creates expandable sections for complex data structures."
                 (concat " " (propertize (format "(%s)" (mapconcat #'identity (reverse metadata-parts) " | "))
                                        'face 'ai-debug-context-metadata))))
 
-            ;; Insert content with recursion protection
+            ;; Insert content with proper rendering and recursion protection
             (when content
-              (ai-debug--safe-insert-content content ai-debug-max-recursion-depth 0)
+              (let ((rendered-content (condition-case-unless-debug nil
+                                        (ai-common--render-struct-to-string struct)
+                                        (error content))))
+                (ai-debug--safe-insert-content rendered-content ai-debug-max-recursion-depth 0))
               (insert "\n")))))
 
        ;; Handle list of typed structs with item limits
@@ -418,17 +447,21 @@ Creates expandable sections for complex data structures."
   "Insert a collapsible section for CONTEXT-ITEM at indentation LEVEL.
 Creates a magit-style expandable section with metadata and content.
 Provides comprehensive error handling and safe content insertion."
-  (condition-case err
+  (condition-case-unless-debug err
     (progn
       (let ((max-level (if ai-debug-truncate-content 3 10)))
         (when (> level max-level)
           (insert (propertize "  [Section too deeply nested - truncated]\n" 'face 'ai-debug-empty-source))
           (cl-return-from ai-debug--insert-context-section)))
 
-      (let* ((type (condition-case nil (plist-get context-item :type) (error "unknown")))
-             (content (condition-case nil (plist-get context-item :content) (error nil)))
-             (id (condition-case nil (plist-get context-item :id) (error (format "id-%d" (random 10000)))))
-             (section-title (format "%s" (or type "unknown")))
+      (let* ((type (condition-case-unless-debug nil (plist-get context-item :type) (error "unknown")))
+             (content (condition-case-unless-debug nil (plist-get context-item :content) (error nil)))
+             (id (condition-case-unless-debug nil (plist-get context-item :id) (error (format "id-%d" (random 10000)))))
+             (source (condition-case-unless-debug nil (plist-get context-item :source) (error nil)))
+             ;; Use source as title if available and type is agent-instructions
+             (section-title (if (and source (eq type 'agent-instructions))
+                                (format "%s" source)
+                              (format "%s" (or type "unknown"))))
              (metadata (ai-debug--format-context-metadata context-item)))
 
         (magit-insert-section (ai-context-item id)
@@ -438,7 +471,10 @@ Provides comprehensive error handling and safe content insertion."
               (concat " " (propertize (format "(%s)" metadata) 'face 'ai-debug-context-metadata))))
 
           (when content
-            (ai-debug--safe-insert-content content ai-debug-max-recursion-depth 0)
+            (let ((rendered-content (condition-case-unless-debug nil
+                                      (ai-common--render-struct-to-string context-item)
+                                      (error content))))
+              (ai-debug--safe-insert-content rendered-content ai-debug-max-recursion-depth 0))
             (insert "\n")))))
     (error
      (insert (propertize (format "[Error displaying section: %s]\n\n" (error-message-string err)) 'face 'ai-debug-empty-source)))))
@@ -447,7 +483,7 @@ Provides comprehensive error handling and safe content insertion."
   "Group CONTEXT-LIST by :source field preserving execution order.
 Returns an association list of (source-name . items-list) pairs.
 Handles large context lists efficiently with safety limits."
-  (condition-case nil
+  (condition-case-unless-debug nil
     (let ((source-groups '())
           (seen-sources (make-hash-table :test 'equal))
           (count 0)
@@ -456,10 +492,10 @@ Handles large context lists efficiently with safety limits."
       ;; Limit processing to avoid hangs
       (dolist (item (cl-subseq context-list 0 (min (length context-list) max-items)))
         (when (< count (* max-items 2))  ; Hard limit
-          (let* ((source (condition-case nil
+          (let* ((source (condition-case-unless-debug nil
                            (or (plist-get item :source) 'unknown)
                            (error 'unknown)))
-                 (source-key (condition-case nil
+                 (source-key (condition-case-unless-debug nil
                                (if (symbolp source) (symbol-name source) (format "%s" source))
                                (error "unknown"))))
 
@@ -482,7 +518,7 @@ Handles large context lists efficiently with safety limits."
   "Get project context as list of typed structs for debug display.
 Returns filtered project files as individual structs without container wrapping.
 Similar to `ai--get-project-context` but returns raw structs for debugging."
-  (condition-case nil
+  (condition-case-unless-debug nil
     (when-let ((project-files (ai-common--get-filtered-project-files-as-structs)))
       project-files)
     (error nil)))
@@ -493,7 +529,7 @@ Returns a list with unique absolute file paths only."
   (let ((seen-paths (make-hash-table :test 'equal))
         (unique-files '()))
     (dolist (file-struct project-files)
-      (let ((file-path (condition-case nil
+      (let ((file-path (condition-case-unless-debug nil
                          (plist-get file-struct :file)
                          (error nil))))
         (when file-path
@@ -510,15 +546,15 @@ Returns a list with unique absolute file paths only."
   "Insert a collapsible section for a single project FILE-STRUCT.
 Creates an expandable section showing individual project file content
 with filename in the header and absolute path in metadata."
-  (condition-case err
-    (let* ((file-path (condition-case nil (plist-get file-struct :file) (error "unknown")))
-           (file-size (condition-case nil (plist-get file-struct :file-size) (error 0)))
-           (timestamp (condition-case nil (plist-get file-struct :timestamp) (error nil)))
-           (content (condition-case nil (plist-get file-struct :content) (error nil)))
+  (condition-case-unless-debug err
+    (let* ((file-path (condition-case-unless-debug nil (plist-get file-struct :file) (error "unknown")))
+           (file-size (condition-case-unless-debug nil (plist-get file-struct :file-size) (error 0)))
+           (timestamp (condition-case-unless-debug nil (plist-get file-struct :timestamp) (error nil)))
+           (content (condition-case-unless-debug nil (plist-get file-struct :content) (error nil)))
            (file-name (if file-path (file-name-nondirectory file-path) "unknown"))
            ;; Use absolute path for consistency
            (absolute-path (if file-path (expand-file-name file-path) "unknown"))
-           (id (condition-case nil (plist-get file-struct :id) (error (format "file-%d" (random 10000)))))
+           (id (condition-case-unless-debug nil (plist-get file-struct :id) (error (format "file-%d" (random 10000)))))
            (metadata-parts '()))
 
       ;; Build metadata parts with absolute path
@@ -537,7 +573,10 @@ with filename in the header and absolute path in metadata."
                                    'face 'ai-debug-context-metadata))))
 
         (when content
-          (ai-debug--safe-insert-content content ai-debug-max-recursion-depth 0)
+          (let ((rendered-content (condition-case-unless-debug nil
+                                    (ai-common--render-struct-to-string file-struct)
+                                    (error content))))
+            (ai-debug--safe-insert-content rendered-content ai-debug-max-recursion-depth 0))
           (insert "\n"))))
     (error
      (insert (propertize (format "[Error displaying project file: %s]\n\n" (error-message-string err)) 'face 'ai-debug-empty-source)))))
@@ -546,9 +585,9 @@ with filename in the header and absolute path in metadata."
   "Insert a section for SOURCE-NAME with SOURCE-DATA and DESCRIPTION.
 Creates a collapsible section showing context source information
 with comprehensive statistics and safe content handling."
-  (condition-case err
+  (condition-case-unless-debug err
     (let* ((is-empty (ai-debug--is-empty-source source-data))
-           (total-count (condition-case nil
+           (total-count (condition-case-unless-debug nil
                           (cond
                            ((null source-data) 0)
                            ((and (listp source-data) (keywordp (car source-data))) 1)
@@ -583,15 +622,23 @@ with comprehensive statistics and safe content handling."
                                          (if ai-debug-truncate-content " - toggle truncation with C-c t" ""))
                                  'face 'ai-debug-empty-source)))))
 
-         ;; Single typed struct
+         ;; Single typed struct - render using ai-common--render-struct-to-string
          ((and (listp source-data) (keywordp (car source-data)))
-          (ai-debug--insert-typed-struct source-data 1 source-name))
+          (let ((rendered-content (condition-case-unless-debug nil
+                                    (ai-common--render-struct-to-string source-data)
+                                    (error source-data))))
+            (ai-debug--safe-insert-content rendered-content 1 0)
+            (insert "\n")))
 
-         ;; List of typed structs with safety limits
+         ;; List of typed structs with safety limits - render each element
          ((and (listp source-data) (> (length source-data) 0))
           (let ((item-count (min (length source-data) (if ai-debug-truncate-content 3 20))))
             (dotimes (i item-count)
-              (ai-debug--insert-typed-struct (nth i source-data) 1 source-name))
+              (let* ((item (nth i source-data))
+                     (rendered-item (condition-case-unless-debug nil
+                                      (ai-common--render-struct-to-string item)
+                                      (error item))))
+                (ai-debug--safe-insert-content rendered-item 1 0)))
             (when (> (length source-data) item-count)
               (insert (propertize (format "  [%d more items not shown%s]\n\n"
                                          (- (length source-data) item-count)
@@ -605,120 +652,352 @@ with comprehensive statistics and safe content handling."
     (error
      (insert (propertize (format "[Error displaying source %s: %s]\n\n" source-name (error-message-string err)) 'face 'ai-debug-empty-source)))))
 
+
+(defun ai-debug--capitalize-category-name (name)
+  "Capitalize and format category NAME for display.
+Converts names like 'agent-instructions' to 'AGENT INSTRUCTIONS'."
+  (let ((formatted-name (replace-regexp-in-string "-" " " (format "%s" name))))
+    (upcase formatted-name)))
+
+
+(defun ai-debug--insert-project-context-subsection (content subsection-name)
+  "Insert a subsection for project context CONTENT with SUBSECTION-NAME."
+  (magit-insert-section (ai-project-subsection subsection-name)
+    (magit-insert-heading
+      (propertize subsection-name 'face 'ai-debug-context-type))
+
+    ;; Handle the content based on its type
+    (cond
+     ;; Files list content
+     ((and (listp content) (keywordp (car content)) (eq (plist-get content :type) 'files-list))
+      (let ((files-content (plist-get content :content))
+            (files-count (plist-get content :count)))
+        (when files-content
+          (ai-debug--safe-insert-content
+           (format "Project files (%d total):\n%s" (or files-count 0) files-content)
+           ai-debug-max-recursion-depth 0)
+          (insert "\n"))))
+
+     ;; Files content (list of file structures)
+     ((and (listp content) (keywordp (car content)) (eq (plist-get content :type) 'files))
+      (let ((files-data (plist-get content :content)))
+        (when (and files-data (listp files-data))
+          (let* ((deduplicated-files (ai-debug--deduplicate-project-files files-data))
+                 (total-files (length deduplicated-files))
+                 (file-count (min total-files (if ai-debug-truncate-content 5 50))))
+            (insert (propertize (format "Project file contents (%d files):\n" total-files) 'face 'ai-debug-context-metadata))
+            (dotimes (i file-count)
+              (ai-debug--insert-project-file-section (nth i deduplicated-files)))
+            (when (> total-files file-count)
+              (insert (propertize (format "  [%d more files not shown%s]\n\n"
+                                         (- total-files file-count)
+                                         (if ai-debug-truncate-content " - toggle truncation with C-c t" ""))
+                                 'face 'ai-debug-empty-source)))))))
+
+     ;; Handle other or unexpected content types gracefully
+     (t
+      (insert (propertize (format "  [Unhandled project context subsection content type: %s]\n"
+                                 (type-of content))
+                         'face 'ai-debug-empty-source))
+      (when content
+        (ai-debug--safe-insert-content content ai-debug-max-recursion-depth 0))))
+
+    (insert "\n")))
+
+(defun ai-debug--insert-ai-mode-settings ()
+  "Insert AI Mode settings section with current configuration state."
+  (magit-insert-section (ai-settings)
+    (magit-insert-heading
+      (propertize "AI Mode Settings" 'face 'ai-debug-category-header))
+
+    ;; Core AI Mode Settings
+    (let ((settings `(("Extended Instructions" . ,(if (boundp 'ai--extended-instructions-enabled)
+                                                      ai--extended-instructions-enabled
+                                                      "unbound"))
+                      ("Global Prompts" . ,(if (boundp 'ai--global-prompts-enabled)
+                                              ai--global-prompts-enabled
+                                              "unbound"))
+                      ("Project File Instructions" . ,(if (boundp 'ai--project-file-instructions-enabled)
+                                                         ai--project-file-instructions-enabled
+                                                         "unbound"))
+                      ("Current Buffer Context" . ,(if (boundp 'ai--current-buffer-additional-context)
+                                                      ai--current-buffer-additional-context
+                                                      "unbound"))
+                      ("Project Context Mode" . ,(if (boundp 'ai--project-context-mode)
+                                                    ai--project-context-mode
+                                                    "unbound"))
+                      ("User Input Method" . ,(if (boundp 'ai--user-input-method)
+                                                 ai--user-input-method
+                                                 "unbound"))
+                      ("Progress Indicator" . ,(if (boundp 'ai--progress-indicator-enabled)
+                                                  ai--progress-indicator-enabled
+                                                  "unbound"))
+                      ("Progress Style" . ,(if (boundp 'ai--progress-indicator-style)
+                                              ai--progress-indicator-style
+                                              "unbound"))
+                      ("Preceding Context Size" . ,(if (boundp 'ai--current-precending-context-size)
+                                                      ai--current-precending-context-size
+                                                      "unbound"))
+                      ("Following Context Size" . ,(if (boundp 'ai--current-forwarding-context-size)
+                                                      ai--current-forwarding-context-size
+                                                      "unbound")))))
+
+      (dolist (setting settings)
+        (let ((name (car setting))
+              (value (cdr setting)))
+          (insert (format "%-25s: %s\n" name
+                         (ai-debug--format-display-value value nil)))))) ; Use helper, no truncation for settings
+    (insert "\n")))
+
+(defun ai-debug--insert-model-configuration (context)
+  "Insert detailed model configuration section with key parameters highlighted.
+Uses model information from CONTEXT's :model-context key if available."
+  (magit-insert-section (ai-model-config)
+    (magit-insert-heading
+      (propertize "Model Configuration" 'face 'ai-debug-category-header))
+
+    (let ((model (condition-case-unless-debug nil
+                   (plist-get context :model-context)
+                   (error nil))))
+      (if model
+          (progn
+            ;; Key parameters section - display important parameters separately
+            (magit-insert-section (ai-model-key-params)
+              (magit-insert-heading
+                (propertize "Key Parameters" 'face 'ai-debug-context-type))
+
+              (let ((key-params '((:name . "Model Name")
+                                  (:provider . "Provider")
+                                  (:version . "Model Version")
+                                  (:max-tokens . "Max Tokens")
+                                  (:temperature . "Temperature")
+                                  (:num-choices . "Number of Choices")
+                                  (:execution-backend . "Execution Backend")
+                                  (:setup-function . "Setup Function"))))
+                ;; Use cl-loop for clearer iteration over key-label pairs,
+                ;; which can sometimes resolve subtle variable binding issues.
+                (cl-loop for (param-key . label) in key-params
+                         do
+                         (let ((value (map-elt model param-key)))
+                           (when value
+                             (insert (format "%-20s: %s\n" label (ai-debug--format-display-value value nil)))))))
+              (insert "\n"))
+
+            ;; REST parameters section - show additional provider-specific parameters
+            (when-let ((rest-params (map-elt model :rest-params)))
+              (magit-insert-section (ai-model-rest-params)
+                (magit-insert-heading
+                  (propertize "Provider-specific Parameters" 'face 'ai-debug-context-type))
+
+                ;; Correctly iterate over plist key-value pairs
+                (if (plistp rest-params)
+                    (let ((temp-rest-params rest-params))
+                      (while temp-rest-params
+                        (let ((key (pop temp-rest-params))
+                              (value (pop temp-rest-params)))
+                          (insert (format "%-20s: %s\n"
+                                          (ai-debug--format-display-value key nil) ; Use helper for key
+                                          (ai-debug--format-display-value value nil)))))) ; Use helper for value
+                  ;; Fallback if rest-params is not a plist but exists
+                  (insert (format "%-20s: %s\n" "rest-params" (ai-debug--format-display-value rest-params nil)))) ; Use helper
+                (insert "\n")))
+
+            ;; Role mapping section
+            (when-let ((role-mapping (map-elt model :role-mapping)))
+              (magit-insert-section (ai-model-role-mapping)
+                (magit-insert-heading
+                  (propertize "Role Mapping" 'face 'ai-debug-context-type))
+
+                (dolist (mapping role-mapping)
+                  (let ((from (car mapping))
+                        (to (cdr mapping)))
+                    (insert (format "%-15s -> %s\n"
+                                    (ai-debug--format-display-value from nil) ; Use helper for 'from'
+                                    (ai-debug--format-display-value to nil))))) ; Use helper for 'to'
+                (insert "\n")))
+
+            ;; Complete configuration section (collapsed by default)
+            (magit-insert-section (ai-model-full-config)
+              (magit-insert-heading
+                (propertize "Complete Configuration (Raw)" 'face 'ai-debug-context-type))
+
+              (let ((model-details (ai-debug--format-plist-as-table (copy-sequence model))))
+                (dolist (detail model-details)
+                  (insert (format "%s\n" detail))))
+              (insert "\n")))
+
+        (insert (propertize "No model configuration found in context\n" 'face 'ai-debug-empty-source))))
+    (insert "\n")))
+
+(defun ai-debug--insert-messages-by-category (messages)
+  "Insert MESSAGES grouped by type/category in expandable sections.
+Creates organized categories for better navigation and understanding."
+  (let* ((category-groups (make-hash-table :test 'equal))
+         (category-order '()))
+
+    ;; Group messages by their type
+    (dolist (message messages)
+      (let* ((type (condition-case-unless-debug nil
+                       (plist-get message :type)
+                     (error 'unknown)))
+             (category-key (format "%s" type)))
+
+        ;; Track order of categories
+        (unless (gethash category-key category-groups)
+          (push category-key category-order))
+
+        ;; Add message to category
+        (let ((existing (gethash category-key category-groups)))
+          (puthash category-key (append existing (list message)) category-groups))))
+
+    ;; Insert each category with file counts in headers
+    (dolist (category (reverse category-order))
+      (let* ((items (gethash category category-groups))
+             (category-display-name (ai-debug--capitalize-category-name category))
+             (item-count (length items))
+             ;; Count files if this is project-context category
+             (file-count (when (string= category "project-context")
+                           (condition-case-unless-debug nil
+                               (let ((total-files 0))
+                                 (dolist (item items)
+                                   (let ((content (plist-get item :content)))
+                                     (when (and content (listp content))
+                                       (dolist (sub-element content)
+                                         (when (and (listp sub-element)
+                                                    (keywordp (car sub-element))
+                                                    (eq (plist-get sub-element :type) 'files))
+                                           (let ((files-data (plist-get sub-element :content)))
+                                             (when (and files-data (listp files-data))
+                                               (setq total-files (+ total-files (length files-data)))))))))
+                                   total-files)
+                                 (error 0)))))
+             ;; Format header with counts
+             (header-text (if file-count
+                              (format "%s (%d items, %d files)" category-display-name item-count file-count)
+                            (format "%s (%d items)" category-display-name item-count))))
+
+        (magit-insert-section (ai-message-category category)
+          (magit-insert-heading
+            (propertize header-text 'face 'ai-debug-category-header))
+
+          ;; Special handling for project-context type
+          (if (string= category "project-context")
+              ;; For project-context, decompose and show subsections
+              (dolist (item items)
+                (let ((content (plist-get item :content)))
+                  (when (and content (listp content))
+                    (dolist (sub-element content)
+                      (when (and (listp sub-element) (keywordp (car sub-element)))
+                        (let* ((sub-type (plist-get sub-element :type))
+                               (subsection-name (ai-debug--capitalize-category-name (symbol-name sub-type))))
+                          (ai-debug--insert-project-context-subsection sub-element subsection-name)))))))
+
+            ;; Normal handling for other categories - with child sections collapsed by default
+            (let ((max-items (if ai-debug-truncate-content 5 50)))
+              (dotimes (i (min item-count max-items))
+                (let ((item (nth i items)))
+                  (ai-debug--insert-context-section item 2)))
+
+              (when (and ai-debug-truncate-content (> item-count max-items))
+                (insert (propertize
+                         (format "  [%d more items not shown - toggle truncation with C-c t]\n\n"
+                                 (- item-count max-items))
+                         'face 'ai-debug-context-metadata))))))))))
+
 (defun ai-debug-show-context-debug (context)
-  "Display CONTEXT in a visual magit-like interface.
+    "Display CONTEXT in a visual magit-like interface.
 Creates a comprehensive debug view showing all AI context information
 including model configuration, buffer context, and messages.
 The interface provides expandable sections for detailed inspection."
-  (interactive)
-  (condition-case err
-    (let ((buffer (ai-debug--create-debug-buffer))
-          (messages (condition-case nil (plist-get context :messages) (error nil))))
+    (interactive)
+    (condition-case-unless-debug err
+        (let ((buffer (ai-debug--create-debug-buffer))
+              (messages (condition-case-unless-debug nil (plist-get context :messages) (error nil))))
 
-      (with-current-buffer buffer
-        (setq buffer-read-only nil)
+          (with-current-buffer buffer
+            (setq buffer-read-only nil)
 
-        ;; Store refresh function and args for later use
-        (setq-local ai-debug--refresh-function 'ai-debug-show-context-debug)
-        (setq-local ai-debug--refresh-args (list context))
+            ;; Store refresh function and args for later use
+            (setq-local ai-debug--refresh-function 'ai-debug-show-context-debug)
+            (setq-local ai-debug--refresh-args (list context))
 
-        ;; Insert main header
-        (magit-insert-section (ai-debug-root)
-          (magit-insert-heading
-            (propertize "AI Context Debug" 'face 'ai-debug-context-header))
-
-          ;; Insert model information with all parameters
-          (when-let ((model (condition-case nil (plist-get context :model) (error nil))))
-            (magit-insert-section (ai-model-info)
+            ;; Insert main header
+            (magit-insert-section (ai-debug-root)
               (magit-insert-heading
-                (propertize "Model Configuration" 'face 'ai-debug-context-type))
-              (if (stringp model)
-                  (insert (format "Model: %s\n" model))
-                (when (boundp 'ai-mode--execution-model)
-                  (let ((model-details (ai-debug--format-plist-as-table (copy-sequence ai-mode--execution-model))))
-                    (dolist (detail model-details)
-                      (insert (format "%s\n" detail))))))
-              (insert "\n")))
+                (propertize "AI Context Debug" 'face 'ai-debug-context-header))
 
-          ;; Insert complete buffer context with all parameters
-          (magit-insert-section (ai-buffer-info)
-            (magit-insert-heading
-              (propertize "Buffer Context" 'face 'ai-debug-context-type))
-            (let ((buffer-keys '(:buffer-name :buffer-language :buffer :file-path :project-root :file-name)))
-              (dolist (key buffer-keys)
-                (when-let ((value (condition-case nil (plist-get context key) (error nil))))
-                  (let ((key-str (substring (symbol-name key) 1))
-                        (value-str (if (bufferp value) (buffer-name value) (format "%s" value))))
-                    (insert (format "%-15s: %s\n" key-str value-str))))))
-            (insert "\n"))
+              ;; AI Mode Settings Category (new top-level section)
+              (ai-debug--insert-ai-mode-settings)
 
-          ;; Insert complete completion context with all parameters
-          (magit-insert-section (ai-completion-info)
-            (magit-insert-heading
-              (propertize "Completion Context" 'face 'ai-debug-context-type))
-            (let ((completion-keys '(:cursor-point :cursor-offset :region-content
-                                    :preceding-context-beginning :preceding-context-end
-                                    :preceding-context-content :preceding-context-size
-                                    :following-context-beginning :following-context-end
-                                    :following-context-content :following-context-size
-                                    :cursor-line-number :cursor-column-number)))
-              (dolist (key completion-keys)
-                (when-let ((value (condition-case nil (plist-get context key) (error nil))))
-                  (let ((key-str (substring (symbol-name key) 1))
-                        (value-str (condition-case nil
-                                     (cond
-                                      ((stringp value)
-                                       (let ((max-preview (if ai-debug-truncate-content 50 200)))
-                                         (if (> (length value) max-preview)
-                                             (format "\"%s...\" (%d chars)" (substring value 0 max-preview) (length value))
-                                           (format "\"%s\"" value))))
-                                      (t (format "%s" value)))
-                                     (error "unprintable"))))
-                    (insert (format "%-25s: %s\n" key-str value-str))))))
-            (insert "\n"))
+              ;; Model Configuration Category (enhanced to use context)
+              (ai-debug--insert-model-configuration context)
 
-          ;; Insert project context section with deduplication
-          (when-let ((project-context (ai-debug--get-project-context-structs)))
-            (ai-debug--insert-source-section
-             "Project Context"
-             project-context
-             "Filtered project files available to AI"))
+              ;; Buffer Context Category
+              (magit-insert-section (ai-buffer-info)
+                (magit-insert-heading
+                  (propertize "Buffer Context" 'face 'ai-debug-category-header))
+                (let ((buffer-keys '(:buffer-name :buffer-language :buffer :file-path :project-root :file-name)))
+                  (dolist (key buffer-keys)
+                    (when-let ((value (condition-case-unless-debug nil (plist-get context key) (error nil))))
+                      (let ((key-str (substring (symbol-name key) 1))
+                            (value-str (ai-debug--format-display-value value nil))) ; Use helper
+                        (insert (format "%-15s: %s\n" key-str value-str))))))
+                (insert "\n"))
 
-          ;; Insert messages grouped by source in execution order
-          (when messages
-            (let ((grouped-messages (ai-debug--group-context-by-source messages)))
-              (dolist (group grouped-messages)
-                (let ((source-name (car group))
-                      (items (cdr group)))
-                  (magit-insert-section (ai-message-group source-name)
-                    (magit-insert-heading
-                      (propertize (format "%s (%d items)"
-                                         (capitalize source-name)
-                                         (length items))
-                                 'face 'ai-debug-context-type))
+              ;; Completion Context Category
+              (magit-insert-section (ai-completion-info)
+                (magit-insert-heading
+                  (propertize "Completion Context" 'face 'ai-debug-category-header))
+                (let ((completion-keys '(:cursor-point :cursor-offset :region-content
+                                                       :preceding-context-beginning :preceding-context-end
+                                                       :preceding-context-content :preceding-context-size
+                                                       :following-context-beginning :following-context-end
+                                                       :following-context-content :following-context-size
+                                                       :cursor-line-number :cursor-column-number)))
+                  (dolist (key completion-keys)
+                    (when-let ((value (condition-case-unless-debug nil (plist-get context key) (error nil))))
+                      (let ((key-str (substring (symbol-name key) 1))
+                            (value-str (ai-debug--format-display-value value t))) ; Use helper with truncation
+                        (insert (format "%-25s: %s\n" key-str value-str))))))
+                (insert "\n"))
 
-                    (let ((max-items (if ai-debug-truncate-content 5 50)))
-                      (dolist (item (cl-subseq items 0 (min (length items) max-items)))
-                        (ai-debug--insert-context-section item 1))
-                      (when (and ai-debug-truncate-content (> (length items) max-items))
-                        (insert (propertize (format "[%d more items not shown - toggle truncation with C-c t]\n\n"
-                                                   (- (length items) max-items))
-                                           'face 'ai-debug-context-metadata))))))))))
+              ;; Messages Category (organized by type)
+              (when messages
+                (magit-insert-section (ai-messages-root)
+                  (magit-insert-heading
+                    (propertize (format "AI Messages (%d total)" (length messages))
+                                'face 'ai-debug-category-header))
 
-        (setq buffer-read-only t)
-        (goto-char (point-min))
-        (condition-case nil (magit-section-show-level-1-all) (error nil)))
+                  (ai-debug--insert-messages-by-category messages))))
 
-      (pop-to-buffer buffer))
-    (error
-     (message "Error in ai-debug-show-context-debug: %s" (error-message-string err)))))
+            (setq buffer-read-only t)
+            (goto-char (point-min))
+            ;; Show only level-1 sections, keep child sections collapsed by default
+            (condition-case-unless-debug nil
+                (progn
+                  (magit-section-show-level-1-all)
+                  ;; Hide child sections within categories to ensure they start collapsed
+                  (save-excursion
+                    (goto-char (point-min))
+                    (let ((section (magit-current-section)))
+                      (when section
+                        (magit-section-children-map
+                         (lambda (child)
+                           (when (memq (oref child type) '(ai-message-category ai-project-subsection ai-context-item ai-typed-struct ai-project-file ai-model-key-params ai-model-rest-params ai-model-role-mapping ai-model-full-config))
+                             (magit-section-hide child)))
+                         section t)))))
+              (error nil)))
+
+          (pop-to-buffer buffer))
+      (error
+       (message "Error in ai-debug-show-context-debug: %s" (error-message-string err)))))
 
 (defun ai-debug-show-sources ()
   "Display all AI context sources in a visual magit-like interface.
 Shows global prompts, memory, buffer-bound prompts, context pool,
 project context, and current buffer/selection information in expandable sections."
   (interactive)
-  (condition-case err
+  (condition-case-unless-debug err
     (let ((buffer (ai-debug--create-sources-buffer)))
       (with-current-buffer buffer
         (setq buffer-read-only nil)
@@ -728,25 +1007,25 @@ project context, and current buffer/selection information in expandable sections
         (setq-local ai-debug--refresh-args nil)
 
         ;; Safely collect sources with comprehensive error handling
-        (let* ((global-system-prompts (condition-case nil
+        (let* ((global-system-prompts (condition-case-unless-debug nil
                                           (ai-common--get-global-system-prompts)
                                         (error nil)))
-               (global-memory (condition-case nil
+               (global-memory (condition-case-unless-debug nil
                                   (ai-common--get-global-memory)
                                 (error nil)))
-               (buffer-bound-prompts (condition-case nil
+               (buffer-bound-prompts (condition-case-unless-debug nil
                                          (ai-common--get-buffer-bound-prompts)
                                        (error nil)))
-               (context-pool (condition-case nil
+               (context-pool (condition-case-unless-debug nil
                                  (ai-common--get-context-pool)
                                (error nil)))
-               (project-context (condition-case nil
+               (project-context (condition-case-unless-debug nil
                                     (ai-debug--get-project-context-structs)
                                   (error nil)))
-               (current-buffer-context (condition-case nil
+               (current-buffer-context (condition-case-unless-debug nil
                                            (unless (use-region-p) (ai--get-current-buffer-context))
                                          (error nil)))
-               (current-selection (condition-case nil
+               (current-selection (condition-case-unless-debug nil
                                       (when (use-region-p) (ai-common--make-snippet-from-region 'selection))
                                     (error nil)))
 
@@ -754,14 +1033,17 @@ project context, and current buffer/selection information in expandable sections
                (all-sources (list global-system-prompts global-memory buffer-bound-prompts
                                  context-pool project-context current-buffer-context current-selection))
                (total-sources (length (cl-remove-if #'null all-sources)))
-               (non-empty-sources (length (cl-remove-if #'ai-debug--is-empty-source all-sources))))
+               (non-empty-sources (length (cl-remove-if #'ai-debug--is-empty-source all-sources)))
+               (project-files-count (if (and project-context (listp project-context))
+                                        (length project-context)
+                                      0)))
 
           ;; Insert main header with counts
           (magit-insert-section (ai-sources-root)
             (magit-insert-heading
               (propertize (format "AI Context Sources [%d/%d active]"
                                  non-empty-sources total-sources)
-                         'face 'ai-debug-context-header))
+                         'face 'ai-debug-category-header))
 
             ;; Insert each source section with error protection
             (ai-debug--insert-source-section
@@ -785,9 +1067,9 @@ project context, and current buffer/selection information in expandable sections
              "Temporary context for current interaction session")
 
             (ai-debug--insert-source-section
-             "Project Context"
+             (format "Project Context (%d files)" project-files-count)
              project-context
-             "Filtered project files available to AI")
+             "Filtered project files and structure")
 
             (when current-buffer-context
               (ai-debug--insert-source-section
@@ -803,20 +1085,33 @@ project context, and current buffer/selection information in expandable sections
 
         (setq buffer-read-only t)
         (goto-char (point-min))
-        ;; Safely expand sections
-        (condition-case nil (magit-section-show-level-1-all) (error nil))
+        ;; Safely expand sections - show only top-level sources, hide their children
+        (condition-case-unless-debug nil
+          (progn
+            (magit-section-show-level-1-all)
+            ;; Hide child sections to ensure they start collapsed
+            (save-excursion
+              (goto-char (point-min))
+              (let ((section (magit-current-section)))
+                (when section
+                  (magit-section-children-map
+                   (lambda (child)
+                     (when (memq (oref child type) '(ai-project-file ai-context-item ai-typed-struct))
+                       (magit-section-hide child)))
+                   section t)))))
+          (error nil))
         ;; Hide empty sections with comprehensive error protection
-        (condition-case nil
+        (condition-case-unless-debug nil
             (save-excursion
               (goto-char (point-min))
               (let ((count 0)
                     (max-iterations (if ai-debug-truncate-content 100 1000)))
                 (while (and (< count max-iterations) (re-search-forward "^" nil t))
                   (setq count (1+ count))
-                  (when-let ((section (condition-case nil (magit-current-section) (error nil))))
-                    (when (and (condition-case nil (eq (oref section type) 'ai-source-section) (error nil))
-                               (condition-case nil (oref section value) (error nil)))  ; value is is-empty flag
-                      (condition-case nil (magit-section-hide section) (error nil)))))))
+                  (when-let ((section (condition-case-unless-debug nil (magit-current-section) (error nil))))
+                    (when (and (condition-case-unless-debug nil (eq (oref section type) 'ai-source-section) (error nil))
+                               (condition-case-unless-debug nil (oref section value) (error nil)))  ; value is is-empty flag
+                      (condition-case-unless-debug nil (magit-section-hide section) (error nil)))))))
           (error nil)))  ; Ignore errors in section hiding
 
       (pop-to-buffer buffer))
@@ -829,15 +1124,20 @@ Interactive command that displays the current AI context in a debug buffer.
 Provides comprehensive information about model configuration, context,
 and message structure for troubleshooting AI operations."
   (interactive)
-  (condition-case err
+  (condition-case-unless-debug err
     (when (bound-and-true-p ai-mode)
-      (let* ((query-type (condition-case nil
-                           (or (ai--get-query-type-unrestricted) "explain")
+      (let* ((query-type (condition-case-unless-debug nil
+                           (or (when (fboundp 'ai--get-command-unrestricted)
+                                 (ai--get-command-unrestricted))
+                               "explain")
                            (error "explain")))
-             (context (condition-case nil
-                          (ai--get-executions-context-for-query-type
-                           query-type
-                           :model (ai--get-current-model))
+             (context (condition-case-unless-debug nil
+                          (when (fboundp 'ai--get-executions-context-for-command)
+                            (ai--get-executions-context-for-command
+                             query-type
+                             :model (when (fboundp 'ai--get-current-model)
+                                      (ai--get-current-model))))
+
                         (error nil))))
         (if context
             (ai-debug-show-context-debug context)
@@ -850,16 +1150,24 @@ and message structure for troubleshooting AI operations."
 Shows completion context with restricted preceding and following context sizes.
 Useful for debugging completion performance and context truncation issues."
   (interactive)
-  (condition-case err
+  (condition-case-unless-debug err
     (when (bound-and-true-p ai-mode)
-      (let* ((context (condition-case nil
-                          (ai--get-execution-context
-                           (current-buffer)
-                           (ai--get-query-config-by-type "complete")
-                           "complete"
-                           :preceding-context-size ai-completions--current-precending-context-size
-                           :following-context-size ai-completions--current-forwarding-context-size
-                           :model (ai--get-current-model))
+      (let* ((context (condition-case-unless-debug nil
+
+                          (when (and (fboundp 'ai--get-execution-context)
+                                     (fboundp 'ai--get-command-config-by-type)
+                                     (fboundp 'ai--get-current-model))
+                            (ai--get-execution-context
+                             (current-buffer)
+                             (ai--get-command-config-by-type "complete")
+                             "complete"
+                             :preceding-context-size (if (boundp 'ai-completions--current-precending-context-size)
+                                                         ai-completions--current-precending-context-size
+                                                       20)
+                             :following-context-size (if (boundp 'ai-completions--current-forwarding-context-size)
+                                                        ai-completions--current-forwarding-context-size
+                                                      20)
+                             :model (ai--get-current-model)))
                         (error nil))))
         (if context
             (ai-debug-show-context-debug context)
@@ -872,16 +1180,19 @@ Useful for debugging completion performance and context truncation issues."
 Shows completion context including the entire buffer content.
 Useful for debugging issues with full-buffer completion strategies."
   (interactive)
-  (condition-case err
+  (condition-case-unless-debug err
     (when (bound-and-true-p ai-mode)
-      (let* ((context (condition-case nil
-                          (ai--get-execution-context
-                           (current-buffer)
-                           (ai--get-query-config-by-type "complete")
-                           "complete"
-                           :preceding-context-size nil
-                           :following-context-size nil
-                           :model (ai--get-current-model))
+      (let* ((context (condition-case-unless-debug nil
+                          (when (and (fboundp 'ai--get-execution-context)
+                                     (fboundp 'ai--get-command-config-by-type)
+                                     (fboundp 'ai--get-current-model))
+                            (ai--get-execution-context
+                             (current-buffer)
+                             (ai--get-command-config-by-type "complete")
+                             "complete"
+                             :preceding-context-size nil
+                             :following-context-size nil
+                             :model (ai--get-current-model)))
                         (error nil))))
         (if context
             (ai-debug-show-context-debug context)

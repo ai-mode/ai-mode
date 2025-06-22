@@ -637,9 +637,9 @@ Each context should be a plist with :type, :content, and other metadata."
            (full-context (append completion-context buffer-context model-context))
 
            (basic-instructions (ai-common--make-typed-struct
-                               (ai--get-rendered-command-instructions "basic" full-context)
-                               'agent-instructions
-                               'basic-prompt))
+                                (ai--get-rendered-command-instructions "basic" full-context)
+                                'agent-instructions
+                                'basic-prompt))
 
            (file-metadata-context (ai-common--make-typed-struct
                                    (ai--get-rendered-command-instructions "_file_metadata" full-context)
@@ -647,29 +647,29 @@ Each context should be a plist with :type, :content, and other metadata."
                                    'file-metadata))
 
            (command-instructions (ai-common--make-typed-struct
-                                (ai--get-rendered-command-instructions command full-context)
-                                'agent-instructions
-                                'command-specific-instructions))
+                                  (ai--get-rendered-command-instructions command full-context)
+                                  'agent-instructions
+                                  'command-specific-instructions))
 
            (command-examples-instructions (ai-common--make-typed-struct
-                                    (ai--get-rendered-command-instructions (format "%s-examples" command) full-context)
-                                    'agent-instructions
-                                    'command-examples))
+                                           (ai--get-rendered-command-instructions (format "%s-examples" command) full-context)
+                                           'agent-instructions
+                                           'command-examples))
 
            (action-type-object-instructions (ai-common--make-typed-struct
-                                       (ai--get-action-type-object-instructions (ai--get-action-type-for-config config) full-context)
-                                       'agent-instructions
-                                       'action-object-rules))
+                                             (ai--get-action-type-object-instructions (ai--get-action-type-for-config config) full-context)
+                                             'agent-instructions
+                                             'action-object-rules))
 
            (result-action-instructions (let ((result-action (map-elt config :result-action)))
-                                   (when result-action
-                                     (ai-common--make-typed-struct
-                                      (ai--get-result-action-prompt result-action full-context)
-                                      'agent-instructions
-                                      'result-action-format))))
+                                         (when result-action
+                                           (ai-common--make-typed-struct
+                                            (ai--get-result-action-prompt result-action full-context)
+                                            'agent-instructions
+                                            'result-action-format))))
 
            (config-instructions (when-let ((instructions (map-elt config :instructions)))
-                                   (ai-common--make-typed-struct instructions 'agent-instructions 'config-instructions)))
+                                  (ai-common--make-typed-struct instructions 'agent-instructions 'config-instructions)))
 
            (additional-context
             (when-let ((context-pool (ai-common--get-context-pool)))
@@ -761,9 +761,8 @@ Each context should be a plist with :type, :content, and other metadata."
 
            (_ (ai-utils-write-context-to-prompt-buffer messages))
 
-           (full-context (append full-context `(:messages ,messages))))
-
-      full-context)))
+           (result `(:messages ,messages :model-context ,model)))
+      result)))
 
 (defun ai--get-local-command-instructions (command)
   "Return instruction for COMMAND from buffer-local hash table as a string."
