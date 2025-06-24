@@ -116,9 +116,11 @@
   "Project context inclusion mode for AI execution context.
 Controls how project-wide context is included in AI requests:
 - `disabled': No project context is included
-- `full-project': Include all filtered project files as context"
+- `full-project': Include all filtered project files as context
+- `project-ai-summary': Include project files summary from cached index"
   :type '(choice (const :tag "Disabled" disabled)
-                 (const :tag "Full Project Files" full-project))
+                 (const :tag "Full Project Files" full-project)
+                 (const :tag "Project AI Summary from Index" project-ai-summary))
   :group 'ai)
 
 (defcustom ai--user-input-method 'ai-utils--user-input-minibuffer-with-preview
@@ -164,8 +166,19 @@ Should be a function symbol that returns a string or nil."
   :type 'integer
   :group 'ai-completions)
 
+(defcustom ai--indexing-call-timeout 0.1
+  "Timeout in seconds between individual file indexing calls during project summary generation.
+Set to 0 for no delay."
+  :type 'number
+  :group 'ai)
+
 (defvar ai-mode-change-model-hook nil
   "Hook that is run when execution model changes.")
+
+;; Project files summary index
+(defvar ai--project-files-summary-index (make-hash-table :test 'equal)
+  "Cached index of project files summary structures.
+Maps project root paths to lists of file summary structs.")
 
 ;; Progress indicator variables (buffer-local)
 (defvar-local ai--progress-timer nil
@@ -224,7 +237,9 @@ These files should contain instructions for how to format and apply results."
     ("simplify" . (:instructions nil :result-action replace))
     ("improve" . (:instructions nil :result-action replace))
     ("optimize" . (:instructions nil :result-action replace))
-    ("spellcheck" . (:instructions nil :result-action replace)))
+    ("spellcheck" . (:instructions nil :result-action replace))
+
+    ("index file" . (:instructions "Summarize the given file, extracting key functions, classes, and their purpose. Provide a concise summary in a <file-summary> tag. Include metadata from the original file-context struct as attributes on the <file-summary> tag (e.g., file, relative-path, file-size)." :result-action show)))
 
   "An association list mapping AI commands to their configurations.
 Each entry is a pair: `(COMMAND . CONFIG-PLIST)`.
@@ -275,6 +290,7 @@ Each entry is a pair: `(COMMAND . CONFIG-PLIST)`.
     (define-key keymap (kbd "m c") 'ai-common--clear-global-memory)
     (define-key keymap (kbd "a c") 'ai-common--add-to-context-pool)
     (define-key keymap (kbd "p s") 'ai--switch-project-context-mode)
+    (define-key keymap (kbd "p u") 'ai--update-project-files-summary-index)
     keymap)
   "Keymap for AI commands.")
 
@@ -562,7 +578,158 @@ Handles both plain contexts and typed structs, including nested structures."
      'additional-context
      'external-context))))
 
+(cl-defun ai--get-indexing-context (file-struct model)
+  "Create a simplified execution context for indexing a single FILE-STRUCT.
+MODEL is the current AI model.
+Returns a plist suitable for the backend, focusing only on the file content and instructions."
+  (let* ((instruction-command "index file")
+         (config (ai--get-command-config-by-type instruction-command))
+         ;; Minimal context needed to render command instructions
+         (minimal-full-context `(:model-context ,model
+                                 :file-path ,(plist-get file-struct :relative-path)
+                                 :buffer-language ,(plist-get file-struct :buffer-language)
+                                 :file-size ,(plist-get file-struct :file-size)))
+         (command-instructions (ai-common--make-typed-struct
+                                (ai--get-rendered-command-instructions instruction-command minimal-full-context)
+                                'agent-instructions
+                                'command-specific-instructions))
+         ;; We want the file-struct itself to be the main content for the AI to process
+         (file-content-as-user-input (ai-common--make-typed-struct file-struct 'user-input 'file-to-index))
+         (messages (list command-instructions file-content-as-user-input)))
 
+    ;; Filter out any null messages
+    (setq messages (ai-utils-filter-non-empty-content messages))
+
+    ;; Log to prompt buffer for debugging
+    (ai-utils-write-context-to-prompt-buffer messages)
+
+    `(:messages ,messages :model-context ,model)))
+
+(defun ai--index-completion-check (pending-count accumulated-summaries-ht target-buffer project-root)
+  "Check if indexing is complete and finalize the results.
+PENDING-COUNT is the number of remaining requests.
+ACCUMULATED-SUMMARIES-HT is the hash table containing completed summaries keyed by relative path.
+TARGET-BUFFER is the buffer where the indexing was initiated.
+PROJECT-ROOT is the root path of the project."
+  (setq ai--progress-message (format "Indexing project files (%d remaining)" pending-count))
+  (force-mode-line-update)
+
+  (when (zerop pending-count)
+    (ai--progress-stop target-buffer)
+    ;; Store the list of summary structs for this project root
+    (puthash project-root (hash-table-values accumulated-summaries-ht) ai--project-files-summary-index)
+    (message "Project files summary index updated with %d files for project '%s'."
+             (hash-table-count accumulated-summaries-ht)
+             project-root)))
+
+(defun ai--create-file-summarization-success-callback (accumulated-summaries-ht pending-count-ref target-buffer original-file-struct project-root)
+  "Create success callback for file summarization.
+ACCUMULATED-SUMMARIES-HT is a hash table to store summaries per file.
+PENDING-COUNT-REF is a cons cell containing the pending requests counter.
+TARGET-BUFFER is the buffer where indexing was initiated.
+ORIGINAL-FILE-STRUCT is the original file struct passed for summarization.
+PROJECT-ROOT is the root path of the project."
+  (lambda (messages)
+    (let ((summary-struct (ai-utils--get-message messages)))
+      (when (and summary-struct (listp summary-struct) (plist-get summary-struct :type))
+        (let* ((summary-content (plist-get summary-struct :content))
+               (file-path (plist-get original-file-struct :file))
+               (relative-path (plist-get original-file-struct :relative-path))
+               (file-size (plist-get original-file-struct :file-size))
+               (final-summary-struct (ai-common--make-file-summary-struct
+                                      summary-content
+                                      nil
+                                      :file file-path
+                                      :relative-path relative-path
+                                      :file-size file-size)))
+          ;; Store the summary struct in the local hash table, keyed by its relative path
+          (puthash relative-path final-summary-struct accumulated-summaries-ht))))
+    (setcar pending-count-ref (1- (car pending-count-ref)))
+    (when (buffer-live-p target-buffer)
+      (with-current-buffer target-buffer
+        (ai--index-completion-check (car pending-count-ref)
+                                    accumulated-summaries-ht
+                                    target-buffer
+                                    project-root)))))
+
+(defun ai--create-file-summarization-fail-callback (pending-count-ref accumulated-summaries-ht target-buffer original-file-struct project-root)
+  "Create failure callback for file summarization.
+PENDING-COUNT-REF is a cons cell containing the pending requests counter.
+ACCUMULATED-SUMMARIES-HT is a hash table to accumulate summaries.
+TARGET-BUFFER is the buffer where indexing was initiated.
+ORIGINAL-FILE-STRUCT is the original file struct that was sent for summarization.
+PROJECT-ROOT is the root path of the project."
+  (lambda (request-data error-message)
+    (when (buffer-live-p target-buffer)
+      (with-current-buffer target-buffer
+        (message "Failed to summarize file '%s'. Error: %s"
+                 (plist-get original-file-struct :relative-path)
+                 (ai-common--get-text-content-from-struct error-message))))
+    (setcar pending-count-ref (1- (car pending-count-ref)))
+    (when (buffer-live-p target-buffer)
+      (with-current-buffer target-buffer
+        (ai--index-completion-check (car pending-count-ref)
+                                    accumulated-summaries-ht
+                                    target-buffer
+                                    project-root)))))
+
+(defun ai--process-file-structs-for-indexing (file-structs current-model pending-count-ref accumulated-summaries-ht target-buffer project-root)
+  "Process FILE-STRUCTS for indexing with CURRENT-MODEL.
+PENDING-COUNT-REF is a cons cell containing the pending requests counter.
+ACCUMULATED-SUMMARIES-HT is a hash table to accumulate summaries.
+TARGET-BUFFER is the buffer where indexing was initiated.
+PROJECT-ROOT is the root path of the project being indexed."
+  (let ((execution-backend (map-elt current-model :execution-backend)))
+    (dolist (file-struct file-structs)
+      (setcar pending-count-ref (1+ (car pending-count-ref)))
+      (let* ((indexing-context (ai--get-indexing-context file-struct current-model))
+             (success-callback (ai--create-file-summarization-success-callback
+                                accumulated-summaries-ht pending-count-ref target-buffer file-struct project-root))
+             (fail-callback (ai--create-file-summarization-fail-callback
+                             pending-count-ref accumulated-summaries-ht target-buffer file-struct project-root)))
+        (funcall execution-backend
+                 indexing-context
+                 current-model
+                 :success-callback success-callback
+                 :fail-callback fail-callback))
+      ;; Introduce a configurable timeout between indexing calls
+      (when (> ai--indexing-call-timeout 0)
+        (sit-for ai--indexing-call-timeout)))))
+
+(defun ai--update-project-files-summary-index ()
+  "Update the project files summary index with current project files.
+This command populates `ai--project-files-summary-index` with typed structures
+from the current project for use in project AI summary context mode."
+  (interactive)
+  (if-let ((project-root (ai-common--get-project-root)))
+      (let* ((filtered-file-structs (ai-common--get-filtered-project-files-as-structs))
+             (total-files (length filtered-file-structs))
+             ;; Local hash table to collect summaries for the *current* project indexing run
+             (accumulated-summaries-for-this-run (make-hash-table :test 'equal))
+             (pending-count-ref (cons 0 nil))
+             (current-model (ai--get-current-model))
+             (execution-backend (map-elt current-model :execution-backend))
+             (target-buffer (current-buffer)))
+
+        (unless execution-backend
+          (user-error "No AI execution backend defined for current model: %s" (map-elt current-model :name)))
+
+        (when (zerop total-files)
+          (message "No project files found to index or all are ignored. Clearing index for project '%s'." project-root)
+          (remhash project-root ai--project-files-summary-index)
+          (cl-return-from ai--update-project-files-summary-index))
+
+        (message "Indexing %d project files for summary for project '%s'... This may take a while." total-files project-root)
+        (ai--progress-start (format "Indexing project files (%d remaining)" total-files) target-buffer)
+
+        (ai--process-file-structs-for-indexing filtered-file-structs
+                                               current-model
+                                               pending-count-ref
+                                               accumulated-summaries-for-this-run
+                                               target-buffer
+                                               project-root))
+    (message "Not in a project. Cannot update project files summary index."))
+  nil)
 
 (defun ai--get-full-project-context ()
   "Get project context by collecting all filtered project files.
@@ -588,12 +755,41 @@ Returns a typed struct containing the project files context, or nil if no projec
                              :root project-root)))
         project-struct))))
 
+(defun ai--get-project-ai-summary-context ()
+  "Get project context using project AI summary mode with cached index.
+Returns a typed struct containing the project files summary from cached index,
+or nil if no project is detected or index is empty."
+  (when-let* ((project-root (ai-common--get-project-root))
+              (files-list (ai-common--get-filtered-project-files t))
+              (summaries-for-current-project (gethash project-root ai--project-files-summary-index)))
+    (let* ((files-list-content (mapconcat (lambda (file-path)
+                                            (format "- %s" file-path))
+                                          files-list "\n"))
+           (files-list-struct (ai-common--make-typed-struct
+                              files-list-content
+                              'files-list
+                              'project-scan
+                              :root project-root
+                              :count (length files-list)))
+           (files-struct (ai-common--make-typed-struct
+                         (or summaries-for-current-project '())
+                         'files
+                         'project-summary-index))
+           (project-struct (ai-common--make-typed-struct
+                           (list files-list-struct files-struct)
+                           'project-context
+                           'project-ai-indexer
+                           :root project-root)))
+      project-struct)))
+
 (defun ai--get-project-context ()
   "Get project context based on `ai--project-context-mode` setting.
 Returns a typed struct containing the appropriate project context, or nil if disabled."
   (cond
    ((eq ai--project-context-mode 'full-project)
     (ai--get-full-project-context))
+   ((eq ai--project-context-mode 'project-ai-summary)
+    (ai--get-project-ai-summary-context))
    (t nil)))
 
 (defun ai--switch-project-context-mode ()
@@ -602,9 +798,11 @@ Allows user to select between different project context inclusion modes."
   (interactive)
   (let* ((current-mode ai--project-context-mode)
          (modes '(("disabled" . disabled)
-                  ("full-project" . full-project)))
+                  ("full-project" . full-project)
+                  ("project-ai-summary" . project-ai-summary)))
          (mode-descriptions '((disabled . "No project context")
-                             (full-project . "Include all filtered project files")))
+                             (full-project . "Include all filtered project files")
+                             (project-ai-summary . "Include project files summary from cached index")))
          (prompt (format "Current mode: %s. Select new project context mode: "
                         (cdr (assoc current-mode mode-descriptions))))
          (selected-name (completing-read prompt (mapcar #'car modes)))
@@ -976,6 +1174,7 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
   "Return a single character indicator for the current project context mode."
   (cond
    ((eq ai--project-context-mode 'full-project) "P")
+   ((eq ai--project-context-mode 'project-ai-summary) "S")
    ((eq ai--project-context-mode 'disabled) "D")
    (t "")))
 

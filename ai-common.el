@@ -405,6 +405,24 @@ Returns a plist with :type set to ACTION-TYPE-action-object format."
            additional-props)))
 
 
+(defun ai-common--make-file-summary-struct (content &optional file-path &rest additional-props)
+  "Create a typed struct for storing an AI summary of a file.
+CONTENT is the summary text (string).
+FILE-PATH is the path to the summarized file (optional).
+ADDITIONAL-PROPS are key-value pairs to be included in the resulting struct.
+The struct type will be 'file-summary and source 'ai-summary.
+This structure is intended for use in file indexing and summarization."
+  (let* ((base-props `(:type file-summary :source ai-summary))
+         (file-specific-props (when file-path
+                                `(:file ,(expand-file-name file-path)
+                                  :buffer ,(file-name-nondirectory file-path)
+                                  :relative-path ,(file-relative-name file-path (ai-common--get-project-root))))))
+    (apply #'ai-common--make-typed-struct
+           content
+           'file-summary
+           'ai-summary
+           (append file-specific-props additional-props))))
+
 (defun ai-common--add-to-context-pool (item)
   "Add ITEM (plist-structure) to `ai-common--context-pool`."
   (push item ai-common--context-pool))

@@ -386,17 +386,20 @@ Creates expandable sections for complex data structures."
 
       (cond
        ;; Handle individual typed struct (plist with type information)
-       ((and (listp struct) (keywordp (car struct)))
+       ((and (listp struct) (not (null struct)) (keywordp (car struct)))
         (let* ((type (condition-case-unless-debug nil (plist-get struct :type) (error "unknown")))
                (content (condition-case-unless-debug nil (plist-get struct :content) (error nil)))
                (id (condition-case-unless-debug nil (plist-get struct :id) (error (format "id-%d" (random 10000)))))
                (source (condition-case-unless-debug nil (plist-get struct :source) (error nil)))
                (timestamp (condition-case-unless-debug nil (plist-get struct :timestamp) (error nil)))
                (file (condition-case-unless-debug nil (plist-get struct :file) (error nil)))
+               (relative-path (condition-case-unless-debug nil (plist-get struct :relative-path) (error nil)))
                ;; Use source as title if available and type is agent-instructions
-               (section-title (if (and source (eq type 'agent-instructions))
-                                  (format "%s" source)
-                                (format "%s" (or type "unknown"))))
+               (section-title (cond
+                               ((eq type 'agent-instructions) (format "%s" (or source "Agent Instructions")))
+                               ((eq type 'file-content) (format "%s" (or file relative-path "File Content"))) ; Prefer file (absolute path)
+                               ((eq type 'file-summary) (format "%s" (or file relative-path "File Summary"))) ; Prefer file (absolute path)
+                               (t (format "%s" (or type "unknown")))))
                (metadata-parts '()))
 
           ;; Build metadata parts safely
@@ -404,80 +407,52 @@ Creates expandable sections for complex data structures."
             (push (format "type: %s" type) metadata-parts))
           (when source
             (push (format "source: %s" source) metadata-parts))
-          ;; Show file path for file-context type
+          ;; Show file path for file-context type (original file path)
           (when (and file (eq type 'file-context))
             (push (format "file: %s" file) metadata-parts))
+          ;; For file-content and file-summary, prefer file in metadata, fall back to relative-path
+          (when (and (or (eq type 'file-content) (eq type 'file-summary)) (or file relative-path))
+            (push (format "path: %s" (or file relative-path)) metadata-parts))
           (when timestamp
             (push (format "time: %s" timestamp) metadata-parts))
 
-          (magit-insert-section (ai-typed-struct id)
-            (magit-insert-heading
-              (propertize section-title 'face 'ai-debug-context-type)
-              (when metadata-parts
-                (concat " " (propertize (format "(%s)" (mapconcat #'identity (reverse metadata-parts) " | "))
-                                       'face 'ai-debug-context-metadata))))
+          ;; Determine the section type based on the struct type
+          (let ((section-type (cond
+                               ((eq type 'file-content) 'ai-project-file)
+                               ((eq type 'file-summary) 'ai-file-summary-item) ; New section type
+                               (t 'ai-typed-struct)))) ; Generic type for others
+            (magit-insert-section (section-type id t) ; Pass 't' as hidden flag
+              (magit-insert-heading
+                (propertize section-title 'face 'ai-debug-context-type)
+                (when metadata-parts
+                  (concat " " (propertize (format "(%s)" (mapconcat #'identity (reverse metadata-parts) " | "))
+                                          'face 'ai-debug-context-metadata))))
 
-            ;; Insert content with proper rendering and recursion protection
-            (when content
-              (let ((rendered-content (condition-case-unless-debug nil
-                                        (ai-common--render-struct-to-string struct)
-                                        (error content))))
-                (ai-debug--safe-insert-content rendered-content ai-debug-max-recursion-depth 0))
-              (insert "\n")))))
+              ;; Insert content with proper rendering and recursion protection
+              (when content
+                (let ((rendered-content (condition-case-unless-debug nil
+                                            (ai-common--render-struct-to-string struct)
+                                          (error content))))
+                  (ai-debug--safe-insert-content rendered-content ai-debug-max-recursion-depth 0))
+                (insert "\n"))))))
 
-       ;; Handle list of typed structs with item limits
-       ((and (listp struct) (> (length struct) 0))
-        (let ((item-count (min (length struct) (if ai-debug-truncate-content ai-debug-max-list-items 50))))
-          (dotimes (i item-count)
-            (ai-debug--insert-typed-struct (nth i struct) level parent-section-name))
-          (when (> (length struct) item-count)
-            (insert (propertize (format "[%d more items not shown%s]\n\n"
-                                       (- (length struct) item-count)
-                                       (if ai-debug-truncate-content " - toggle truncation with C-c t" ""))
-                               'face 'ai-debug-empty-source)))))
+        ;; Handle list of typed structs with item limits
+        ((and (listp struct) (not (null struct)))
+         (let ((item-count (min (length struct) (if ai-debug-truncate-content 10 100))))
+           (dotimes (i item-count)
+             (ai-debug--insert-typed-struct (nth i struct) level (or parent-section-name "List Item"))) ; Pass item's type as parent-section-name?
+           (when (> (length struct) item-count)
+             (insert (propertize (format "[%d more items not shown%s]\n\n"
+                                         (- (length struct) item-count)
+                                         (if ai-debug-truncate-content " - toggle truncation with C-c t" ""))
+                                 'face 'ai-debug-empty-source)))))
 
-       ;; Handle empty or invalid structures
-       (t
-        (insert (propertize "Invalid or empty structure" 'face 'ai-debug-empty-source))
-        (insert "\n\n"))))
+        ;; Handle empty or invalid structures
+        (t
+         (insert (propertize "Invalid or empty structure" 'face 'ai-debug-empty-source))
+         (insert "\n\n"))))
     (error
      (insert (propertize (format "[Error displaying structure: %s]\n\n" (error-message-string err)) 'face 'ai-debug-empty-source)))))
-
-(defun ai-debug--insert-context-section (context-item level)
-  "Insert a collapsible section for CONTEXT-ITEM at indentation LEVEL.
-Creates a magit-style expandable section with metadata and content.
-Provides comprehensive error handling and safe content insertion."
-  (condition-case-unless-debug err
-    (progn
-      (let ((max-level (if ai-debug-truncate-content 3 10)))
-        (when (> level max-level)
-          (insert (propertize "  [Section too deeply nested - truncated]\n" 'face 'ai-debug-empty-source))
-          (cl-return-from ai-debug--insert-context-section)))
-
-      (let* ((type (condition-case-unless-debug nil (plist-get context-item :type) (error "unknown")))
-             (content (condition-case-unless-debug nil (plist-get context-item :content) (error nil)))
-             (id (condition-case-unless-debug nil (plist-get context-item :id) (error (format "id-%d" (random 10000)))))
-             (source (condition-case-unless-debug nil (plist-get context-item :source) (error nil)))
-             ;; Use source as title if available and type is agent-instructions
-             (section-title (if (and source (eq type 'agent-instructions))
-                                (format "%s" source)
-                              (format "%s" (or type "unknown"))))
-             (metadata (ai-debug--format-context-metadata context-item)))
-
-        (magit-insert-section (ai-context-item id)
-          (magit-insert-heading
-            (propertize section-title 'face 'ai-debug-context-type)
-            (when metadata
-              (concat " " (propertize (format "(%s)" metadata) 'face 'ai-debug-context-metadata))))
-
-          (when content
-            (let ((rendered-content (condition-case-unless-debug nil
-                                      (ai-common--render-struct-to-string context-item)
-                                      (error content))))
-              (ai-debug--safe-insert-content rendered-content ai-debug-max-recursion-depth 0))
-            (insert "\n")))))
-    (error
-     (insert (propertize (format "[Error displaying section: %s]\n\n" (error-message-string err)) 'face 'ai-debug-empty-source)))))
 
 (defun ai-debug--group-context-by-source (context-list)
   "Group CONTEXT-LIST by :source field preserving execution order.
@@ -565,7 +540,7 @@ with filename in the header and absolute path in metadata."
       (when timestamp
         (push (format "scanned: %s" timestamp) metadata-parts))
 
-      (magit-insert-section (ai-project-file id)
+      (magit-insert-section (ai-project-file id t) ; Pass 't' as hidden flag
         (magit-insert-heading
           (propertize file-name 'face 'ai-debug-context-type)
           (when metadata-parts
@@ -590,8 +565,8 @@ with comprehensive statistics and safe content handling."
            (total-count (condition-case-unless-debug nil
                           (cond
                            ((null source-data) 0)
-                           ((and (listp source-data) (keywordp (car source-data))) 1)
-                           ((listp source-data) (min (length source-data) (if ai-debug-truncate-content 50 1000)))
+                           ((and (listp source-data) (not (null source-data)) (keywordp (car source-data))) 1)
+                           ((listp source-data) (length source-data))
                            (t 1))
                           (error 0)))
            (non-empty-count (ai-debug--count-non-empty-items source-data))
@@ -599,7 +574,7 @@ with comprehensive statistics and safe content handling."
                            (format " [%d/%d items]" non-empty-count total-count)
                          " [empty]")))
 
-      (magit-insert-section (ai-source-section source-name is-empty)
+      (magit-insert-section (ai-source-section source-name is-empty t) ; Pass 't' as hidden flag
         (magit-insert-heading
           (propertize (format "%s%s" source-name count-info) 'face 'ai-debug-context-header)
           (when description
@@ -610,45 +585,32 @@ with comprehensive statistics and safe content handling."
          (is-empty
           (insert (propertize "  (empty)\n\n" 'face 'ai-debug-empty-source)))
 
-         ;; Special handling for project context (list of file structs)
-         ((and (string= source-name "Project Context") (listp source-data))
-          (let* ((deduplicated-files (ai-debug--deduplicate-project-files source-data))
-                 (file-count (min (length deduplicated-files) (if ai-debug-truncate-content 10 100))))
-            (dotimes (i file-count)
-              (ai-debug--insert-project-file-section (nth i deduplicated-files)))
-            (when (> (length deduplicated-files) file-count)
-              (insert (propertize (format "  [%d more files not shown%s]\n\n"
-                                         (- (length deduplicated-files) file-count)
-                                         (if ai-debug-truncate-content " - toggle truncation with C-c t" ""))
-                                 'face 'ai-debug-empty-source)))))
+         ;; Special handling for Project Context (which contains nested file lists/structs)
+         ((string-match-p "Project Context" source-name)
+          (ai-debug--insert-project-context-category (list source-data))) ; Pass source-data as a list to match category fn signature
 
-         ;; Single typed struct - render using ai-common--render-struct-to-string
-         ((and (listp source-data) (keywordp (car source-data)))
-          (let ((rendered-content (condition-case-unless-debug nil
-                                    (ai-common--render-struct-to-string source-data)
-                                    (error source-data))))
-            (ai-debug--safe-insert-content rendered-content 1 0)
-            (insert "\n")))
-
-         ;; List of typed structs with safety limits - render each element
-         ((and (listp source-data) (> (length source-data) 0))
-          (let ((item-count (min (length source-data) (if ai-debug-truncate-content 3 20))))
+         ;; If source-data is a list of typed structs (e.g., summaries, memory items, buffer-bound prompts)
+         ((and (listp source-data) (not (null source-data))
+               (listp (car source-data)) (not (null (car source-data))) (keywordp (car (car source-data))))
+          (let ((item-count (min (length source-data) (if ai-debug-truncate-content 10 100))))
+            (when ai-debug-truncate-content
+              (insert (propertize (format "  [showing %d of %d items]\n" item-count (length source-data)) 'face 'ai-debug-context-metadata)))
             (dotimes (i item-count)
-              (let* ((item (nth i source-data))
-                     (rendered-item (condition-case-unless-debug nil
-                                      (ai-common--render-struct-to-string item)
-                                      (error item))))
-                (ai-debug--safe-insert-content rendered-item 1 0)))
-            (when (> (length source-data) item-count)
+              (let ((item (nth i source-data)))
+                (ai-debug--insert-typed-struct item 1 source-name))) ; Pass source-name for parent context
+            (when (and ai-debug-truncate-content (> (length source-data) item-count))
               (insert (propertize (format "  [%d more items not shown%s]\n\n"
                                          (- (length source-data) item-count)
                                          (if ai-debug-truncate-content " - toggle truncation with C-c t" ""))
-                                 'face 'ai-debug-empty-source)))))
+                                 'face 'ai-debug-context-metadata)))))
 
-         ;; Other data types
+         ;; If source-data is a single typed struct (not a list of structs)
+         ((and (listp source-data) (not (null source-data)) (keywordp (car source-data)))
+          (ai-debug--insert-typed-struct source-data 1 source-name)) ; Pass source-name for parent context
+
+         ;; Other data types (e.g. simple strings)
          (t
-          (ai-debug--safe-insert-content source-data 1 0)
-          (insert "\n")))))
+          (insert (propertize (format "  %s\n" content) 'face 'default))))))
     (error
      (insert (propertize (format "[Error displaying source %s: %s]\n\n" source-name (error-message-string err)) 'face 'ai-debug-empty-source)))))
 
@@ -660,7 +622,7 @@ followed by an aggregated result section."
       (let ((project-root (condition-case-unless-debug nil
                             (ai-common--get-project-root)
                             (error nil))))
-        (magit-insert-section (ai-ignore-patterns)
+        (magit-insert-section (ai-ignore-patterns nil t) ; Pass 't' as hidden flag
           (magit-insert-heading
             (propertize "File Ignore Patterns" 'face 'ai-debug-category-header))
 
@@ -668,7 +630,7 @@ followed by an aggregated result section."
           (let ((hardcoded-patterns (condition-case-unless-debug nil
                                       (ai-common--get-global-hardcoded-patterns)
                                       (error nil))))
-            (magit-insert-section (ai-ignore-hardcoded)
+            (magit-insert-section (ai-ignore-hardcoded nil t) ; Pass 't' as hidden flag
               (magit-insert-heading
                 (propertize (format "Global Hardcoded Patterns (%d patterns)"
                                    (if hardcoded-patterns (length hardcoded-patterns) 0))
@@ -678,9 +640,9 @@ followed by an aggregated result section."
                   (dolist (pattern-cons hardcoded-patterns)
                     (let ((pattern (car pattern-cons))
                           (is-negated (cdr pattern-cons)))
-                      (insert (format "  %s%s\n"
-                                     (if is-negated "!" "")
-                                     pattern))))
+                        (insert (format "  %s%s\n"
+                                       (if is-negated "!" "")
+                                       pattern))))
                 (insert (propertize "  (no patterns)\n" 'face 'ai-debug-empty-source)))
               (insert "\n")))
 
@@ -688,7 +650,7 @@ followed by an aggregated result section."
           (let ((global-file-patterns (condition-case-unless-debug nil
                                         (ai-common--get-global-ignore-file-patterns)
                                         (error nil))))
-            (magit-insert-section (ai-ignore-global-files)
+            (magit-insert-section (ai-ignore-global-files nil t) ; Pass 't' as hidden flag
               (magit-insert-heading
                 (propertize (format "Global Ignore Files Patterns (%d patterns)"
                                    (if global-file-patterns (length global-file-patterns) 0))
@@ -698,9 +660,9 @@ followed by an aggregated result section."
                   (dolist (pattern-cons global-file-patterns)
                     (let ((pattern (car pattern-cons))
                           (is-negated (cdr pattern-cons)))
-                      (insert (format "  %s%s\n"
-                                     (if is-negated "!" "")
-                                     pattern))))
+                        (insert (format "  %s%s\n"
+                                       (if is-negated "!" "")
+                                       pattern))))
                 (insert (propertize "  (no patterns)\n" 'face 'ai-debug-empty-source)))
               (insert "\n")))
 
@@ -709,7 +671,7 @@ followed by an aggregated result section."
             (let ((gitignore-patterns (condition-case-unless-debug nil
                                         (ai-common--get-project-gitignore-patterns project-root)
                                         (error nil))))
-              (magit-insert-section (ai-ignore-gitignore)
+              (magit-insert-section (ai-ignore-gitignore nil t) ; Pass 't' as hidden flag
                 (magit-insert-heading
                   (propertize (format "Project .gitignore Patterns (%d patterns)"
                                      (if gitignore-patterns (length gitignore-patterns) 0))
@@ -719,9 +681,9 @@ followed by an aggregated result section."
                     (dolist (pattern-cons gitignore-patterns)
                       (let ((pattern (car pattern-cons))
                             (is-negated (cdr pattern-cons)))
-                        (insert (format "  %s%s\n"
-                                       (if is-negated "!" "")
-                                       pattern))))
+                          (insert (format "  %s%s\n"
+                                         (if is-negated "!" "")
+                                         pattern))))
                   (insert (propertize "  (no patterns)\n" 'face 'ai-debug-empty-source)))
                 (insert "\n"))))
 
@@ -730,7 +692,7 @@ followed by an aggregated result section."
             (let ((ai-ignore-patterns (condition-case-unless-debug nil
                                         (ai-common--get-project-ai-ignore-patterns project-root)
                                         (error nil))))
-              (magit-insert-section (ai-ignore-ai-ignore)
+              (magit-insert-section (ai-ignore-ai-ignore nil t) ; Pass 't' as hidden flag
                 (magit-insert-heading
                   (propertize (format "Project .ai-ignore Patterns (%d patterns)"
                                      (if ai-ignore-patterns (length ai-ignore-patterns) 0))
@@ -740,9 +702,9 @@ followed by an aggregated result section."
                     (dolist (pattern-cons ai-ignore-patterns)
                       (let ((pattern (car pattern-cons))
                             (is-negated (cdr pattern-cons)))
-                        (insert (format "  %s%s\n"
-                                       (if is-negated "!" "")
-                                       pattern))))
+                          (insert (format "  %s%s\n"
+                                         (if is-negated "!" "")
+                                         pattern))))
                   (insert (propertize "  (no patterns)\n" 'face 'ai-debug-empty-source)))
                 (insert "\n"))))
 
@@ -751,7 +713,7 @@ followed by an aggregated result section."
             (let ((all-patterns (condition-case-unless-debug nil
                                   (ai-common--get-all-ignore-patterns project-root)
                                   (error nil))))
-              (magit-insert-section (ai-ignore-aggregated)
+              (magit-insert-section (ai-ignore-aggregated nil t) ; Pass 't' as hidden flag
                 (magit-insert-heading
                   (propertize (format "Aggregated All Patterns (%d patterns total)"
                                      (if all-patterns (length all-patterns) 0))
@@ -783,40 +745,45 @@ Converts names like 'agent-instructions' to 'AGENT INSTRUCTIONS'."
 
 (defun ai-debug--insert-project-context-subsection (content subsection-name)
   "Insert a subsection for project context CONTENT with SUBSECTION-NAME."
-  (magit-insert-section (ai-project-subsection subsection-name)
-    (magit-insert-heading
-      (propertize subsection-name 'face 'ai-debug-context-type))
-
-    ;; Handle the content based on its type
+  (magit-insert-section (ai-project-subsection subsection-name t) ; Pass 't' as hidden flag
     (cond
      ;; Files list content
      ((and (listp content) (keywordp (car content)) (eq (plist-get content :type) 'files-list))
-      (let ((files-content (plist-get content :content))
-            (files-count (plist-get content :count)))
+      (let* ((files-content (plist-get content :content))
+             (files-count (or (plist-get content :count) 0))
+             (header-text (format "Project Files List (%d total)" files-count)))
+        (magit-insert-heading
+          (propertize header-text 'face 'ai-debug-context-type))
         (when files-content
-          (ai-debug--safe-insert-content
-           (format "Project files (%d total):\n%s" (or files-count 0) files-content)
-           ai-debug-max-recursion-depth 0)
-          (insert "\n"))))
+          (ai-debug--safe-insert-content files-content ai-debug-max-recursion-depth 0))
+        (insert "\n")))
 
      ;; Files content (list of file structures)
      ((and (listp content) (keywordp (car content)) (eq (plist-get content :type) 'files))
-      (let ((files-data (plist-get content :content)))
-        (when (and files-data (listp files-data))
-          (let* ((deduplicated-files (ai-debug--deduplicate-project-files files-data))
-                 (total-files (length deduplicated-files))
-                 (file-count (min total-files (if ai-debug-truncate-content 5 50))))
-            (insert (propertize (format "Project file contents (%d files):\n" total-files) 'face 'ai-debug-context-metadata))
-            (dotimes (i file-count)
-              (ai-debug--insert-project-file-section (nth i deduplicated-files)))
-            (when (> total-files file-count)
-              (insert (propertize (format "  [%d more files not shown%s]\n\n"
+      (let* ((files-data (plist-get content :content))
+             (deduplicated-files (if (and files-data (listp files-data))
+                                     (ai-debug--deduplicate-project-files files-data)
+                                   nil))
+             (total-files (if deduplicated-files (length deduplicated-files) 0))
+             (header-text (format "Project File Contents (%d files)" total-files))
+             (file-count (min total-files (if ai-debug-truncate-content 5 50))))
+        (magit-insert-heading
+          (propertize header-text 'face 'ai-debug-context-type))
+        (when (> total-files 0)
+          (dotimes (i file-count)
+            (ai-debug--insert-project-file-section (nth i deduplicated-files)))
+          (when (> total-files file-count)
+            (insert (propertize (format "  [%d more files not shown%s]\n\n"
                                          (- total-files file-count)
                                          (if ai-debug-truncate-content " - toggle truncation with C-c t" ""))
-                                 'face 'ai-debug-empty-source)))))))
+                                'face 'ai-debug-empty-source))))
+       (when (= total-files 0)
+         (insert (propertize "  (no files)\n\n" 'face 'ai-debug-empty-source)))))
 
      ;; Handle other or unexpected content types gracefully
      (t
+      (magit-insert-heading
+        (propertize subsection-name 'face 'ai-debug-context-type))
       (insert (propertize (format "  [Unhandled project context subsection content type: %s]\n"
                                  (type-of content))
                          'face 'ai-debug-empty-source))
@@ -827,7 +794,7 @@ Converts names like 'agent-instructions' to 'AGENT INSTRUCTIONS'."
 
 (defun ai-debug--insert-ai-mode-settings ()
   "Insert AI Mode settings section with current configuration state."
-  (magit-insert-section (ai-settings)
+  (magit-insert-section (ai-settings nil t) ; Pass 't' as hidden flag
     (magit-insert-heading
       (propertize "AI Mode Settings" 'face 'ai-debug-category-header))
 
@@ -873,7 +840,7 @@ Converts names like 'agent-instructions' to 'AGENT INSTRUCTIONS'."
 (defun ai-debug--insert-model-configuration (context)
   "Insert detailed model configuration section with key parameters highlighted.
 Uses model information from CONTEXT's :model-context key if available."
-  (magit-insert-section (ai-model-config)
+  (magit-insert-section (ai-model-config nil t) ; Pass 't' as hidden flag
     (magit-insert-heading
       (propertize "Model Configuration" 'face 'ai-debug-category-header))
 
@@ -883,7 +850,7 @@ Uses model information from CONTEXT's :model-context key if available."
       (if model
           (progn
             ;; Key parameters section - display important parameters separately
-            (magit-insert-section (ai-model-key-params)
+            (magit-insert-section (ai-model-key-params nil t) ; Pass 't' as hidden flag
               (magit-insert-heading
                 (propertize "Key Parameters" 'face 'ai-debug-context-type))
 
@@ -904,7 +871,7 @@ Uses model information from CONTEXT's :model-context key if available."
 
             ;; REST parameters section - show additional provider-specific parameters
             (when-let ((rest-params (map-elt model :rest-params)))
-              (magit-insert-section (ai-model-rest-params)
+              (magit-insert-section (ai-model-rest-params nil t) ; Pass 't' as hidden flag
                 (magit-insert-heading
                   (propertize "Provider-specific Parameters" 'face 'ai-debug-context-type))
 
@@ -923,7 +890,7 @@ Uses model information from CONTEXT's :model-context key if available."
 
             ;; Role mapping section
             (when-let ((role-mapping (map-elt model :role-mapping)))
-              (magit-insert-section (ai-model-role-mapping)
+              (magit-insert-section (ai-model-role-mapping nil t) ; Pass 't' as hidden flag
                 (magit-insert-heading
                   (propertize "Role Mapping" 'face 'ai-debug-context-type))
 
@@ -936,7 +903,7 @@ Uses model information from CONTEXT's :model-context key if available."
                 (insert "\n")))
 
             ;; Complete configuration section (collapsed by default)
-            (magit-insert-section (ai-model-full-config)
+            (magit-insert-section (ai-model-full-config nil t) ; Pass 't' as hidden flag
               (magit-insert-heading
                 (propertize "Complete Configuration (Raw)" 'face 'ai-debug-context-type))
 
@@ -969,7 +936,7 @@ Returns a hash table where keys are type strings and values are lists of message
         (let ((existing (gethash category-key category-groups)))
           (puthash category-key (append existing (list message)) category-groups))))
 
-    (values category-groups (reverse category-order))))
+    (cl-values category-groups (reverse category-order))))
 
 (defun ai-debug--calculate-category-file-count (category items)
   "Calculate file count for project-context CATEGORY from ITEMS.
@@ -1011,6 +978,10 @@ ITEMS should be a list of project-context type messages."
                    (subsection-name (ai-debug--capitalize-category-name (symbol-name sub-type))))
               (ai-debug--insert-project-context-subsection sub-element subsection-name))))))))
 
+(defun ai-debug--insert-context-section (item level)
+  "Insert a context section for ITEM at indentation LEVEL."
+  (ai-debug--insert-typed-struct item level))
+
 (defun ai-debug--insert-regular-category (items item-count)
   "Insert regular category items (non-project-context) with truncation handling.
 ITEMS is the list of category items, ITEM-COUNT is the total number of items."
@@ -1028,7 +999,7 @@ ITEMS is the list of category items, ITEM-COUNT is the total number of items."
 (defun ai-debug--insert-messages-by-category (messages)
   "Insert MESSAGES grouped by type/category in expandable sections.
 Creates organized categories for better navigation and understanding."
-  (multiple-value-bind (category-groups category-order)
+  (cl-multiple-value-bind (category-groups category-order)
       (ai-debug--group-messages-by-type messages)
 
     ;; Insert each category with file counts in headers
@@ -1038,7 +1009,7 @@ Creates organized categories for better navigation and understanding."
              (file-count (ai-debug--calculate-category-file-count category items))
              (header-text (ai-debug--format-category-header category item-count file-count)))
 
-        (magit-insert-section (ai-message-category category)
+        (magit-insert-section (ai-message-category category t) ; Pass 't' as hidden flag
           (magit-insert-heading
             (propertize header-text 'face 'ai-debug-category-header))
 
@@ -1066,6 +1037,28 @@ Creates organized categories for better navigation and understanding."
           (when (and (condition-case-unless-debug nil (eq (oref section type) 'ai-source-section) (error nil))
                      (condition-case-unless-debug nil (oref section value) (error nil)))
             (condition-case-unless-debug nil (magit-section-hide section) (error nil))))))))
+
+(defun ai-debug--collapse-all-sections-recursive ()
+  "Recursively collapse all sections in the current buffer except the root."
+  (save-excursion
+    (goto-char (point-min))
+    (condition-case-unless-debug nil
+        (let ((root-section (magit-current-section)))
+          (when root-section
+            ;; Recursively collapse all sections
+            (ai-debug--collapse-section-recursive root-section)))
+      (error nil))))
+
+(defun ai-debug--collapse-section-recursive (section)
+  "Recursively collapse SECTION and all its children."
+  (when section
+    ;; First recursively collapse all children
+    (dolist (child (oref section children))
+      (ai-debug--collapse-section-recursive child)
+      (magit-section-hide child))
+    ;; Don't hide the root section itself
+    (unless (eq (oref section type) 'ai-debug-root)
+      (magit-section-hide section))))
 
 (defun ai-debug-show-context-debug (context)
     "Display CONTEXT in a visual magit-like interface.
@@ -1099,7 +1092,7 @@ The interface provides expandable sections for detailed inspection."
               (ai-debug--insert-ignore-patterns-section)
 
               ;; Buffer Context Category
-              (magit-insert-section (ai-buffer-info)
+              (magit-insert-section (ai-buffer-info nil t) ; Pass 't' as hidden flag
                 (magit-insert-heading
                   (propertize "Buffer Context" 'face 'ai-debug-category-header))
                 (let ((buffer-keys '(:buffer-name :buffer-language :buffer :file-path :project-root :file-name)))
@@ -1111,7 +1104,7 @@ The interface provides expandable sections for detailed inspection."
                 (insert "\n"))
 
               ;; Completion Context Category
-              (magit-insert-section (ai-completion-info)
+              (magit-insert-section (ai-completion-info nil t) ; Pass 't' as hidden flag
                 (magit-insert-heading
                   (propertize "Completion Context" 'face 'ai-debug-category-header))
                 (let ((completion-keys '(:cursor-point :cursor-offset :region-content
@@ -1129,7 +1122,7 @@ The interface provides expandable sections for detailed inspection."
 
               ;; Messages Category (organized by type)
               (when messages
-                (magit-insert-section (ai-messages-root)
+                (magit-insert-section (ai-messages-root nil t) ; Pass 't' as hidden flag
                   (magit-insert-heading
                     (propertize (format "AI Messages (%d total)" (length messages))
                                 'face 'ai-debug-category-header))
@@ -1137,23 +1130,165 @@ The interface provides expandable sections for detailed inspection."
 
             (setq buffer-read-only t)
             (goto-char (point-min))
-            ;; Show only level-1 sections, keep child sections collapsed by default
+            ;; Use the new recursive collapse function
             (condition-case-unless-debug nil
-                (progn
-                  (magit-section-show-level-1-all)
-                  ;; Hide child sections within categories to ensure they start collapsed
-                  (save-excursion
-                    (goto-char (point-min))
-                    (let ((section (magit-current-section)))
-                      (when section
-                        (ai-debug--hide-child-sections
-                         section
-                         '(ai-message-category ai-project-subsection ai-context-item ai-typed-struct ai-project-file ai-model-key-params ai-model-rest-params ai-model-role-mapping ai-model-full-config ai-ignore-hardcoded ai-ignore-global-files ai-ignore-gitignore ai-ignore-ai-ignore ai-ignore-aggregated))))))
+                (ai-debug--collapse-all-sections-recursive)
               (error nil)))
 
           (pop-to-buffer buffer))
       (error
        (message "Error in ai-debug-show-context-debug: %s" (error-message-string err)))))
+
+;; Helper function to get descriptive name for project context mode
+(defun ai-debug--get-project-context-mode-display-name (mode)
+  "Return a human-readable string for the project context MODE."
+  (cdr (assoc mode '((disabled . "Disabled")
+                      (full-project . "Full Files")
+                      (project-ai-summary . "Summary Index")))))
+
+;; Helper functions for collecting context sources
+(defun ai-debug--collect-context-sources ()
+  "Collect all context sources safely with comprehensive error handling.
+Returns a plist with all context source data and their counts."
+  (let* ((global-system-prompts (condition-case-unless-debug nil
+                                    (ai-common--get-global-system-prompts)
+                                  (error nil)))
+         (global-memory (condition-case-unless-debug nil
+                            (ai-common--get-global-memory)
+                          (error nil)))
+         (buffer-bound-prompts (condition-case-unless-debug nil
+                                   (ai-common--get-buffer-bound-prompts)
+                                 (error nil)))
+         (context-pool (condition-case-unless-debug nil
+                           (ai-common--get-context-pool)
+                         (error nil)))
+         (project-context (condition-case-unless-debug nil
+                              (when (and (fboundp 'ai--get-full-project-context)
+                                         (fboundp 'ai-common--get-project-root)
+                                         (ai-common--get-project-root))
+                                (ai--get-full-project-context))
+                            (error nil)))
+         (project-root (condition-case-unless-debug nil
+                           (ai-common--get-project-root)
+                         (error nil)))
+         (project-summary-index (condition-case-unless-debug nil
+                                    (when (and (boundp 'ai--project-files-summary-index) project-root)
+                                      (gethash project-root ai--project-files-summary-index))
+                                  (error nil)))
+         (current-buffer-context (condition-case-unless-debug nil
+                                     (unless (use-region-p)
+                                       (when (fboundp 'ai--get-current-buffer-context)
+                                         (ai--get-current-buffer-context)))
+                                   (error nil)))
+         (current-selection (condition-case-unless-debug nil
+                                (when (use-region-p)
+                                  (ai-common--make-snippet-from-region 'selection))
+                              (error nil))))
+
+    `(:global-system-prompts ,global-system-prompts
+      :global-memory ,global-memory
+      :buffer-bound-prompts ,buffer-bound-prompts
+      :context-pool ,context-pool
+      :project-context ,project-context
+      :project-summary-index ,project-summary-index
+      :current-buffer-context ,current-buffer-context
+      :current-selection ,current-selection)))
+
+(defun ai-debug--calculate-source-counts (sources)
+  "Calculate various counts for context SOURCES.
+Returns a plist with total, non-empty, and file counts."
+  (let* ((all-sources (list (plist-get sources :global-system-prompts)
+                           (plist-get sources :global-memory)
+                           (plist-get sources :buffer-bound-prompts)
+                           (plist-get sources :context-pool)
+                           (plist-get sources :project-context)
+                           (plist-get sources :project-summary-index)
+                           (plist-get sources :current-buffer-context)
+                           (plist-get sources :current-selection)))
+         (total-sources (length (cl-remove-if #'null all-sources)))
+         (non-empty-sources (length (cl-remove-if #'ai-debug--is-empty-source all-sources)))
+         (project-context (plist-get sources :project-context))
+         (project-files-count (if (and project-context (plist-get project-context :content))
+                                  (condition-case-unless-debug nil
+                                    (let ((content (plist-get project-context :content)))
+                                      (when (and content (listp content))
+                                        (let ((files-list-item (nth 0 content)))
+                                          (when (and files-list-item (plist-get files-list-item :count))
+                                            (plist-get files-list-item :count)))))
+                                    (error 0))
+                                0))
+         (project-summary-index (plist-get sources :project-summary-index))
+         (project-summary-count (if (and project-summary-index (listp project-summary-index))
+                                    (length project-summary-index)
+                                  0)))
+
+    `(:total-sources ,total-sources
+      :non-empty-sources ,non-empty-sources
+      :project-files-count ,project-files-count
+      :project-summary-count ,project-summary-count)))
+
+(defun ai-debug--insert-all-source-sections (sources counts)
+  "Insert all source sections with SOURCES data and COUNTS information."
+  (let* ((project-files-count (plist-get counts :project-files-count))
+         (project-summary-count (plist-get counts :project-summary-count))
+         (project-context-mode-display (ai-debug--get-project-context-mode-display-name ai--project-context-mode)))
+
+    ;; Insert each source section with error protection
+    (ai-debug--insert-source-section
+     "Global System Prompts"
+     (plist-get sources :global-system-prompts)
+     "System-wide instructions that define AI behavior")
+
+    (ai-debug--insert-source-section
+     "Global Memory"
+     (plist-get sources :global-memory)
+     "Persistent context that spans across all buffers")
+
+    (ai-debug--insert-source-section
+     "Buffer-bound Prompts"
+     (plist-get sources :buffer-bound-prompts)
+     "Instructions specific to current buffer")
+
+    (ai-debug--insert-source-section
+     "Context Pool"
+     (plist-get sources :context-pool)
+     "Temporary context for current interaction session")
+
+    (ai-debug--insert-source-section
+     (format "Project Context (%s, %d files)" project-context-mode-display project-files-count)
+     (plist-get sources :project-context)
+     "Filtered project files and structure")
+
+    (ai-debug--insert-source-section
+     (format "Project AI Summary Index (%d files)" project-summary-count)
+     (plist-get sources :project-summary-index)
+     "AI-generated summaries of project files")
+
+    (when (plist-get sources :current-buffer-context)
+      (ai-debug--insert-source-section
+       "Current Buffer Content"
+       (plist-get sources :current-buffer-context)
+       "Full content of current buffer"))
+
+    (when (plist-get sources :current-selection)
+      (ai-debug--insert-source-section
+       "Current Selection"
+       (plist-get sources :current-selection)
+       "Currently selected text region"))))
+
+(defun ai-debug--setup-sources-buffer-display (buffer)
+  "Set up the sources BUFFER for display with proper section handling."
+  (with-current-buffer buffer
+    (setq buffer-read-only t)
+    (goto-char (point-min))
+    ;; Use the new recursive collapse function
+    (condition-case-unless-debug nil
+        (ai-debug--collapse-all-sections-recursive)
+      (error nil))
+    ;; Hide empty sections with comprehensive error protection
+    (condition-case-unless-debug nil
+        (ai-debug--hide-empty-sections)
+      (error nil))))
 
 (defun ai-debug-show-sources ()
   "Display all AI context sources in a visual magit-like interface.
@@ -1169,104 +1304,23 @@ project context, and current buffer/selection information in expandable sections
         (setq-local ai-debug--refresh-function 'ai-debug-show-sources)
         (setq-local ai-debug--refresh-args nil)
 
-        ;; Safely collect sources with comprehensive error handling
-        (let* ((global-system-prompts (condition-case-unless-debug nil
-                                          (ai-common--get-global-system-prompts)
-                                        (error nil)))
-               (global-memory (condition-case-unless-debug nil
-                                  (ai-common--get-global-memory)
-                                (error nil)))
-               (buffer-bound-prompts (condition-case-unless-debug nil
-                                         (ai-common--get-buffer-bound-prompts)
-                                       (error nil)))
-               (context-pool (condition-case-unless-debug nil
-                                 (ai-common--get-context-pool)
-                               (error nil)))
-               (project-context (condition-case-unless-debug nil
-                                    (ai-debug--get-project-context-structs)
-                                  (error nil)))
-               (current-buffer-context (condition-case-unless-debug nil
-                                           (unless (use-region-p)
-                                             (when (fboundp 'ai--get-current-buffer-context)
-                                               (ai--get-current-buffer-context)))
-                                         (error nil)))
-               (current-selection (condition-case-unless-debug nil
-                                      (when (use-region-p) (ai-common--make-snippet-from-region 'selection))
-                                    (error nil)))
-
-               ;; Count sources safely
-               (all-sources (list global-system-prompts global-memory buffer-bound-prompts
-                                 context-pool project-context current-buffer-context current-selection))
-               (total-sources (length (cl-remove-if #'null all-sources)))
-               (non-empty-sources (length (cl-remove-if #'ai-debug--is-empty-source all-sources)))
-               (project-files-count (if (and project-context (listp project-context))
-                                        (length project-context)
-                                      0)))
+        ;; Collect context sources and calculate counts
+        (let* ((sources (ai-debug--collect-context-sources))
+               (counts (ai-debug--calculate-source-counts sources)))
 
           ;; Insert main header with counts
           (magit-insert-section (ai-sources-root)
             (magit-insert-heading
               (propertize (format "AI Context Sources [%d/%d active]"
-                                 non-empty-sources total-sources)
+                                 (plist-get counts :non-empty-sources)
+                                 (plist-get counts :total-sources))
                          'face 'ai-debug-category-header))
 
-            ;; Insert each source section with error protection
-            (ai-debug--insert-source-section
-             "Global System Prompts"
-             global-system-prompts
-             "System-wide instructions that define AI behavior")
+            ;; Insert all source sections
+            (ai-debug--insert-all-source-sections sources counts)))
 
-            (ai-debug--insert-source-section
-             "Global Memory"
-             global-memory
-             "Persistent context that spans across all buffers")
-
-            (ai-debug--insert-source-section
-             "Buffer-bound Prompts"
-             buffer-bound-prompts
-             "Instructions specific to current buffer")
-
-            (ai-debug--insert-source-section
-             "Context Pool"
-             context-pool
-             "Temporary context for current interaction session")
-
-            (ai-debug--insert-source-section
-             (format "Project Context (%d files)" project-files-count)
-             project-context
-             "Filtered project files and structure")
-
-            (when current-buffer-context
-              (ai-debug--insert-source-section
-               "Current Buffer Content"
-               current-buffer-context
-               "Full content of current buffer"))
-
-            (when current-selection
-              (ai-debug--insert-source-section
-               "Current Selection"
-               current-selection
-               "Currently selected text region"))))
-
-        (setq buffer-read-only t)
-        (goto-char (point-min))
-        ;; Safely expand sections - show only top-level sources, hide their children
-        (condition-case-unless-debug nil
-          (progn
-            (magit-section-show-level-1-all)
-            ;; Hide child sections to ensure they start collapsed
-            (save-excursion
-              (goto-char (point-min))
-              (let ((section (magit-current-section)))
-                (when section
-                  (ai-debug--hide-child-sections
-                   section
-                   '(ai-project-file ai-context-item ai-typed-struct))))))
-          (error nil))
-        ;; Hide empty sections with comprehensive error protection
-        (condition-case-unless-debug nil
-            (ai-debug--hide-empty-sections)
-          (error nil)))  ; Ignore errors in section hiding
+        ;; Set up buffer display
+        (ai-debug--setup-sources-buffer-display buffer))
 
       (pop-to-buffer buffer))
     (error
