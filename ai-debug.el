@@ -36,6 +36,7 @@
 ;; - Model configuration and parameter display
 ;; - Context source tracking and visualization
 ;; - Project context with expandable file sections
+;; - File-based command inspection and debugging
 ;; - Performance-optimized content truncation
 ;; - Interactive debugging commands with keyboard shortcuts
 ;; - Buffer refresh capability for dynamic content updates
@@ -46,12 +47,14 @@
 ;; - Message structure and prompt composition
 ;; - Context sources including global prompts, memory, and buffer-bound data
 ;; - Project files with individual file sections
+;; - File-based commands with source location tracking
 ;; - Selection and cursor positioning information
 ;;
 ;; Usage:
 ;; Enable AI mode and use the following commands:
 ;; - `ai-debug-visual': Main debug interface showing current context
 ;; - `ai-debug-show-sources': Display all available context sources
+;; - `ai-debug-show-file-commands': Display all loaded file-based commands
 ;; - `ai-debug-completion-limited-context': Debug completion with limited context
 ;; - `ai-debug-completion-full-context': Debug completion with full buffer context
 ;;
@@ -81,6 +84,9 @@
 
 (defvar ai-debug-sources-buffer-name "*AI Context Sources*"
   "Buffer name for displaying AI context sources.")
+
+(defvar ai-debug-file-commands-buffer-name "*AI File Commands*"
+  "Buffer name for displaying AI file-based commands.")
 
 (defcustom ai-debug-truncate-content t
   "Whether to truncate long content in debug buffers for performance.
@@ -134,6 +140,11 @@ When nil, full content is shown which may cause performance issues."
   "Face for empty context sources."
   :group 'ai-debug)
 
+(defface ai-debug-command-location
+  '((t :inherit magit-tag :foreground "cyan"))
+  "Face for command location indicators."
+  :group 'ai-debug)
+
 ;; Buffer-local variables for refresh functionality
 (defvar-local ai-debug--refresh-function nil
   "Function to call when refreshing the current debug buffer.")
@@ -171,6 +182,21 @@ Initializes the buffer with magit-section-mode and appropriate keybindings."
       (local-set-key (kbd "C-r") 'ai-debug-refresh-buffer))
     buffer))
 
+(defun ai-debug--create-file-commands-buffer ()
+  "Create and return the AI file commands buffer.
+Initializes the buffer with magit-section-mode and appropriate keybindings."
+  (let ((buffer (get-buffer-create ai-debug-file-commands-buffer-name)))
+    (with-current-buffer buffer
+      (setq buffer-read-only nil)
+      (erase-buffer)
+      (magit-section-mode)
+      (setq header-line-format (format "AI File Commands - TAB to expand/collapse, truncation: %s (C-c t to toggle, C-r to refresh)"
+                                       (if ai-debug-truncate-content "ON" "OFF")))
+      ;; Add local keymap for debug buffer operations
+      (local-set-key (kbd "C-c t") 'ai-debug-toggle-truncation)
+      (local-set-key (kbd "C-r") 'ai-debug-refresh-buffer))
+    buffer))
+
 (defun ai-debug-toggle-truncation ()
   "Toggle content truncation in AI debug buffers.
 This affects how much content is displayed in the debug interface
@@ -199,6 +225,12 @@ Calls the appropriate refresh function based on the current buffer type."
     (message "Refreshing AI context sources...")
     (ai-debug-show-sources)
     (message "AI context sources refreshed"))
+
+   ;; File commands debug buffer
+   ((string= (buffer-name) ai-debug-file-commands-buffer-name)
+    (message "Refreshing AI file commands...")
+    (ai-debug-show-file-commands)
+    (message "AI file commands refreshed"))
 
    ;; Unknown buffer
    (t
@@ -1060,6 +1092,205 @@ Creates organized categories for better navigation and understanding."
     (unless (eq (oref section type) 'ai-debug-root)
       (magit-section-hide section))))
 
+(defun ai-debug--collect-file-commands ()
+  "Collect all loaded file-based commands from all instruction sources.
+Returns a plist with command data grouped by location."
+  (let ((default-commands '())
+        (global-commands '())
+        (local-commands '()))
+
+    ;; Collect from default instructions (if available)
+    (when (and (boundp 'ai--default-instructions-cache)
+               (hash-table-p ai--default-instructions-cache))
+      (maphash (lambda (command-name content)
+                 (push `(:name ,command-name
+                         :content ,content
+                         :location "Default (Package)"
+                         :directory ,(ai--get-default-instructions-directory))
+                       default-commands))
+               ai--default-instructions-cache))
+
+    ;; Collect from global instructions (if available)
+    (when (and (boundp 'ai--global-instructions-cache)
+               (hash-table-p ai--global-instructions-cache))
+      (maphash (lambda (command-name content)
+                 (push `(:name ,command-name
+                         :content ,content
+                         :location "Global (~/.ai)"
+                         :directory ,(ai--get-global-instructions-directory))
+                       global-commands))
+               ai--global-instructions-cache))
+
+    ;; Collect from local instructions (if available)
+    (when (and (boundp 'ai--local-instructions-cache)
+               (hash-table-p ai--local-instructions-cache))
+      (maphash (lambda (command-name content)
+                 (push `(:name ,command-name
+                         :content ,content
+                         :location "Local (Project)"
+                         :directory ,(ai--get-local-instructions-directory))
+                       local-commands))
+               ai--local-instructions-cache))
+
+    `(:default-commands ,(reverse default-commands)
+      :global-commands ,(reverse global-commands)
+      :local-commands ,(reverse local-commands))))
+
+(defun ai-debug--extract-modifier-indicators (command-name)
+  "Extract modifier indicators from COMMAND-NAME for display.
+Returns a list of shortened modifier indicators."
+  (condition-case-unless-debug nil
+    (when (and (fboundp 'ai--parse-command-modifiers) (string-match-p "__" command-name))
+      (let* ((parsed (ai--parse-command-modifiers command-name))
+             (modifier-config (cdr parsed))
+             (indicators '()))
+
+        ;; Add modifier indicators
+        (when (plist-get modifier-config :user-input)
+          (push "U" indicators))  ; User input required
+        (when (plist-get modifier-config :needs-buffer-context)
+          (push "B" indicators))  ; Buffer context needed
+        (when (plist-get modifier-config :needs-project-context)
+          (push "P" indicators))  ; Project context needed
+
+        ;; Add result action indicator
+        (when-let ((result-action (plist-get modifier-config :result-action)))
+          (let ((action-indicator (cond
+                                  ((eq result-action 'show) "S")
+                                  ((eq result-action 'eval) "E")
+                                  ((eq result-action 'replace) "R")
+                                  ((eq result-action 'insert-at-point) "I")
+                                  ((eq result-action 'complete) "C")
+                                  (t "?"))))
+            (push action-indicator indicators)))
+
+        ;; Add context size indicators
+        (when (plist-member modifier-config :preceding-context-size)
+          (let ((preceding (plist-get modifier-config :preceding-context-size))
+                (following (plist-get modifier-config :following-context-size)))
+            (cond
+             ((and (null preceding) (null following))
+              (push "F" indicators))  ; Full context
+             ((and (numberp preceding) (< preceding 10))
+              (push "s" indicators))  ; Small context
+             ((and (numberp preceding) (> preceding 15))
+              (push "L" indicators))  ; Large context
+             (t nil))))
+
+        indicators))
+    (error nil)))
+
+(defun ai-debug--insert-file-command-item (command-info)
+  "Insert a single file command COMMAND-INFO as an expandable section."
+  (let* ((name (plist-get command-info :name))
+         (content (plist-get command-info :content))
+         (location (plist-get command-info :location))
+         (directory (plist-get command-info :directory))
+         (file-path (when directory
+                      (ai--get-instruction-file-path name directory)))
+         (modifier-indicators (ai-debug--extract-modifier-indicators name))
+         (metadata-parts '()))
+
+    ;; Build metadata parts
+    (when file-path
+      (push (format "file: %s" file-path) metadata-parts))
+    (when modifier-indicators
+      (push (format "mods: %s" (string-join modifier-indicators "")) metadata-parts))
+
+    (magit-insert-section (ai-file-command name t) ; Pass 't' as hidden flag
+      (magit-insert-heading
+        (propertize name 'face 'ai-debug-context-type)
+        (when metadata-parts
+          (concat " " (propertize (format "(%s)" (mapconcat #'identity metadata-parts " | "))
+                                 'face 'ai-debug-context-metadata))))
+
+      ;; Full content (truncated if necessary)
+      (when (and content (> (length content) 0))
+        (ai-debug--safe-insert-content content ai-debug-max-recursion-depth 0))
+
+      (insert "\n"))))
+
+(defun ai-debug--insert-file-commands-by-location (location-name commands)
+  "Insert file commands from LOCATION-NAME with COMMANDS list."
+  (when commands
+    (magit-insert-section (ai-file-commands-location location-name t) ; Pass 't' as hidden flag
+      (magit-insert-heading
+        (propertize (format "%s (%d commands)" location-name (length commands))
+                   'face 'ai-debug-category-header))
+
+      (dolist (command-info commands)
+        (ai-debug--insert-file-command-item command-info)))))
+
+(defun ai-debug-show-file-commands ()
+  "Display all loaded file-based commands in a visual magit-like interface.
+Shows commands from default, global, and local instruction sources with
+expandable sections for detailed inspection."
+  (interactive)
+  (condition-case-unless-debug err
+    (let ((buffer (ai-debug--create-file-commands-buffer)))
+      (with-current-buffer buffer
+        (setq buffer-read-only nil)
+
+        ;; Set up refresh capability for file commands buffer
+        (setq-local ai-debug--refresh-function 'ai-debug-show-file-commands)
+        (setq-local ai-debug--refresh-args nil)
+
+        ;; Ensure caches are updated
+        (when (fboundp 'ai--ensure-instructions-cache-updated)
+          (condition-case-unless-debug nil
+            (progn
+              (ai--ensure-instructions-cache-updated
+               (ai--get-default-instructions-directory)
+               ai--default-instructions-cache "default")
+              (ai--ensure-instructions-cache-updated
+               (ai--get-global-instructions-directory)
+               ai--global-instructions-cache "global")
+              (when-let ((local-dir (ai--get-local-instructions-directory)))
+                (ai--ensure-instructions-cache-updated
+                 local-dir ai--local-instructions-cache "local")))
+            (error nil)))
+
+        ;; Collect file commands
+        (let* ((commands-data (ai-debug--collect-file-commands))
+               (default-commands (plist-get commands-data :default-commands))
+               (global-commands (plist-get commands-data :global-commands))
+               (local-commands (plist-get commands-data :local-commands))
+               (total-commands (+ (length default-commands)
+                                 (length global-commands)
+                                 (length local-commands))))
+
+          ;; Insert main header
+          (magit-insert-section (ai-file-commands-root)
+            (magit-insert-heading
+              (propertize (format "AI File-Based Commands (%d total)" total-commands)
+                         'face 'ai-debug-category-header))
+
+            ;; Insert commands by location with priority order
+            (ai-debug--insert-file-commands-by-location "Local (Project)" local-commands)
+            (ai-debug--insert-file-commands-by-location "Global (~/.ai)" global-commands)
+            (ai-debug--insert-file-commands-by-location "Default (Package)" default-commands)
+
+            ;; Show message if no commands found
+            (when (= total-commands 0)
+              (insert (propertize "No file-based commands found.\n" 'face 'ai-debug-empty-source))
+              (insert (propertize "File commands are loaded from:\n" 'face 'ai-debug-context-metadata))
+              (insert (propertize (format "- Default: %s\n" (ai--get-default-instructions-directory)) 'face 'ai-debug-context-metadata))
+              (insert (propertize (format "- Global: %s\n" (ai--get-global-instructions-directory)) 'face 'ai-debug-context-metadata))
+              (when-let ((local-dir (ai--get-local-instructions-directory)))
+                (insert (propertize (format "- Local: %s\n" local-dir) 'face 'ai-debug-context-metadata))))))
+
+        ;; Set up buffer display
+        (setq buffer-read-only t)
+        (goto-char (point-min))
+        ;; Collapse all sections by default
+        (condition-case-unless-debug nil
+          (ai-debug--collapse-all-sections-recursive)
+          (error nil)))
+
+      (pop-to-buffer buffer))
+    (error
+     (message "Error in ai-debug-show-file-commands: %s" (error-message-string err)))))
+
 (defun ai-debug-show-context-debug (context)
     "Display CONTEXT in a visual magit-like interface.
 Creates a comprehensive debug view showing all AI context information
@@ -1419,6 +1650,7 @@ Provides a comprehensive view of AI context, configuration, and data flow."
 (with-eval-after-load 'ai-mode
   (define-key ai-command-map (kbd "d") 'ai-debug-visual)
   (define-key ai-command-map (kbd "D") 'ai-debug-show-sources)
+  (define-key ai-command-map (kbd "f") 'ai-debug-show-file-commands)
   (define-key ai-command-map (kbd "C-d l") 'ai-debug-completion-limited-context)
   (define-key ai-command-map (kbd "C-d f") 'ai-debug-completion-full-context))
 

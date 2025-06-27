@@ -45,12 +45,86 @@
 ;; - Customizable prompts and instruction templates
 ;; - Buffer-local and global context management
 ;; - Real-time preview of AI suggestions
+;; - Project-wide context analysis and indexing
+;; - Progress indicators with elapsed time tracking
+;; - File-based instruction system with hot-reloading
+;; - Flexible memory and context pool management
+;; - Configurable user input methods with preview support
+
+;; File-based Command Modifiers:
+;; Commands defined in instruction files can use modifiers in their names
+;; to control behavior without code changes. Modifiers are separated by '__':
 ;;
-;; The package supports multiple AI providers and models, allowing users to
-;; choose the most suitable AI engine for their specific needs. With its
-;; extensive customization options and intuitive interface, AI Mode enhances
-;; productivity and code quality for developers working in any programming
-;; language supported by Emacs.
+;; Examples:
+;; - user__explain_code__show.md     - requires user input, shows result
+;; - buffer__refactor_function__replace.md - uses full buffer context, replaces selection
+;; - large__smart_completion__complete.md  - uses large context for completion
+;; - project__analyze_architecture__show.md - includes project context
+;;
+;; Available modifiers:
+;;
+;; Action Modifiers (control how results are handled):
+;; - show      [S] - Display in a buffer
+;; - eval      [E] - Display and offer to evaluate
+;; - replace   [R] - Replace selection/buffer
+;; - insert    [I] - Insert at cursor position
+;; - complete  [C] - Code completion
+;;
+;; Behavior Modifiers (control input and context requirements):
+;; - user      [U] - Requires user input
+;; - buffer    [B] - Uses full buffer context
+;; - project   [P] - Uses project context
+;; - global    [G] - Uses global context
+;;
+;; Context Size Modifiers (control amount of surrounding context):
+;; - small     [s] - Limited context (5/5 lines)
+;; - large     [L] - Extended context (20/20 lines)
+;; - full      [F] - Full context (unlimited)
+;;
+;; Display Indicators:
+;; Commands in completion lists show indicators in brackets:
+;; - [C]       - Configured command (from ai--commands-config-map)
+;; - [D]       - Has default instructions (from package)
+;; - [G]       - Has global instructions (from ~/.ai/)
+;; - [L]       - Has local instructions (from project .ai/)
+;; - [UBPSLEGRCIF] - Active modifiers (combinations possible)
+;;
+;; Example display: "[C][DG] explain" or "[UBS] user__buffer__explain_code__show"
+;;
+;; Installation and Setup:
+;; 1. Add ai-mode to your Emacs configuration
+;; 2. Configure at least one AI backend (OpenAI, Anthropic, etc.)
+;; 3. Set API keys in your environment or configuration
+;; 4. Enable `global-ai-mode` or `ai-mode` in specific buffers
+;; 5. Use `C-c i r` to start executing AI commands
+;;
+;; Key Bindings (default prefix C-c i):
+;; - C-c i r   - Execute AI command with replace action
+;; - C-c i s   - Show AI response in separate buffer
+;; - C-c i x   - Execute and evaluate AI-generated code
+;; - C-c i c c - Start AI chat session
+;; - C-c i b c - Change AI backend/model
+;; - C-c i p c - Execute AI coordinator (smart completion)
+;; - C-c i e i - Edit command instructions
+;; - C-c i m c - Create command with modifiers
+;; - C-c i p s - Switch project context mode
+;; - C-c i p u - Update project files summary index
+;;
+;; Project Context Modes:
+;; - disabled: No project context included
+;; - full-project: Include all filtered project files
+;; - project-ai-summary: Use cached AI-generated summaries
+;;
+;; Instruction File Hierarchy:
+;; 1. Local project instructions (.ai/commands/ in project root)
+;; 2. Global user instructions (~/.ai/commands/)
+;; 3. Default package instructions (built-in templates)
+;;
+;; Memory and Context Management:
+;; - Global memory: ~/.ai/memory.md (persistent across sessions)
+;; - Local memory: .ai/memory.md (project-specific)
+;; - Context pool: temporary additional context for current session
+;; - Buffer-bound prompts: buffer-local instruction additions
 
 ;;; Code:
 
@@ -144,11 +218,77 @@ Should be a function symbol that returns a string or nil."
                  (const :tag "Message only" message))
   :group 'ai)
 
+(defcustom ai--instruction-file-extension ".md"
+  "File extension used for instruction files."
+  :type 'string
+  :group 'ai)
+
+(defcustom ai--instruction-watching-enabled t
+  "Enable file watching for instruction files to auto-reload cache."
+  :type 'boolean
+  :group 'ai)
+
+(defcustom ai--file-command-action-modifiers
+  '(("show" . show)
+    ("eval" . eval)
+    ("replace" . replace)
+    ("insert" . insert-at-point)
+    ("complete" . complete))
+  "Mapping of action modifier names to result-action symbols for file-based commands.
+These modifiers can be used in file command names to specify the result action."
+  :type '(alist :key-type (string :tag "Modifier Name")
+                :value-type (symbol :tag "Result Action"))
+  :group 'ai-mode)
+
+(defcustom ai--file-command-behavior-modifiers
+  '(("user" . (:user-input t))
+    ("buffer" . (:needs-buffer-context t))
+    ("project" . (:needs-project-context t))
+    ("global" . (:needs-global-context t)))
+  "Mapping of behavior modifier names to configuration plists for file-based commands.
+These modifiers control command execution behavior."
+  :type '(alist :key-type (string :tag "Modifier Name")
+                :value-type (plist :tag "Configuration"))
+  :group 'ai-mode)
+
+(defcustom ai--file-command-context-modifiers
+  '(("full" . (:preceding-context-size nil :following-context-size nil))
+    ("small" . (:preceding-context-size 5 :following-context-size 5))
+    ("large" . (:preceding-context-size 20 :following-context-size 20)))
+  "Mapping of context modifier names to context size configuration for file-based commands.
+These modifiers control the amount of context included with commands."
+  :type '(alist :key-type (string :tag "Modifier Name")
+                :value-type (plist :tag "Context Configuration"))
+  :group 'ai-mode)
+
 (defvar ai--progress-spinner-chars '("○" "◔" "◑" "◕" "●" "○" "◔" "◑" "◕" "●")
   "Characters used for spinner animation in progress indicator.")
 
-(defvar-local ai--buffer-file-instructions (make-hash-table :test 'equal))
-(defvar ai-mode--actions-instructions (make-hash-table :test 'equal))
+;; Instruction cache variables
+(defvar ai--default-instructions-cache (make-hash-table :test 'equal)
+  "Cache for default instruction files from ai-mode package.")
+
+(defvar ai--global-instructions-cache (make-hash-table :test 'equal)
+  "Cache for global instruction files from ~/.ai/.")
+
+(defvar-local ai--local-instructions-cache (make-hash-table :test 'equal)
+  "Buffer-local cache for project instruction files.")
+
+;; System prompt cache variables
+(defvar ai--default-system-prompts-cache (make-hash-table :test 'equal)
+  "Cache for default system prompt files from ai-mode package.")
+
+(defvar ai--global-system-prompts-cache (make-hash-table :test 'equal)
+  "Cache for global system prompt files from ~/.ai/.")
+
+(defvar-local ai--local-system-prompts-cache (make-hash-table :test 'equal)
+  "Buffer-local cache for project system prompt files.")
+
+(defvar ai--instruction-file-watchers (make-hash-table :test 'equal)
+  "Hash table storing file watchers for instruction directories.")
+
+(defvar ai--instruction-directory-mtimes (make-hash-table :test 'equal)
+  "Hash table storing modification times for instruction directories.")
 
 (defvar ai-mode--models-providers nil)
 
@@ -196,32 +336,6 @@ Maps project root paths to lists of file summary structs.")
 (defvar-local ai--progress-start-time nil
   "Start time of the current AI request.")
 
-(defcustom ai-mode--base-additional-context-prompts-names
-  '("basic"
-    "complete"
-    "_file_metadata"
-    "modify_action_type_object"
-    "complete_action-type_object"
-    "explain_action_type_object"
-    "chat-basic")
-  "List of file names to load additional prompt instructions from.
-
-These files should contain context or prompts intended to guide the AI chatbot."
-  :type 'string
-  :group 'ai-mode)
-
-(defcustom ai--result-action-prompts-names
-  '("result_action_replace"
-    "result_action_show"
-    "result_action_eval"
-    "result_action_complete"
-    "result_action_insert-at-point")
-  "List of result action prompt file names to load instructions from.
-
-These files should contain instructions for how to format and apply results."
-  :type 'string
-  :group 'ai-mode)
-
 (defcustom ai--commands-config-map
   '(("modify" . (:template "" :instructions nil :user-input t :result-action replace))
     ("generate code from selection" . (:instructions nil :result-action replace))
@@ -238,8 +352,11 @@ These files should contain instructions for how to format and apply results."
     ("improve" . (:instructions nil :result-action replace))
     ("optimize" . (:instructions nil :result-action replace))
     ("spellcheck" . (:instructions nil :result-action replace))
+    ("index file" . (:instructions nil :result-action show))
 
-    ("index file" . (:instructions "Summarize the given file, extracting key functions, classes, and their purpose. Provide a concise summary in a <file-summary> tag. Include metadata from the original file-context struct as attributes on the <file-summary> tag (e.g., file, relative-path, file-size)." :result-action show)))
+    ("answer" . (:instructions nil :user-input t :result-action show ))
+    ("add to memory" . (:instructions nil :result-action replace))
+    ("complete" . (:instructions nil :action-type "complete" :result-action complete)))
 
   "An association list mapping AI commands to their configurations.
 Each entry is a pair: `(COMMAND . CONFIG-PLIST)`.
@@ -291,6 +408,9 @@ Each entry is a pair: `(COMMAND . CONFIG-PLIST)`.
     (define-key keymap (kbd "a c") 'ai-common--add-to-context-pool)
     (define-key keymap (kbd "p s") 'ai--switch-project-context-mode)
     (define-key keymap (kbd "p u") 'ai--update-project-files-summary-index)
+    (define-key keymap (kbd "e i") 'ai-edit-command-instructions)
+    (define-key keymap (kbd "m d") 'ai-describe-command-modifiers)
+    (define-key keymap (kbd "m c") 'ai-create-modified-command)
     keymap)
   "Keymap for AI commands.")
 
@@ -300,6 +420,666 @@ Each entry is a pair: `(COMMAND . CONFIG-PLIST)`.
       (define-key keymap (kbd ai-keymap-prefix) ai-command-map))
     keymap)
   "Keymap used by `ai-mode`.")
+
+;; Instruction management system
+
+(defun ai--get-default-instructions-directory ()
+  "Get the default instructions directory from the ai-mode package."
+  (file-name-as-directory
+   (expand-file-name ".ai/commands"
+                     (file-name-directory (locate-library "ai-mode")))))
+
+(defun ai--get-global-instructions-directory ()
+  "Get the global instructions directory from user's home."
+  (file-name-as-directory
+   (expand-file-name ".ai/commands" "~")))
+
+(defun ai--get-local-instructions-directory ()
+  "Get the local instructions directory from current project root."
+  (when-let ((project-root (ai-common--get-project-root)))
+    (file-name-as-directory
+     (expand-file-name ".ai/commands" project-root))))
+
+;; System prompt management system
+
+(defun ai--get-default-system-prompts-directory ()
+  "Get the default system prompts directory from the ai-mode package."
+  (file-name-as-directory
+   (expand-file-name ".ai/system"
+                     (file-name-directory (locate-library "ai-mode")))))
+
+(defun ai--get-global-system-prompts-directory ()
+  "Get the global system prompts directory from user's home."
+  (file-name-as-directory
+   (expand-file-name ".ai/system" "~")))
+
+(defun ai--get-local-system-prompts-directory ()
+  "Get the local system prompts directory from current project root."
+  (when-let ((project-root (ai-common--get-project-root)))
+    (file-name-as-directory
+     (expand-file-name ".ai/system" project-root))))
+
+(defun ai--command-name-to-filename (command-name)
+  "Convert COMMAND-NAME to a filesystem-safe filename with extension.
+Returns nil if COMMAND-NAME is nil."
+  (when command-name
+    (concat (replace-regexp-in-string "[[:space:]]" "_" command-name) ai--instruction-file-extension)))
+
+(defun ai--has-modifier-pattern-p (filename)
+  "Check if FILENAME contains modifier patterns (double underscores).
+Returns t if the filename appears to contain modifiers, nil otherwise."
+  (let ((base-name (file-name-sans-extension filename)))
+    (string-match-p "__" base-name)))
+
+(defun ai--is-modifier-keyword-p (part)
+  "Check if PART is a known modifier keyword.
+Returns t if PART matches any known modifier from action, behavior, or context modifiers."
+  (or (assoc part ai--file-command-action-modifiers)
+      (assoc part ai--file-command-behavior-modifiers)
+      (assoc part ai--file-command-context-modifiers)))
+
+(defun ai--filename-to-command-name (filename)
+  "Convert FILENAME back to command name intelligently.
+For files with modifier patterns, preserve the original structure with __.
+For simple files, convert underscores to spaces for backward compatibility."
+  (let ((base-name (file-name-sans-extension filename)))
+    (if (ai--has-modifier-pattern-p filename)
+        ;; File has modifier patterns - preserve __ structure
+        ;; but convert single _ to spaces only in non-modifier parts
+        (let ((parts (split-string base-name "__")))
+          (mapconcat (lambda (part)
+                       (if (ai--is-modifier-keyword-p part)
+                           part  ; Keep modifier keywords unchanged
+                         (replace-regexp-in-string "_" " " part)))  ; Convert _ to space in command parts
+                     parts "__"))
+      ;; Simple file without modifiers - convert all underscores to spaces
+      (replace-regexp-in-string "_" " " base-name))))
+
+(defun ai--get-instruction-file-path (command-name directory)
+  "Get the full path to instruction file for COMMAND-NAME in DIRECTORY.
+Returns nil if COMMAND-NAME is nil or DIRECTORY is nil."
+  (when (and command-name directory)
+    (when-let ((filename (ai--command-name-to-filename command-name)))
+      (expand-file-name filename directory))))
+
+(defun ai--get-command-examples-file-path (command-name directory)
+  "Get path to examples file for COMMAND-NAME in DIRECTORY.
+Returns nil if COMMAND-NAME is nil or DIRECTORY is nil."
+  (when (and command-name directory)
+    (let* ((base-name (ai--get-base-command-name-for-examples command-name))
+           (examples-filename (format "%s.examples%s" base-name ai--instruction-file-extension)))
+      (expand-file-name examples-filename directory))))
+
+(defun ai--get-base-command-name-for-examples (command-name)
+  "Extract base command name for finding examples, handling modifiers.
+Convert spaces to underscores for file lookup."
+  (let* ((parsed (ai--parse-command-modifiers command-name))
+         (base-name (car parsed)))
+    ;; Convert spaces back to underscores for file lookup
+    (replace-regexp-in-string "[[:space:]]" "_" base-name)))
+
+(defun ai--read-instruction-file (file-path)
+  "Read instruction content from FILE-PATH. Returns nil if file doesn't exist or isn't readable."
+  (when (and file-path (file-readable-p file-path))
+    (with-temp-buffer
+      (insert-file-contents file-path)
+      (buffer-string))))
+
+(defun ai--get-directory-modification-time (directory)
+  "Get the modification time of DIRECTORY. Returns nil if directory doesn't exist."
+  (when (file-directory-p directory)
+    (file-attribute-modification-time (file-attributes directory))))
+
+(defun ai--directory-needs-cache-update-p (directory cache-key)
+  "Check if DIRECTORY needs cache update based on modification time."
+  (when-let ((current-mtime (ai--get-directory-modification-time directory)))
+    (let ((cached-mtime (gethash cache-key ai--instruction-directory-mtimes)))
+      (not (and cached-mtime (time-equal-p current-mtime cached-mtime))))))
+
+(defun ai--scan-instruction-files-in-directory (directory)
+  "Scan DIRECTORY for instruction files and return list of command names.
+Excludes .examples.md files from the command list."
+  (when (file-directory-p directory)
+    (let ((files (directory-files directory nil (concat "\\." (regexp-quote (substring ai--instruction-file-extension 1)) "$")))
+          (commands nil))
+      (dolist (file files)
+        ;; Skip .examples.md files
+        (unless (string-match-p "\\.examples\\." file)
+          (push (ai--filename-to-command-name file) commands)))
+      commands)))
+
+(defun ai--update-instructions-cache (directory cache-table cache-key)
+  "Update CACHE-TABLE with instructions from DIRECTORY. CACHE-KEY is used for modification time tracking."
+  (when (file-directory-p directory)
+    (clrhash cache-table)
+    (let ((commands (ai--scan-instruction-files-in-directory directory)))
+      (dolist (command commands)
+        (when-let ((content (ai--read-instruction-file
+                            (ai--get-instruction-file-path command directory))))
+          (puthash command content cache-table))))
+    ;; Update modification time
+    (puthash cache-key (ai--get-directory-modification-time directory) ai--instruction-directory-mtimes)
+    (ai-utils--verbose-message "Updated instruction cache for %s (%d commands)" cache-key (hash-table-count cache-table))))
+
+(defun ai--update-system-prompts-cache (directory cache-table cache-key)
+  "Update CACHE-TABLE with system prompts from DIRECTORY. CACHE-KEY is used for modification time tracking."
+  (when (file-directory-p directory)
+    (clrhash cache-table)
+    (let ((prompts (ai--scan-instruction-files-in-directory directory)))
+      (dolist (prompt prompts)
+        (when-let ((content (ai--read-instruction-file
+                            (ai--get-instruction-file-path prompt directory))))
+          (puthash prompt content cache-table))))
+    ;; Update modification time
+    (puthash cache-key (ai--get-directory-modification-time directory) ai--instruction-directory-mtimes)
+    (ai-utils--verbose-message "Updated system prompts cache for %s (%d prompts)" cache-key (hash-table-count cache-table))))
+
+(defun ai--ensure-instructions-cache-updated (directory cache-table cache-key)
+  "Ensure CACHE-TABLE is up to date for DIRECTORY identified by CACHE-KEY."
+  (when (ai--directory-needs-cache-update-p directory cache-key)
+    (ai--update-instructions-cache directory cache-table cache-key)))
+
+(defun ai--ensure-system-prompts-cache-updated (directory cache-table cache-key)
+  "Ensure system prompts CACHE-TABLE is up to date for DIRECTORY identified by CACHE-KEY."
+  (when (ai--directory-needs-cache-update-p directory cache-key)
+    (ai--update-system-prompts-cache directory cache-table cache-key)))
+
+(defun ai-get-default-instructions (command-name)
+  "Get default instructions for COMMAND-NAME from ai-mode package."
+  (let ((directory (ai--get-default-instructions-directory)))
+    (ai--ensure-instructions-cache-updated directory ai--default-instructions-cache "default")
+    (gethash command-name ai--default-instructions-cache)))
+
+(defun ai-get-global-instructions (command-name)
+  "Get global instructions for COMMAND-NAME from ~/.ai/commands/."
+  (let ((directory (ai--get-global-instructions-directory)))
+    (ai--ensure-instructions-cache-updated directory ai--global-instructions-cache "global")
+    (gethash command-name ai--global-instructions-cache)))
+
+(defun ai-get-local-instructions (command-name)
+  "Get local instructions for COMMAND-NAME from project .ai/commands/."
+  (when-let ((directory (ai--get-local-instructions-directory)))
+    (ai--ensure-instructions-cache-updated directory ai--local-instructions-cache "local")
+    (gethash command-name ai--local-instructions-cache)))
+
+(defun ai-get-default-system-prompt (prompt-name)
+  "Get default system prompt for PROMPT-NAME from ai-mode package."
+  (let ((directory (ai--get-default-system-prompts-directory)))
+    (ai--ensure-system-prompts-cache-updated directory ai--default-system-prompts-cache "default-system")
+    (gethash prompt-name ai--default-system-prompts-cache)))
+
+(defun ai-get-global-system-prompt (prompt-name)
+  "Get global system prompt for PROMPT-NAME from ~/.ai/system/."
+  (let ((directory (ai--get-global-system-prompts-directory)))
+    (ai--ensure-system-prompts-cache-updated directory ai--global-system-prompts-cache "global-system")
+    (gethash prompt-name ai--global-system-prompts-cache)))
+
+(defun ai-get-local-system-prompt (prompt-name)
+  "Get local system prompt for PROMPT-NAME from project .ai/system/."
+  (when-let ((directory (ai--get-local-system-prompts-directory)))
+    (ai--ensure-system-prompts-cache-updated directory ai--local-system-prompts-cache "local-system")
+    (gethash prompt-name ai--local-system-prompts-cache)))
+
+(defun ai-get-instructions (command-name)
+  "Get instructions for COMMAND-NAME using priority: Local > Global > Default."
+  (or (ai-get-local-instructions command-name)
+      (ai-get-global-instructions command-name)
+      (ai-get-default-instructions command-name)))
+
+(defun ai-get-system-prompt (prompt-name)
+  "Get system prompt for PROMPT-NAME using priority: Local > Global > Default."
+  (or (ai-get-local-system-prompt prompt-name)
+      (ai-get-global-system-prompt prompt-name)
+      (ai-get-default-system-prompt prompt-name)))
+
+(defun ai--get-local-command-examples (command-name)
+  "Get local examples for COMMAND-NAME from project .ai/commands/."
+  (when-let ((directory (ai--get-local-instructions-directory)))
+    (ai--read-instruction-file
+     (ai--get-command-examples-file-path command-name directory))))
+
+(defun ai--get-global-command-examples (command-name)
+  "Get global examples for COMMAND-NAME from ~/.ai/commands/."
+  (let ((directory (ai--get-global-instructions-directory)))
+    (ai--read-instruction-file
+     (ai--get-command-examples-file-path command-name directory))))
+
+(defun ai--get-default-command-examples (command-name)
+  "Get default examples for COMMAND-NAME from ai-mode package."
+  (let ((directory (ai--get-default-instructions-directory)))
+    (ai--read-instruction-file
+     (ai--get-command-examples-file-path command-name directory))))
+
+(defun ai--get-command-examples (command-name)
+  "Get examples for COMMAND-NAME using priority: Local > Global > Default."
+  (or (ai--get-local-command-examples command-name)
+      (ai--get-global-command-examples command-name)
+      (ai--get-default-command-examples command-name)))
+
+(defun ai--get-rendered-command-examples (command context)
+  "Get examples for COMMAND, render with CONTEXT, and return result."
+  (when-let ((examples-content (ai--get-command-examples command)))
+    (ai-utils--render-template examples-content context)))
+
+(defun ai-get-all-instructions (command-name)
+  "Get all instructions for COMMAND-NAME from all locations with priority info.
+Returns a list of plists with :location, :content, and :priority keys."
+  (let ((results nil))
+    (when-let ((local-content (ai-get-local-instructions command-name)))
+      (push `(:location "Local" :content ,local-content :priority 3) results))
+    (when-let ((global-content (ai-get-global-instructions command-name)))
+      (push `(:location "Global" :content ,global-content :priority 2) results))
+    (when-let ((default-content (ai-get-default-instructions command-name)))
+      (push `(:location "Default" :content ,default-content :priority 1) results))
+    (sort results (lambda (a b) (> (plist-get a :priority) (plist-get b :priority))))))
+
+(defun ai--get-all-file-based-command-names ()
+  "Get all command names from instruction files only (not from config).
+Commands are collected from all instruction locations but not from ai--commands-config-map."
+  (let ((commands-set (make-hash-table :test 'equal))
+        (configured-commands (mapcar #'car ai--commands-config-map)))
+
+    ;; Mark configured commands to exclude them
+    (dolist (cmd configured-commands)
+      (puthash cmd t commands-set))
+
+    ;; Collect commands from instruction files, excluding configured ones
+    (let ((instruction-commands nil))
+      ;; Collect from default instructions
+      (let ((directory (ai--get-default-instructions-directory)))
+        (ai--ensure-instructions-cache-updated directory ai--default-instructions-cache "default")
+        (maphash (lambda (cmd _content)
+                   (unless (gethash cmd commands-set)
+                     (push cmd instruction-commands)
+                     (puthash cmd t commands-set)))
+                 ai--default-instructions-cache))
+
+      ;; Collect from global instructions
+      (let ((directory (ai--get-global-instructions-directory)))
+        (ai--ensure-instructions-cache-updated directory ai--global-instructions-cache "global")
+        (maphash (lambda (cmd _content)
+                   (unless (gethash cmd commands-set)
+                     (push cmd instruction-commands)
+                     (puthash cmd t commands-set)))
+                 ai--global-instructions-cache))
+
+      ;; Collect from local instructions
+      (when-let ((directory (ai--get-local-instructions-directory)))
+        (ai--ensure-instructions-cache-updated directory ai--local-instructions-cache "local")
+        (maphash (lambda (cmd _content)
+                   (unless (gethash cmd commands-set)
+                     (push cmd instruction-commands)
+                     (puthash cmd t commands-set)))
+                 ai--local-instructions-cache))
+
+      ;; Sort instruction commands alphabetically
+      (sort instruction-commands #'string<))))
+
+(defun ai--get-all-available-command-names ()
+  "Get all available command names from all instruction locations plus configured commands.
+Commands from ai--commands-config-map appear first in their original order."
+  (let ((configured-commands (mapcar #'car ai--commands-config-map))
+        (file-based-commands (ai--get-all-file-based-command-names)))
+    (append configured-commands file-based-commands)))
+
+(defun ai--parse-command-modifiers (command-name)
+  "Parse modifiers from COMMAND-NAME and return (base-name . config-plist).
+Modifiers are separated by '__' and can be prefixes or suffixes.
+Example: 'user__explain_code__show' -> ('explain_code' . (:user-input t :result-action show))"
+  (let ((parts (split-string command-name "__"))
+        (config '())
+        (base-name command-name))
+
+    (when (> (length parts) 1)
+      ;; Multiple parts found, parse modifiers
+      (let ((all-parts parts)
+            (identified-modifiers '())
+            (remaining-parts '()))
+
+        ;; Identify all modifier parts
+        (dolist (part all-parts)
+          (cond
+           ;; Check action modifiers
+           ((assoc part ai--file-command-action-modifiers)
+            (push (cons 'action part) identified-modifiers)
+            (setq config (plist-put config :result-action
+                                   (cdr (assoc part ai--file-command-action-modifiers)))))
+           ;; Check behavior modifiers
+           ((assoc part ai--file-command-behavior-modifiers)
+            (push (cons 'behavior part) identified-modifiers)
+            (let ((behavior-config (cdr (assoc part ai--file-command-behavior-modifiers))))
+              (setq config (append config behavior-config))))
+           ;; Check context modifiers
+           ((assoc part ai--file-command-context-modifiers)
+            (push (cons 'context part) identified-modifiers)
+            (let ((context-config (cdr (assoc part ai--file-command-context-modifiers))))
+              (setq config (append config context-config))))
+           ;; Not a modifier, part of base name
+           (t
+            (push part remaining-parts))))
+
+        ;; Construct base name from remaining non-modifier parts
+        (setq base-name (if remaining-parts
+                           (string-join (reverse remaining-parts) "__")
+                         (car all-parts)))))
+
+    (cons base-name config)))
+
+(defun ai--get-file-command-config (command-name)
+  "Get configuration for file-based command with modifier parsing.
+Returns a configuration plist with parsed modifiers applied."
+  (let* ((parsed (ai--parse-command-modifiers command-name))
+         (base-name (car parsed))
+         (modifier-config (cdr parsed))
+         (base-config ai--command-config))
+
+    ;; Merge base configuration with modifier configuration
+    ;; Modifier config takes precedence over base config
+    (let ((final-config base-config))
+      (while modifier-config
+        (let ((key (car modifier-config))
+              (value (cadr modifier-config)))
+          (setq final-config (plist-put final-config key value)))
+        (setq modifier-config (cddr modifier-config)))
+      final-config)))
+
+(defun ai--get-command-display-name (command-name)
+  "Get display name for COMMAND-NAME with indicators for instruction sources and modifiers.
+Shows configured commands [C], instruction sources [D/G/L], and modifier indicators.
+For file-based commands with modifiers, displays clean base name with modifier indicators."
+  (let ((indicators nil)
+        (configured-p (assoc command-name ai--commands-config-map))
+        (display-name command-name))
+
+    ;; Check for instruction files from different sources
+    (when (ai-get-default-instructions command-name)
+      (push "D" indicators))
+    (when (ai-get-global-instructions command-name)
+      (push "G" indicators))
+    (when (ai-get-local-instructions command-name)
+      (push "L" indicators))
+
+    ;; Parse and display modifiers for file-based commands
+    (unless configured-p
+      (when (ai-get-instructions command-name)
+        (let* ((parsed (ai--parse-command-modifiers command-name))
+               (base-name (car parsed))
+               (modifier-config (cdr parsed)))
+
+          ;; Use clean base name if command has modifiers
+          (when (and modifier-config (not (string= command-name base-name)))
+            (setq display-name base-name))
+
+          ;; Add modifier indicators
+          (when (plist-get modifier-config :user-input)
+            (push "U" indicators))  ; User input required
+          (when (plist-get modifier-config :needs-buffer-context)
+            (push "B" indicators))  ; Buffer context needed
+          (when (plist-get modifier-config :needs-project-context)
+            (push "P" indicators))  ; Project context needed
+
+          ;; Add result action indicator
+          (when-let ((result-action (plist-get modifier-config :result-action)))
+            (let ((action-indicator (cond
+                                    ((eq result-action 'show) "S")
+                                    ((eq result-action 'eval) "E")
+                                    ((eq result-action 'replace) "R")
+                                    ((eq result-action 'insert-at-point) "I")
+                                    ((eq result-action 'complete) "C")
+                                    (t "?"))))
+              (push action-indicator indicators)))
+
+          ;; Add context size indicators
+          (when (plist-member modifier-config :preceding-context-size)
+            (let ((preceding (plist-get modifier-config :preceding-context-size))
+                  (following (plist-get modifier-config :following-context-size)))
+              (cond
+               ((and (null preceding) (null following))
+                (push "F" indicators))  ; Full context
+               ((and (numberp preceding) (< preceding 10))
+                (push "s" indicators))  ; Small context
+               ((and (numberp preceding) (> preceding 15))
+                (push "L" indicators))  ; Large context
+               (t nil)))))))
+
+    (format "%s%s %s"
+            (if configured-p "[C]" "")
+            (if indicators
+                (format "[%s]" (string-join (reverse indicators) ""))
+              "")
+            display-name)))
+
+(defun ai--get-memory-file-path (location)
+  "Get memory file path for LOCATION (either 'global or 'local)."
+  (cond
+   ((eq location 'global)
+    (expand-file-name ".ai/memory.md" "~"))
+   ((eq location 'local)
+    (when-let ((project-root (ai-common--get-project-root)))
+      (expand-file-name ".ai/memory.md" project-root)))
+   ((eq location 'local-team)
+    (when-let ((project-root (ai-common--get-project-root)))
+      (expand-file-name ".ai/memory.local.md" project-root)))))
+
+(defun ai--read-memory-file (location)
+  "Read memory file content from LOCATION."
+  (when-let ((file-path (ai--get-memory-file-path location)))
+    (ai--read-instruction-file file-path)))
+
+(defun ai--get-memory-context ()
+  "Get combined memory context from all available memory files."
+  (let ((memory-contents nil))
+
+    ;; Read global memory
+    (when-let ((global-memory (ai--read-memory-file 'global)))
+      (push (ai-common--make-typed-struct global-memory 'memory-content 'global-memory) memory-contents))
+
+    ;; Read local project memory
+    (when-let ((local-memory (ai--read-memory-file 'local)))
+      (push (ai-common--make-typed-struct local-memory 'memory-content 'local-memory) memory-contents))
+
+    ;; Read local team memory
+    (when-let ((local-team-memory (ai--read-memory-file 'local-team)))
+      (push (ai-common--make-typed-struct local-team-memory 'memory-content 'local-team-memory) memory-contents))
+
+    (when memory-contents
+      (ai-common--make-typed-struct memory-contents 'additional-context 'memory-files))))
+
+(defun ai--get-command-for-editing ()
+  "Get command name from user input with completion but allowing arbitrary input.
+Shows configured commands first, then file-based commands."
+  (let* ((configured-commands (mapcar #'car ai--commands-config-map))
+         ;; Get all available commands but exclude those already in configured
+         (all-commands (ai--get-all-available-command-names))
+         (file-only-commands (cl-remove-if (lambda (cmd) (member cmd configured-commands)) all-commands))
+         ;; Create ordered list: configured first, then file-only alphabetically sorted
+         (ordered-commands (append configured-commands (sort file-only-commands #'string<)))
+         (command-displays (mapcar #'ai--get-command-display-name ordered-commands))
+         (command-alist (cl-mapcar #'cons command-displays ordered-commands))
+         (input (completing-read "Enter command name: " command-displays nil nil)))
+    ;; If input matches a display name, return the actual command name
+    (or (cdr (assoc input command-alist))
+        ;; Otherwise return the input as-is (for new commands)
+        input)))
+
+(defun ai--get-available-edit-locations (command-name)
+  "Get available editing locations for COMMAND-NAME.
+Returns a list of plists with :name, :symbol, :directory, :file-path, and :exists-p keys."
+  (let ((locations nil))
+    ;; Global location
+    (when-let ((global-dir (ai--get-global-instructions-directory)))
+      (let* ((file-path (ai--get-instruction-file-path command-name global-dir))
+             (exists-p (and file-path (file-exists-p file-path))))
+        (push `(:name "Global"
+                :symbol global
+                :directory ,global-dir
+                :file-path ,file-path
+                :exists-p ,exists-p)
+              locations)))
+
+    ;; Local location (project-specific)
+    (when-let ((local-dir (ai--get-local-instructions-directory)))
+      (let* ((file-path (ai--get-instruction-file-path command-name local-dir))
+             (exists-p (and file-path (file-exists-p file-path))))
+        (push `(:name "Local"
+                :symbol local
+                :directory ,local-dir
+                :file-path ,file-path
+                :exists-p ,exists-p)
+              locations)))
+
+    ;; Reverse to get Global first, then Local
+    (reverse locations)))
+
+(defun ai--format-location-display (location-info)
+  "Format LOCATION-INFO for display in completing-read.
+LOCATION-INFO is a plist with location details."
+  (let* ((name (plist-get location-info :name))
+         (file-path (plist-get location-info :file-path))
+         (exists-p (plist-get location-info :exists-p))
+         (status (if exists-p "[EXISTS]" "[NEW]")))
+    (format "%s: %s %s" name file-path status)))
+
+(defun ai--select-edit-location (command-name locations)
+  "Select editing location for COMMAND-NAME from LOCATIONS.
+Returns the selected location plist."
+  (if (= (length locations) 1)
+      ;; If only one location available, use it directly
+      (car locations)
+    ;; Otherwise, let user choose
+    (let* ((location-displays (mapcar #'ai--format-location-display locations))
+           (location-alist (cl-mapcar #'cons location-displays locations))
+           (selected-display (completing-read "Select location to edit: " location-displays nil t)))
+      (cdr (assoc selected-display location-alist)))))
+
+(defun ai--open-instruction-file (command-name location-info)
+  "Open instruction file for COMMAND-NAME at LOCATION-INFO for editing.
+LOCATION-INFO is a plist with location details."
+  (let* ((directory (plist-get location-info :directory))
+         (file-path (plist-get location-info :file-path))
+         (exists-p (plist-get location-info :exists-p)))
+
+    (unless file-path
+      (user-error "Cannot determine file path for command: %s" command-name))
+
+    ;; Ensure directory exists
+    (unless (file-directory-p directory)
+      (make-directory directory t))
+
+    ;; Open file for editing
+    (find-file file-path)
+
+    ;; If file is new, add template content
+    (when (and (not exists-p) (= (point-min) (point-max)))
+      (insert (format "# Instructions for command: %s\n\n" command-name)
+              "Write your AI instructions here...\n"))))
+
+(defun ai-edit-command-instructions ()
+  "Interactively edit instruction files for commands with improved interface."
+  (interactive)
+  (let* ((command-name (ai--get-command-for-editing))
+         (available-locations (ai--get-available-edit-locations command-name)))
+
+    (unless available-locations
+      (user-error "No editable locations available. Make sure you're in a project or global config is accessible"))
+
+    (let ((selected-location (ai--select-edit-location command-name available-locations)))
+      (ai--open-instruction-file command-name selected-location))))
+
+(defun ai-edit-command-instructions-for-name (command-name)
+  "Edit instruction file for specific COMMAND-NAME without user prompt."
+  (let ((available-locations (ai--get-available-edit-locations command-name)))
+    (unless available-locations
+      (user-error "No editable locations available. Make sure you're in a project or global config is accessible"))
+    (let ((selected-location (ai--select-edit-location command-name available-locations)))
+      (ai--open-instruction-file command-name selected-location))))
+
+(defun ai--get-available-modifiers ()
+  "Get all available modifiers categorized by type.
+Returns an alist with categories as keys and modifier lists as values."
+  `((action . ,(mapcar #'car ai--file-command-action-modifiers))
+    (behavior . ,(mapcar #'car ai--file-command-behavior-modifiers))
+    (context . ,(mapcar #'car ai--file-command-context-modifiers))))
+
+(defun ai--describe-command-modifiers (command-name)
+  "Describe the modifiers used in COMMAND-NAME.
+Returns a human-readable description of the command's configuration."
+  (let* ((parsed (ai--parse-command-modifiers command-name))
+         (base-name (car parsed))
+         (config (cdr parsed))
+         (descriptions '()))
+
+    (when (plist-get config :result-action)
+      (push (format "Result action: %s" (plist-get config :result-action)) descriptions))
+    (when (plist-get config :user-input)
+      (push "Requires user input" descriptions))
+    (when (plist-get config :needs-buffer-context)
+      (push "Uses full buffer context" descriptions))
+    (when (plist-get config :needs-project-context)
+      (push "Uses project context" descriptions))
+    (when (plist-member config :preceding-context-size)
+      (let ((preceding (plist-get config :preceding-context-size))
+            (following (plist-get config :following-context-size)))
+        (push (format "Context size: %s/%s"
+                     (if preceding (number-to-string preceding) "full")
+                     (if following (number-to-string following) "full"))
+              descriptions)))
+
+    (if descriptions
+        (format "Command: %s\nModifiers: %s" base-name (string-join descriptions ", "))
+      (format "Command: %s (no modifiers)" base-name))))
+
+(defun ai-describe-command-modifiers ()
+  "Interactively describe modifiers for a selected command."
+  (interactive)
+  (let* ((command (ai--get-command))
+         (description (ai--describe-command-modifiers command)))
+    (message "%s" description)))
+
+(defun ai-create-modified-command ()
+  "Interactively create a new file-based command with modifiers."
+  (interactive)
+  (let* ((base-name (read-string "Base command name: "))
+         (available-modifiers (ai--get-available-modifiers))
+         (selected-modifiers '())
+         (modifier-string ""))
+
+    ;; Select action modifier
+    (when (y-or-n-p "Add result action modifier? ")
+      (let ((action (completing-read "Select action: "
+                                    (cdr (assoc 'action available-modifiers)))))
+        (push action selected-modifiers)))
+
+    ;; Select behavior modifiers
+    (when (y-or-n-p "Add behavior modifiers? ")
+      (let ((behaviors (completing-read-multiple "Select behaviors (comma-separated): "
+                                                 (cdr (assoc 'behavior available-modifiers)))))
+        (setq selected-modifiers (append behaviors selected-modifiers))))
+
+    ;; Select context modifier
+    (when (y-or-n-p "Add context size modifier? ")
+      (let ((context (completing-read "Select context size: "
+                                     (cdr (assoc 'context available-modifiers)))))
+        (push context selected-modifiers)))
+
+    ;; Construct command name
+    (when selected-modifiers
+      (setq modifier-string (string-join (reverse selected-modifiers) "__")))
+
+    (let ((full-command-name (if (string-empty-p modifier-string)
+                                base-name
+                              (format "%s__%s" modifier-string base-name))))
+      (message "Suggested command name: %s" full-command-name)
+      (when (y-or-n-p "Create instruction file for this command? ")
+        ;; Check if instructions already exist
+        (let* ((global-instructions (ai-get-global-instructions full-command-name))
+               (local-instructions (ai-get-local-instructions full-command-name))
+               (file-exists (or global-instructions local-instructions)))
+          (when file-exists
+            (message "Warning: Instructions for command '%s' already exist" full-command-name))
+          ;; Create instruction file for the specific command name
+          (message "Creating instruction file for command: %s" full-command-name)
+          (ai-edit-command-instructions-for-name full-command-name))))))
 
 ;; Progress indicator functions (buffer-local operations)
 (defun ai--format-elapsed-time (start-time)
@@ -373,7 +1153,28 @@ Each entry is a pair: `(COMMAND . CONFIG-PLIST)`.
 
 ;;;###autoload
 (define-minor-mode ai-mode
-  "Minor mode for AI interaction."
+  "Minor mode for AI interaction.
+
+AI Mode provides a comprehensive set of tools for AI-assisted development
+directly within Emacs. When enabled, it adds AI-powered capabilities for
+code completion, explanation, refactoring, and more.
+
+Key features when enabled:
+- AI command execution with customizable actions
+- Context-aware code completion and modification
+- Project-wide AI analysis and indexing
+- Progress tracking for AI operations
+- File-based instruction system with hot-reloading
+- Multiple AI backend support with easy switching
+
+The mode integrates with the mode line to show current AI backend,
+context settings, and progress indicators during AI operations.
+
+Key bindings are available under the `ai-keymap-prefix' (default: C-c i).
+Use \\[ai-perform] to execute AI commands with automatic result handling,
+\\[ai-show] for informational queries, or \\[ai-execute] for code evaluation.
+
+See the package commentary for detailed usage instructions."
   :keymap ai-mode-map
   :lighter (:eval (ai-mode-line-info))
   :group 'ai
@@ -383,10 +1184,10 @@ Each entry is a pair: `(COMMAND . CONFIG-PLIST)`.
         (progn
           (add-hook 'pre-command-hook 'ai-mode-pre-command)
           (add-hook 'post-command-hook 'ai-mode-post-command)
-          (add-hook 'after-save-hook 'ai-mode--update-file-instructions))
+          (add-hook 'after-save-hook 'ai-mode--initialize-system))
       (remove-hook 'pre-command-hook 'ai-mode-pre-command)
       (remove-hook 'post-command-hook 'ai-mode-post-command)
-      (remove-hook 'after-save-hook 'ai-mode--update-file-instructions))
+      (remove-hook 'after-save-hook 'ai-mode--initialize-system))
     (ai-mode-update-mode-line-info)))
 
 ;;;###autoload
@@ -411,65 +1212,52 @@ Each entry is a pair: `(COMMAND . CONFIG-PLIST)`.
   (ai-mode-update-mode-line-info)
   (if global-ai-mode
       (progn
-        (ai-mode--update-mode-instructions)
+        (ai-mode--initialize-system)
         (message "Global AI mode is now enabled!"))
     (message "Global AI mode is now disabled!")))
 
 (add-hook 'global-ai-mode-hook 'ai-mode-global-init-hook)
 
-(defun ai-mode--update-file-instructions ()
-  "Update local file instructions for AI mode."
-  (message "Updating AI mode local actions instructions...")
+(defun ai-mode--initialize-system ()
+  "Initialize both command and system prompt caches."
+  (ai-mode--update-commands-cache)
+  (ai-mode--update-system-prompts-cache))
 
-  (with-current-buffer (current-buffer)
-    (let* ((actions (mapcar #'car ai--commands-config-map))
-           (actions (append actions ai-mode--base-additional-context-prompts-names))
-           (actions (append actions ai--result-action-prompts-names))
-           (root-path (ai-utils--get-buffer-root-path (current-buffer)))
-           (library-root-path (file-name-directory (locate-library "ai-mode")))
-           (instructions-table (make-hash-table :test 'equal)))
+(defun ai-mode--update-commands-cache ()
+  "Update command caches for all locations."
+  (message "Updating AI mode command caches...")
 
-      (unless (equal root-path library-root-path)
-        (message "Updating AI mode buffer actions instructions...")
+  ;; Update default commands cache
+  (let ((directory (ai--get-default-instructions-directory)))
+    (ai--ensure-instructions-cache-updated directory ai--default-instructions-cache "default"))
 
-        (dolist (action actions)
-          (let* ((instruction (ai-utils--file-instructions-for-command action root-path))
-                 (action-examples-file-name (format "%s_examples" action))
-                 (instruction-examples (ai-utils--file-instructions-for-command action-examples-file-name root-path)))
-            (when instruction
-              (puthash action instruction instructions-table))
-            (when instruction-examples
-              (puthash (format "%s-examples" action) instruction-examples instructions-table))))
+  ;; Update global commands cache
+  (let ((directory (ai--get-global-instructions-directory)))
+    (ai--ensure-instructions-cache-updated directory ai--global-instructions-cache "global"))
 
-        (setq-local ai--buffer-file-instructions instructions-table)
-        (message "AI mode buffer actions instructions updated!")))))
+  ;; Update local commands cache
+  (when-let ((directory (ai--get-local-instructions-directory)))
+    (ai--ensure-instructions-cache-updated directory ai--local-instructions-cache "local"))
 
-(defun ai-mode--update-mode-instructions ()
-  "Update global AI mode library instructions."
-  (interactive)
-  (message "Updating AI mode global actions instructions...")
+  (message "AI mode command caches updated!"))
 
-  (let* ((root-path (file-name-directory (locate-library "ai-mode")))
-         (actions (mapcar #'car ai--commands-config-map))
-         (actions (append actions ai-mode--base-additional-context-prompts-names))
-         (actions (append actions ai--result-action-prompts-names))
-         (instructions-table (make-hash-table :test 'equal)))
+(defun ai-mode--update-system-prompts-cache ()
+  "Update system prompts cache for all locations."
+  (message "Updating AI mode system prompts caches...")
 
-    (message "ai-mode library path: %s" root-path)
+  ;; Update default system prompts cache
+  (let ((directory (ai--get-default-system-prompts-directory)))
+    (ai--ensure-system-prompts-cache-updated directory ai--default-system-prompts-cache "default-system"))
 
-    (dolist (action actions)
-      (let* ((instruction (ai-utils--file-instructions-for-command action root-path))
-             (action-examples-file-name (format "%s_examples" action))
-             (instruction-examples (ai-utils--file-instructions-for-command action-examples-file-name root-path)))
-        (when instruction
-          (puthash action instruction instructions-table)
-          (ai-utils--verbose-message "Instructions for action \"%s\" added to global actions instructions" action))
-        (when instruction-examples
-          (puthash (format "%s-examples" action) instruction-examples instructions-table)
-          (ai-utils--verbose-message "Examples for action \"%s\" added to global actions instructions" action))))
+  ;; Update global system prompts cache
+  (let ((directory (ai--get-global-system-prompts-directory)))
+    (ai--ensure-system-prompts-cache-updated directory ai--global-system-prompts-cache "global-system"))
 
-    (setq ai-mode--actions-instructions instructions-table))
-  (message "AI mode actions instructions updated!"))
+  ;; Update local system prompts cache
+  (when-let ((directory (ai--get-local-system-prompts-directory)))
+    (ai--ensure-system-prompts-cache-updated directory ai--local-system-prompts-cache "local-system"))
+
+  (message "AI mode system prompts caches updated!"))
 
 (cl-defun ai--execute-context (context success-callback &key (fail-callback nil) (model nil))
   "Execute CONTEXT using SUCCESS-CALLBACK and optional FAIL-CALLBACK with an optional MODEL."
@@ -555,8 +1343,8 @@ Returns t if context should be included, nil otherwise."
 
 (defun ai--get-result-action-prompt (result-action context)
   "Get the prompt for RESULT-ACTION rendered with CONTEXT."
-  (let ((instruction-name (format "result_action_%s" (symbol-name result-action))))
-    (ai--get-rendered-command-instructions instruction-name context)))
+  (let ((prompt-name (format "result_action_%s" (symbol-name result-action))))
+    (ai--get-rendered-system-prompt prompt-name context)))
 
 (defun ai--get-user-input ()
   "Get user input using the configured function."
@@ -834,37 +1622,25 @@ Each context should be a plist with :type, :content, and other metadata."
            (model-context (ai-utils--get-model-context model))
            (full-context (append completion-context buffer-context model-context))
 
-           (basic-instructions (ai-common--make-typed-struct
-                                (ai--get-rendered-command-instructions "basic" full-context)
-                                'agent-instructions
-                                'basic-prompt))
+           (basic-instructions (when-let ((content (ai--get-rendered-system-prompt "basic" full-context)))
+                                 (ai-common--make-typed-struct content 'agent-instructions 'basic-prompt)))
 
-           (file-metadata-context (ai-common--make-typed-struct
-                                   (ai--get-rendered-command-instructions "_file_metadata" full-context)
-                                   'file-metadata
-                                   'file-metadata))
+           (file-metadata-context (when-let ((content (ai--get-rendered-system-prompt "_file_metadata" full-context)))
+                                    (ai-common--make-typed-struct content 'file-metadata 'file-metadata)))
 
-           (command-instructions (ai-common--make-typed-struct
-                                  (ai--get-rendered-command-instructions command full-context)
-                                  'agent-instructions
-                                  'command-specific-instructions))
+           (command-instructions (when-let ((content (ai--get-rendered-command-instructions command full-context)))
+                                   (ai-common--make-typed-struct content 'agent-instructions 'command-specific-instructions)))
 
-           (command-examples-instructions (ai-common--make-typed-struct
-                                           (ai--get-rendered-command-instructions (format "%s-examples" command) full-context)
-                                           'agent-instructions
-                                           'command-examples))
+           (command-examples-instructions (when-let ((content (ai--get-rendered-command-examples command full-context)))
+                                            (ai-common--make-typed-struct content 'agent-instructions 'command-examples)))
 
-           (action-type-object-instructions (ai-common--make-typed-struct
-                                             (ai--get-action-type-object-instructions (ai--get-action-type-for-config config) full-context)
-                                             'agent-instructions
-                                             'action-object-rules))
+           (action-type-object-instructions (when-let ((content (ai--get-action-type-object-instructions (ai--get-action-type-for-config config) full-context)))
+                                              (ai-common--make-typed-struct content 'agent-instructions 'action-object-rules)))
 
            (result-action-instructions (let ((result-action (map-elt config :result-action)))
                                          (when result-action
-                                           (ai-common--make-typed-struct
-                                            (ai--get-result-action-prompt result-action full-context)
-                                            'agent-instructions
-                                            'result-action-format))))
+                                           (when-let ((content (ai--get-result-action-prompt result-action full-context)))
+                                             (ai-common--make-typed-struct content 'agent-instructions 'result-action-format)))))
 
            (config-instructions (when-let ((instructions (map-elt config :instructions)))
                                   (ai-common--make-typed-struct instructions 'agent-instructions 'config-instructions)))
@@ -881,6 +1657,9 @@ Each context should be a plist with :type, :content, and other metadata."
 
            (project-context
             (ai--get-project-context))
+
+           (memory-context
+            (ai--get-memory-context))
 
            (current-buffer-content-context
             (when (ai--should-include-current-buffer-content-context-p config command full-context)
@@ -949,6 +1728,7 @@ Each context should be a plist with :type, :content, and other metadata."
                        additional-context
                        external-contexts-structs
                        project-context
+                       memory-context
                        buffer-bound-prompts-context
                        command-examples-instructions
                        rendered-action-context
@@ -962,42 +1742,59 @@ Each context should be a plist with :type, :content, and other metadata."
            (result `(:messages ,messages :model-context ,model)))
       result)))
 
-(defun ai--get-local-command-instructions (command)
-  "Return instruction for COMMAND from buffer-local hash table as a string."
-  (gethash command ai--buffer-file-instructions))
-
-(defun ai--get-default-command-instructions (command)
-  "Return instruction for COMMAND from global actions hash table as a string."
-  (gethash command ai-mode--actions-instructions))
-
 (defun ai--get-command-instructions (command)
-  "Return buffer-specific instructions for COMMAND if available.
-If not available and `ai--global-prompts-enabled' is non-nil,
-return the global instruction from `ai--get-default-command-instructions'."
-  (or (ai--get-local-command-instructions command)
-      (when ai--global-prompts-enabled
-        (ai--get-default-command-instructions command))))
+  "Return instruction for COMMAND from commands directory only."
+  (ai-get-instructions command))
+
+(defun ai--get-system-prompt-instructions (prompt-name)
+  "Return system prompt for PROMPT-NAME from system directory only."
+  (ai-get-system-prompt prompt-name))
+
+(defun ai--get-rendered-instruction (name context &optional is-system-prompt)
+  "Get and render instruction, checking appropriate directory based on IS-SYSTEM-PROMPT."
+  (let ((content (if is-system-prompt
+                     (ai--get-system-prompt-instructions name)
+                   (ai--get-command-instructions name))))
+    (when content
+      (ai-utils--render-template content context))))
 
 (defun ai--get-rendered-command-instructions (command context)
   "Get instructions for COMMAND, render it with CONTEXT, and return the result.
 If no instructions are found for COMMAND, returns nil."
-  (when-let* ((instructions-content (ai--get-command-instructions command)))
-    (ai-utils--render-template instructions-content context)))
+  (ai--get-rendered-instruction command context nil))
+
+(defun ai--get-rendered-system-prompt (prompt-name context)
+  "Get system prompt for PROMPT-NAME, render it with CONTEXT, and return the result.
+If no system prompt is found for PROMPT-NAME, returns nil."
+  (ai--get-rendered-instruction prompt-name context t))
 
 (defun ai--get-action-type-object-instructions (action-type context)
   "Get the instructions for ACTION-TYPE rendered with CONTEXT."
-  (ai--get-rendered-command-instructions (format "%s_action_type_object" action-type) context))
+  (ai--get-rendered-system-prompt (format "%s_action_type_object" action-type) context))
 
 (defun ai--get-command-config-by-type (command &optional default-result-action)
-  "Get command config by COMMAND, applying DEFAULT-RESULT-ACTION for unknown commands."
+  "Get command config by COMMAND, applying DEFAULT-RESULT-ACTION for unknown commands.
+Now supports modifier parsing for file-based commands with instruction files."
   (if-let (config (cdr (assoc command ai--commands-config-map)))
+      ;; Command found in configuration map
       (append config `(:action ,command))
     (if (string= command "complete")
+        ;; Special case for completion
         ai--completion-config
-      (let ((base-config (append ai--command-config `(:command ,command))))
-        (if default-result-action
-            (append base-config `(:result-action ,default-result-action))
-          base-config)))))
+      ;; Check if this is a file-based command with instructions
+      (if (ai-get-instructions command)
+          ;; File-based command - parse modifiers and apply configuration
+          (let ((file-config (ai--get-file-command-config command)))
+            ;; Apply default result action if none specified by modifiers
+            (unless (plist-get file-config :result-action)
+              (when default-result-action
+                (setq file-config (plist-put file-config :result-action default-result-action))))
+            file-config)
+        ;; Regular command without instructions - use base configuration
+        (let ((base-config (append ai--command-config `(:command ,command))))
+          (if default-result-action
+              (plist-put base-config :result-action default-result-action)
+            base-config))))))
 
 (cl-defun ai--get-executions-context-for-command (command &key (model nil) (default-result-action nil) (external-contexts nil))
   "Get execution context for COMMAND with optional MODEL, DEFAULT-RESULT-ACTION, and EXTERNAL-CONTEXTS.
@@ -1011,21 +1808,39 @@ EXTERNAL-CONTEXTS is a list of additional context structs to include in the exec
   (interactive)
   (ai--execute-context (ai--get-executions-context-for-command "explain") 'ai-utils--show-explain-help-buffer))
 
+(defun ai--get-ordered-command-names ()
+  "Get all available command names ordered with configured commands first, then file-based commands."
+  (let ((configured-commands (mapcar #'car ai--commands-config-map))
+        (file-based-commands (ai--get-all-file-based-command-names)))
+    (append configured-commands file-based-commands)))
+
 (defun ai--get-command ()
   "Prompt the user to select the command using `completing-read`."
   (interactive)
-  (completing-read ai--command-prompt (mapcar #'car ai--commands-config-map)))
+  (let* ((all-commands (ai--get-ordered-command-names))
+         ( _ (message "%s" (pp-to-string all-commands)))
+         (command-displays (mapcar #'ai--get-command-display-name all-commands))
+         (command-alist (cl-mapcar #'cons command-displays all-commands))
+         (selected-display (completing-read ai--command-prompt command-displays))
+         (selected-command (cdr (assoc selected-display command-alist))))
+    selected-command))
 
 (defun ai--get-informational-command ()
   "Prompt the user to select an informational command, filtering by :result-action 'show'."
   (interactive)
-  (let* ((show-commands
+  (let* ((configured-show-commands
           (mapcar #'car
                   (cl-remove-if-not
                    (lambda (item)
                      (eq (map-elt (cdr item) :result-action) 'show))
-                   ai--commands-config-map))))
-    (completing-read ai--command-prompt show-commands nil nil nil nil)))
+                   ai--commands-config-map)))
+         ;; For unconfigured commands, we default to 'show', so include all available commands
+         (all-commands (ai--get-ordered-command-names))
+         (command-displays (mapcar #'ai--get-command-display-name all-commands))
+         (command-alist (cl-mapcar #'cons command-displays all-commands))
+         (selected-display (completing-read ai--command-prompt command-displays))
+         (selected-command (cdr (assoc selected-display command-alist))))
+    selected-command))
 
 (defun ai--get-executable-command ()
   "Prompt the user to select an executable command, filtering by :result-action 'eval'."
@@ -1035,20 +1850,21 @@ EXTERNAL-CONTEXTS is a list of additional context structs to include in the exec
                   (cl-remove-if-not
                    (lambda (item)
                      (eq (map-elt (cdr item) :result-action) 'eval))
-                   ai--commands-config-map))))
-    (completing-read ai--command-prompt eval-commands nil nil nil nil)))
+                   ai--commands-config-map)))
+         (command-displays (mapcar #'ai--get-command-display-name eval-commands))
+         (command-alist (cl-mapcar #'cons command-displays eval-commands))
+         (selected-display (completing-read ai--command-prompt command-displays))
+         (selected-command (cdr (assoc selected-display command-alist))))
+    selected-command))
 
 (defun ai--get-all-available-commands ()
   "Get all available commands including those from config and additional actions."
-  (let* ((config-commands (mapcar #'car ai--commands-config-map))
-         (additional-commands '("complete"))
-         (all-commands (append config-commands additional-commands)))
-    (delete-dups all-commands)))
+  (ai--get-ordered-command-names))
 
 (defun ai--get-command-unrestricted ()
   "Prompt the user to select any available command without restrictions."
   (interactive)
-  (completing-read ai--command-prompt (ai--get-all-available-commands) nil nil nil nil))
+  (ai--get-command))
 
 (defun ai--set-execution-model (model)
   "Set the execution model and execute hooks.
@@ -1076,7 +1892,7 @@ MODEL is the model configuration to be set."
 
 (defun ai--switch-file-instructions-enabled ()
   "Toggle file instructions for the current buffer."
-  (setq ai--buffer-file-instructions (not ai--buffer-file-instructions)))
+  (setq ai--project-file-instructions-enabled (not ai--project-file-instructions-enabled)))
 
 (cl-defun ai-perform-async-backend-query (context success-callback &key
                                                   (fail-callback nil)
@@ -1146,7 +1962,7 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
      (t
       ;; Fallback for unconfigured or new actions
       (message "Unknown or unspecified result action for command '%s'. Defaulting to replace." command)
-      (ai--execute-context context (ai-utils--replace-region-or-insert-in-current-buffer))))))
+      (ai--execute-context context 'ai-utils--show-response-buffer)))))
 
 (defun ai-perform-coordinator ()
   "Decide whether to continue the previous process of supplementation or to start a new one."
