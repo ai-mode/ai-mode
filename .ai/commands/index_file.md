@@ -1,0 +1,1 @@
+Summarize the given file, extracting key functions, classes, and their purpose. Provide a concise summary in a <file-summary> tag. Include metadata from the original file-context struct as attributes on the <file-summary> tag (e.g., file, relative-path, file-size).

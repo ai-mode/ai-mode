@@ -1,0 +1,56 @@
+# .ai-ignore
+# Private files and directories
+private/
+.env
+.local/
+secrets/
+*.key
+*.pem
+*.p12
+*.crt
+
+# Version control metadata
+.git/
+.svn/
+.hg/
+.bzr/
+CVS/
+
+# Build artifacts
+build/
+dist/
+target/
+*.pyc
+__pycache__/
+
+# Editor/IDE specific files
+.idea/
+.vscode/
+.DS_Store
+*~
+#*#
+\#*#
+.#*
+*.swp
+*.bak
+*.orig
+*.rej
+
+# Logs and temporary files
+*.log
+*.tmp
+temp/
+
+.elsa/
+
+.DS_Store
+
+media/*
+.dir-locals
+.ai/
+LICENSE
+Makefile
+.ai-ignore
+.gitignore
+ROADMAP.md
+README.md
