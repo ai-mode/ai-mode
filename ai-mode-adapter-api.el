@@ -102,38 +102,24 @@ Returns appropriate cache duration string based on content characteristics."
     (cond
      ;; Long-term cache (1h) - static, rarely changing content
      ((eq type 'agent-instructions) "1h")
-     ((eq type 'file-metadata) "1h")
-     ((eq type 'memory-content) "1h")
+     ((eq type 'memory) "1h")
 
      ;; No cache (0m) - dynamic, user-driven content
      ((eq type 'user-input) "0m")
-     ((eq type 'conversation-state) "0m")
-     ((eq type 'realtime-data) "0m")
+     ((eq type 'action-context) "0m")
+     ((eq type 'file-metadata) "0m")
 
      ;; Short-term cache (5m) - semi-dynamic content
-     ((eq type 'action-context) "5m")
      ((eq type 'session-context) "5m")
      ((eq type 'temporary-data) "5m")
 
-     ;; Additional context handling with subtype consideration
-     ((eq type 'additional-context)
-      (cond
-       ((eq subtype 'project-files) "1h")      ; Static project structure
-       ((eq subtype 'context-pool) "0m")       ; Dynamic context pool
-       ((eq subtype 'search-results) "5m")     ; Periodically updated results
-       ((eq subtype 'api-response) "5m")       ; API responses may change
-       ((eq subtype 'file-content) "1h")       ; File content rarely changes
-       (t "5m"))) ; Default medium cache for additional context
+     ((eq type 'project-ai-summary) "1h")
+     ((eq type 'project-context) "5m")
 
-     ;; Content size heuristics for unknown types
-     ((and content (stringp content))
-      (cond
-       ((< (length content) 100) "5m")   ; Small content - medium cache
-       ((< (length content) 1000) "1h")  ; Medium content - long cache
-       (t "5m")))                        ; Large content - medium cache
+     ((eq type 'additional-context) "0m")
 
-     ;; Default to medium cache for unknown types
-     (t "5m"))))
+     ;; Default cache for unknown types
+     (t "0m"))))
 
 (defun ai-mode-adapter-api-ttl-to-seconds (ttl-string)
   "Convert TTL-STRING to seconds.
@@ -179,10 +165,14 @@ message preparation steps as needed."
   (ai-mode-adapter-api-group-adjacent-same-type-structs messages))
 
 (defun ai-mode-adapter-api-group-adjacent-same-type-structs (messages)
-  "Group adjacent messages of the same type into grouped structures.
+  "Group adjacent messages of the same type and group into grouped structures.
 Takes a list of MESSAGES (typed structures) and merges consecutive messages
-of the same type into a single grouped structure with child elements.
+of the same type and same group value into a single grouped structure with child elements.
 This enables more efficient caching and rendering of similar content blocks.
+
+The grouping is based on both :type and :group fields. Messages are grouped only if:
+1. They have the same :type value
+2. They have the same :group value (nil is treated as a valid group value)
 
 The grouped structure will have:
 - :type same as the original type
@@ -196,17 +186,22 @@ Returns a new list with grouped structures replacing adjacent same-type messages
 
   (let ((result '())
         (current-group '())
-        (current-type nil))
+        (current-type nil)
+        (current-group-value nil))
 
     (dolist (message messages)
-      (let ((message-type (ai-mode-adapter-api-get-struct-type message)))
+      (let ((message-type (ai-mode-adapter-api-get-struct-type message))
+            (message-group (plist-get message :group)))
         (cond
-         ;; First message or same type as current group
-         ((or (null current-type) (eq message-type current-type))
+         ;; First message or same type and group as current group
+         ((or (null current-type)
+              (and (eq message-type current-type)
+                   (equal message-group current-group-value)))
           (push message current-group)
-          (setq current-type message-type))
+          (setq current-type message-type)
+          (setq current-group-value message-group))
 
-         ;; Different type - finalize current group and start new one
+         ;; Different type or group - finalize current group and start new one
          (t
           ;; Finalize current group
           (if (= (length current-group) 1)
@@ -222,7 +217,8 @@ Returns a new list with grouped structures replacing adjacent same-type messages
 
           ;; Start new group
           (setq current-group (list message))
-          (setq current-type message-type)))))
+          (setq current-type message-type)
+          (setq current-group-value message-group)))))
 
     ;; Handle the last group
     (when current-group

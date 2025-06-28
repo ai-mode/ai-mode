@@ -500,6 +500,19 @@ Each entry is a pair: `(COMMAND . CONFIG-PLIST)`.
     (file-name-as-directory
      (expand-file-name ".ai/system" project-root))))
 
+;; System prompt normalization functions
+
+(defun ai--normalize-prompt-name (name)
+  "Normalize prompt NAME by converting spaces to underscores for consistent lookup.
+This ensures both 'modify_action_type_object' and 'modify action type object'
+map to the same cache key."
+  (when name
+    (replace-regexp-in-string "[[:space:]]" "_" name)))
+
+(defun ai--normalize-prompt-name-for-cache (name)
+  "Normalize prompt NAME for cache storage, ensuring consistent keys."
+  (ai--normalize-prompt-name name))
+
 ;; Index persistence management
 
 (defun ai--get-project-index-directory (project-root)
@@ -870,14 +883,16 @@ Excludes .examples.md files from the command list."
     (ai-utils--verbose-message "Updated instruction cache for %s (%d commands)" cache-key (hash-table-count cache-table))))
 
 (defun ai--update-system-prompts-cache (directory cache-table cache-key)
-  "Update CACHE-TABLE with system prompts from DIRECTORY. CACHE-KEY is used for modification time tracking."
+  "Update CACHE-TABLE with system prompts from DIRECTORY using normalized names as keys."
   (when (file-directory-p directory)
     (clrhash cache-table)
     (let ((prompts (ai--scan-instruction-files-in-directory directory)))
       (dolist (prompt prompts)
         (when-let ((content (ai--read-instruction-file
                             (ai--get-instruction-file-path prompt directory))))
-          (puthash prompt content cache-table))))
+          ;; Use normalized name as cache key
+          (let ((normalized-key (ai--normalize-prompt-name-for-cache prompt)))
+            (puthash normalized-key content cache-table)))))
     ;; Update modification time
     (puthash cache-key (ai--get-directory-modification-time directory) ai--instruction-directory-mtimes)
     (ai-utils--verbose-message "Updated system prompts cache for %s (%d prompts)" cache-key (hash-table-count cache-table))))
@@ -914,19 +929,22 @@ Excludes .examples.md files from the command list."
   "Get default system prompt for PROMPT-NAME from ai-mode package."
   (let ((directory (ai--get-default-system-prompts-directory)))
     (ai--ensure-system-prompts-cache-updated directory ai--default-system-prompts-cache "default-system")
-    (gethash prompt-name ai--default-system-prompts-cache)))
+    ;; Normalize the lookup name
+    (gethash (ai--normalize-prompt-name prompt-name) ai--default-system-prompts-cache)))
 
 (defun ai-get-global-system-prompt (prompt-name)
   "Get global system prompt for PROMPT-NAME from ~/.ai/system/."
   (let ((directory (ai--get-global-system-prompts-directory)))
     (ai--ensure-system-prompts-cache-updated directory ai--global-system-prompts-cache "global-system")
-    (gethash prompt-name ai--global-system-prompts-cache)))
+    ;; Normalize the lookup name
+    (gethash (ai--normalize-prompt-name prompt-name) ai--global-system-prompts-cache)))
 
 (defun ai-get-local-system-prompt (prompt-name)
   "Get local system prompt for PROMPT-NAME from project .ai/system/."
   (when-let ((directory (ai--get-local-system-prompts-directory)))
     (ai--ensure-system-prompts-cache-updated directory ai--local-system-prompts-cache "local-system")
-    (gethash prompt-name ai--local-system-prompts-cache)))
+    ;; Normalize the lookup name
+    (gethash (ai--normalize-prompt-name prompt-name) ai--local-system-prompts-cache)))
 
 (defun ai-get-instructions (command-name)
   "Get instructions for COMMAND-NAME using priority: Local > Global > Default."
@@ -1191,7 +1209,7 @@ For file-based commands with modifiers, displays clean base name with modifier i
       (push (ai-common--make-typed-struct local-team-memory 'memory-content 'local-team-memory) memory-contents))
 
     (when memory-contents
-      (ai-common--make-typed-struct memory-contents 'additional-context 'memory-files))))
+      (ai-common--make-typed-struct memory-contents 'memory 'memory-files))))
 
 (defun ai--get-command-for-editing ()
   "Get command name from user input with completion but allowing arbitrary input.
@@ -2110,7 +2128,7 @@ or nil if no project is detected or index is empty."
                          'project-summary-index))
            (project-struct (ai-common--make-typed-struct
                            (list files-list-struct files-struct)
-                           'project-context
+                           'project-ai-summary
                            'project-ai-indexer
                            :root project-root)))
       project-struct)))
@@ -2139,7 +2157,7 @@ or nil if no project is detected or index is empty."
                          :has-context (> indexed-count 0)))
            (project-struct (ai-common--make-typed-struct
                            (list files-list-struct files-struct)
-                           'project-context
+                           'project-ai-summary
                            'project-ai-indexer
                            :root project-root
                            :indexing-mode "enhanced")))
@@ -2212,24 +2230,24 @@ Each context should be a plist with :type, :content, and other metadata."
            (full-context (append completion-context buffer-context model-context))
 
            (basic-instructions (when-let ((content (ai--get-rendered-system-prompt "basic" full-context)))
-                                 (ai-common--make-typed-struct content 'agent-instructions 'basic-prompt)))
+                                 (ai-common--make-typed-struct content 'agent-instructions 'basic-prompt :group 'basic)))
 
-           (file-metadata-context (when-let ((content (ai--get-rendered-system-prompt "_file_metadata" full-context)))
+           (file-metadata-context (when-let ((content (ai--get-rendered-system-prompt "file_metadata" full-context)))
                                     (ai-common--make-typed-struct content 'file-metadata 'file-metadata)))
 
            (command-instructions (when-let ((content (ai--get-rendered-command-instructions command full-context)))
-                                   (ai-common--make-typed-struct content 'agent-instructions 'command-specific-instructions)))
+                                   (ai-common--make-typed-struct content 'agent-instructions 'command-specific-instructions :group 'command)))
 
            (command-examples-instructions (when-let ((content (ai--get-rendered-command-examples command full-context)))
-                                            (ai-common--make-typed-struct content 'agent-instructions 'command-examples)))
+                                            (ai-common--make-typed-struct content 'agent-instructions 'command-examples :group 'command)))
 
            (action-type-object-instructions (when-let ((content (ai--get-action-type-object-instructions (ai--get-action-type-for-config config) full-context)))
-                                              (ai-common--make-typed-struct content 'agent-instructions 'action-object-rules)))
+                                              (ai-common--make-typed-struct content 'agent-instructions 'action-object-rules :group 'command)))
 
            (result-action-instructions (let ((result-action (map-elt config :result-action)))
                                          (when result-action
                                            (when-let ((content (ai--get-result-action-prompt result-action full-context)))
-                                             (ai-common--make-typed-struct content 'agent-instructions 'result-action-format)))))
+                                             (ai-common--make-typed-struct content 'agent-instructions 'result-action-format :group 'command)))))
 
            (config-instructions (when-let ((instructions (map-elt config :instructions)))
                                   (ai-common--make-typed-struct instructions 'agent-instructions 'config-instructions)))
@@ -2306,16 +2324,18 @@ Each context should be a plist with :type, :content, and other metadata."
                 #'null
                 (append
                  (list basic-instructions
-                       project-context
-                       memory-context
-                       action-type-object-instructions
                        global-system-prompts-context
+
                        command-instructions
-                       command-examples-instructions
+                       config-instructions
+                       action-type-object-instructions
                        result-action-instructions
+                       command-examples-instructions
+
+                       memory-context
+                       project-context
                        file-metadata-context
                        current-buffer-content-context
-                       config-instructions
                        global-memory-context
                        additional-context
                        external-contexts-structs
@@ -2355,6 +2375,7 @@ If no instructions are found for COMMAND, returns nil."
 (defun ai--get-rendered-system-prompt (prompt-name context)
   "Get system prompt for PROMPT-NAME, render it with CONTEXT, and return the result.
 If no system prompt is found for PROMPT-NAME, returns nil."
+
   (ai--get-rendered-instruction prompt-name context t))
 
 (defun ai--get-action-type-object-instructions (action-type context)
