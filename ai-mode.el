@@ -156,6 +156,13 @@
   :group 'ai-mode
   :type 'string)
 
+(defcustom ai--prompt-caching-enabled nil
+  "Enable prompt caching for AI requests.
+When enabled, AI providers that support prompt caching will evaluate
+content for caching based on the provider's specific rules."
+  :type 'boolean
+  :group 'ai-mode)
+
 (defcustom ai--command-prompt "Command or query: "
   "Prompt for selecting the command."
   :type 'string
@@ -444,6 +451,7 @@ Each entry is a pair: `(COMMAND . CONFIG-PLIST)`.
     (define-key keymap (kbd "i v") 'ai--select-index-version)
     (define-key keymap (kbd "i l") 'ai--list-index-versions)
     (define-key keymap (kbd "i d") 'ai--delete-old-index-versions)
+    (define-key keymap (kbd "c t") 'ai--toggle-prompt-caching)
     keymap)
   "Keymap for AI commands.")
 
@@ -750,6 +758,14 @@ Returns the loaded summaries list or nil if loading fails."
           (message "No old index versions to delete (current: %d, retention: %d)"
                    (length versions) ai--index-retention-depth)))
     (message "Not in a project. Cannot delete index versions.")))
+
+(defun ai--toggle-prompt-caching ()
+  "Toggle prompt caching for AI requests."
+  (interactive)
+  (setq ai--prompt-caching-enabled (not ai--prompt-caching-enabled))
+  (customize-save-variable 'ai--prompt-caching-enabled ai--prompt-caching-enabled)
+  (message "Prompt caching %s"
+           (if ai--prompt-caching-enabled "enabled" "disabled")))
 
 (defun ai--command-name-to-filename (command-name)
   "Convert COMMAND-NAME to a filesystem-safe filename with extension.
@@ -1565,7 +1581,8 @@ Optionally use FAIL-CALLBACK and specify a MODEL."
              context
              execution-model
              :success-callback success-callback
-             :fail-callback fail-callback)))
+             :fail-callback fail-callback
+             :enable-caching ai--prompt-caching-enabled)))
 
 (defun ai--get-selected-region (config full-context)
   "Return the currently selected region.
@@ -1792,7 +1809,8 @@ START-TIME is when the indexing process began."
                  indexing-context
                  current-model
                  :success-callback success-callback
-                 :fail-callback fail-callback))
+                 :fail-callback fail-callback
+                 :enable-caching ai--prompt-caching-enabled))
 
       ;; Introduce a configurable timeout between indexing calls
       (when (> ai--indexing-call-timeout 0)
@@ -1853,7 +1871,8 @@ START-TIME is when the indexing process began."
                  indexing-context
                  current-model
                  :success-callback success-callback
-                 :fail-callback fail-callback)))))
+                 :fail-callback fail-callback
+                 :enable-caching ai--prompt-caching-enabled)))))
 
 (cl-defun ai--get-indexing-context-with-summaries (file-struct model existing-summaries)
   "Create execution context for indexing a single FILE-STRUCT with MODEL and EXISTING-SUMMARIES.
@@ -2287,20 +2306,20 @@ Each context should be a plist with :type, :content, and other metadata."
                 #'null
                 (append
                  (list basic-instructions
+                       project-context
+                       memory-context
                        action-type-object-instructions
                        global-system-prompts-context
-                       global-memory-context
                        command-instructions
+                       command-examples-instructions
+                       result-action-instructions
                        file-metadata-context
                        current-buffer-content-context
                        config-instructions
-                       result-action-instructions
+                       global-memory-context
                        additional-context
                        external-contexts-structs
-                       project-context
-                       memory-context
                        buffer-bound-prompts-context
-                       command-examples-instructions
                        rendered-action-context
                        user-input
                        command-struct))))))
@@ -2483,7 +2502,8 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
              context
              execution-model
              :success-callback wrapped-success-callback
-             :fail-callback wrapped-fail-callback)))
+             :fail-callback wrapped-fail-callback
+             :enable-caching ai--prompt-caching-enabled)))
 
 (defun ai-show ()
   "Execute command and show the response in a special buffer, filtering by show-compatible commands."
@@ -2568,6 +2588,7 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
   "Return a formatted string describing the current AI mode state for the mode line."
   (let* ((model (ai--get-current-model))
          (project-indicator (ai--get-project-context-indicator))
+         (cache-indicator (if ai--prompt-caching-enabled "C" ""))
          (progress-indicator (cond
                               ((and ai--progress-active
                                     (eq ai--progress-indicator-style 'spinner))
@@ -2588,8 +2609,9 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
          (context-info (if ai--progress-active
                            (when ai--progress-start-time
                              (format "%s" (if (string-empty-p progress-indicator) "" (format "%s" progress-indicator))))
-                         (format "%s|%d/%d"
+                         (format "%s%s|%d/%d"
                                  project-indicator
+                                 cache-indicator
                                  ai--current-precending-context-size
                                  ai--current-forwarding-context-size)))
          (ai-mode-line-section

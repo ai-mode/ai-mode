@@ -45,8 +45,8 @@
 ;; Usage example:
 ;;
 ;;   (let ((struct (ai-common--make-typed-struct "Hello world" 'message 'user)))
-;;     (message "Type: %s" (ai-mode-adapter--get-struct-type struct))
-;;     (message "Content: %s" (ai-mode-adapter--get-struct-content struct)))
+;;     (message "Type: %s" (ai-mode-adapter-api--get-struct-type struct))
+;;     (message "Content: %s" (ai-mode-adapter-api--get-struct-content struct)))
 ;;
 ;; The adapter is designed to be extended with additional accessor functions
 ;; as needed by different AI API integrations while maintaining a consistent
@@ -56,14 +56,14 @@
 
 (require 'ai-common)
 
-(defun ai-mode-adapter--get-struct-type (struct)
+(defun ai-mode-adapter-api--get-struct-type (struct)
   "Get the type from a typed structure STRUCT (plist).
 This function provides an abstracted way to access the :type field of
 AI mode's internal typed structures, as per user request to avoid
 direct field access."
   (plist-get struct :type))
 
-(defun ai-mode-adapter--get-struct-content (struct)
+(defun ai-mode-adapter-api--get-struct-content (struct)
   "Get the content from a typed structure STRUCT (plist).
 This function provides an abstracted way to access the :content field of
 AI mode's internal typed structures, leveraging
@@ -71,51 +71,102 @@ AI mode's internal typed structures, leveraging
 including nested structures."
   (ai-common--render-struct-to-string struct))
 
-(defun ai-mode-adapter--should-cache-content-p (struct)
-  "Determine if the content of typed structure STRUCT should be cached.
-Returns t if the structure contains a cacheable flag or if the content
-is determined to be suitable for caching based on structure properties,
-nil otherwise.
+(defun ai-mode-adapter-api--get-cache-ttl (struct)
+  "Get the cache TTL (time-to-live) for typed structure STRUCT.
+Returns a string representing the cache duration:
+- \"0m\" - no caching needed (highly dynamic content)
+- \"5m\" - short-term caching for periodically changing data
+- \"1h\" - long-term caching for rarely changing data
 
-This function checks for explicit caching instructions in the structure
-and can be extended to include heuristics for determining cacheable content."
-  (let ((cacheable (plist-get struct :cacheable))
+The function checks for explicit cache TTL instructions and applies
+intelligent heuristics based on content type and characteristics."
+  (let ((explicit-ttl (plist-get struct :cache-ttl))
         (cache-policy (plist-get struct :cache-policy)))
     (cond
-     ;; Explicit cacheable flag
-     ((eq cacheable t) t)
-     ((eq cacheable nil) nil)
+     ;; Explicit TTL override
+     (explicit-ttl explicit-ttl)
      ;; Cache policy override
-     ((eq cache-policy 'always) t)
-     ((eq cache-policy 'never) nil)
-     ;; Default heuristics based on content type and structure
-     (t (ai-mode-adapter--default-cache-heuristic struct)))))
+     ((eq cache-policy 'never) "0m")
+     ((eq cache-policy 'short) "5m")
+     ((eq cache-policy 'long) "1h")
+     ;; Apply intelligent heuristics
+     (t (ai-mode-adapter-api--default-cache-ttl-heuristic struct)))))
 
-(defun ai-mode-adapter--default-cache-heuristic (struct)
-  "Apply default caching heuristics to determine if STRUCT content should be cached.
-Returns t if content appears suitable for caching based on type and characteristics."
-  (let ((type (ai-mode-adapter--get-struct-type struct))
+(defun ai-mode-adapter-api--default-cache-ttl-heuristic (struct)
+  "Apply default caching TTL heuristics based on STRUCT content and type.
+Returns appropriate cache duration string based on content characteristics."
+  (let ((type (ai-mode-adapter-api--get-struct-type struct))
         (subtype (plist-get struct :subtype))
         (content (plist-get struct :content)))
     (cond
-     ;; Cache static instruction content
-     ((eq type 'agent-instructions) t)
-     ;; Cache file metadata and structured data
-     ((eq type 'file-metadata) t)
-     ;; Cache memory content for reuse
-     ((eq type 'memory-content) t)
-     ;; Don't cache user input or dynamic content
-     ((eq type 'user-input) nil)
-     ;; Cache action context for potential reuse
-     ((eq type 'action-context) t)
-     ;; For additional context, decide based on subtype
+     ;; Long-term cache (1h) - static, rarely changing content
+     ((eq type 'agent-instructions) "1h")
+     ((eq type 'file-metadata) "1h")
+     ((eq type 'memory-content) "1h")
+
+     ;; No cache (0m) - dynamic, user-driven content
+     ((eq type 'user-input) "0m")
+     ((eq type 'conversation-state) "0m")
+     ((eq type 'realtime-data) "0m")
+
+     ;; Short-term cache (5m) - semi-dynamic content
+     ((eq type 'action-context) "5m")
+     ((eq type 'session-context) "5m")
+     ((eq type 'temporary-data) "5m")
+
+     ;; Additional context handling with subtype consideration
      ((eq type 'additional-context)
       (cond
-       ((eq subtype 'project-files) t)
-       ((eq subtype 'context-pool) nil)
-       (t t))) ; Default to cache for additional context
-     ;; Default to not cache for unknown types
-     (t nil))))
+       ((eq subtype 'project-files) "1h")      ; Static project structure
+       ((eq subtype 'context-pool) "0m")       ; Dynamic context pool
+       ((eq subtype 'search-results) "5m")     ; Periodically updated results
+       ((eq subtype 'api-response) "5m")       ; API responses may change
+       ((eq subtype 'file-content) "1h")       ; File content rarely changes
+       (t "5m"))) ; Default medium cache for additional context
+
+     ;; Content size heuristics for unknown types
+     ((and content (stringp content))
+      (cond
+       ((< (length content) 100) "5m")   ; Small content - medium cache
+       ((< (length content) 1000) "1h")  ; Medium content - long cache
+       (t "5m")))                        ; Large content - medium cache
+
+     ;; Default to medium cache for unknown types
+     (t "5m"))))
+
+(defun ai-mode-adapter-api--ttl-to-seconds (ttl-string)
+  "Convert TTL-STRING to seconds.
+Supported formats:
+- \"0m\" or \"0\" → 0 seconds
+- \"5m\" → 300 seconds (5 minutes)
+- \"1h\" → 3600 seconds (1 hour)
+- \"30s\" → 30 seconds
+- \"2d\" → 172800 seconds (2 days)
+
+Returns 0 for invalid or unrecognized formats."
+  (cond
+   ;; Handle nil or empty string
+   ((or (null ttl-string) (string= ttl-string "")) 0)
+   ;; Handle plain "0"
+   ((string= ttl-string "0") 0)
+   ;; Handle time units
+   ((string-match "^\\([0-9]+\\)\\([smhd]\\)$" ttl-string)
+    (let ((number (string-to-number (match-string 1 ttl-string)))
+          (unit (match-string 2 ttl-string)))
+      (cond
+       ((string= unit "s") number)              ; seconds
+       ((string= unit "m") (* number 60))       ; minutes
+       ((string= unit "h") (* number 3600))     ; hours
+       ((string= unit "d") (* number 86400))    ; days
+       (t 0))))
+   ;; Fallback for unrecognized format
+   (t 0)))
+
+(defun ai-mode-adapter-api--should-cache-content-p (struct)
+  "Determine if the content of typed structure STRUCT should be cached.
+This is a compatibility function that returns t for any non-zero cache TTL.
+For more granular control, use `ai-mode-adapter-api--get-cache-ttl` instead."
+  (not (string= (ai-mode-adapter-api--get-cache-ttl struct) "0m")))
 
 (provide 'ai-mode-adapter-api)
 
