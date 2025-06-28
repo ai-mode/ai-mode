@@ -512,12 +512,18 @@ If ITEM is a plist, return an XML element with attributes and content."
                                        (ai-common--stringify v)))))
       (list tag-name attrs content))))
 
+(defun ai-common--is-grouped-struct-p (struct)
+  "Check if STRUCT is a grouped structure created by grouping function.
+Returns t if the structure has the :grouped flag set to t, nil otherwise."
+  (and (listp struct) (keywordp (car struct)) (eq (plist-get struct :grouped) t)))
 
 (defun ai-common--render-struct-to-string (struct)
   "Render a typed structure STRUCT to an XML-like string.
 STRUCT can be a plist, a symbol or a list of other structures.
 For plists, tag name is determined by :type property.
-Handles nested structures recursively."
+Handles nested structures recursively.
+For grouped structures (those with :grouped property set to t),
+only renders the child elements without the wrapper container."
   (cond
    ;; Handle nil and t specifically as per user request to return empty string
    ((or (eq struct nil) (eq struct t)) "")
@@ -525,6 +531,14 @@ Handles nested structures recursively."
    ;; If the structure has a :rendered property and it's non-nil, return its content directly
    ((and (listp struct) (plist-get struct :rendered))
     (plist-get struct :content))
+
+   ;; Handle grouped structures - render only child elements without container
+   ((ai-common--is-grouped-struct-p struct)
+    (let ((children (plist-get struct :content)))
+      (cond
+       ((and (listp children) (not (null children)))
+        (mapconcat #'ai-common--render-struct-to-string children ""))
+       (t ""))))
 
    ;; Simple symbol case (like :cursor)
    ((symbolp struct)

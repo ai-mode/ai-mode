@@ -2407,7 +2407,6 @@ EXTERNAL-CONTEXTS is a list of additional context structs to include in the exec
   "Prompt the user to select the command using `completing-read`."
   (interactive)
   (let* ((all-commands (ai--get-ordered-command-names))
-         ( _ (message "%s" (pp-to-string all-commands)))
          (command-displays (mapcar #'ai--get-command-display-name all-commands))
          (command-alist (cl-mapcar #'cons command-displays all-commands))
          (selected-display (completing-read ai--command-prompt command-displays))

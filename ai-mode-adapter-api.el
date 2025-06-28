@@ -45,8 +45,8 @@
 ;; Usage example:
 ;;
 ;;   (let ((struct (ai-common--make-typed-struct "Hello world" 'message 'user)))
-;;     (message "Type: %s" (ai-mode-adapter-api--get-struct-type struct))
-;;     (message "Content: %s" (ai-mode-adapter-api--get-struct-content struct)))
+;;     (message "Type: %s" (ai-mode-adapter-api-get-struct-type struct))
+;;     (message "Content: %s" (ai-mode-adapter-api-get-struct-content struct)))
 ;;
 ;; The adapter is designed to be extended with additional accessor functions
 ;; as needed by different AI API integrations while maintaining a consistent
@@ -55,15 +55,16 @@
 ;;; Code:
 
 (require 'ai-common)
+(require 'cl-lib)
 
-(defun ai-mode-adapter-api--get-struct-type (struct)
+(defun ai-mode-adapter-api-get-struct-type (struct)
   "Get the type from a typed structure STRUCT (plist).
 This function provides an abstracted way to access the :type field of
 AI mode's internal typed structures, as per user request to avoid
 direct field access."
   (plist-get struct :type))
 
-(defun ai-mode-adapter-api--get-struct-content (struct)
+(defun ai-mode-adapter-api-get-struct-content (struct)
   "Get the content from a typed structure STRUCT (plist).
 This function provides an abstracted way to access the :content field of
 AI mode's internal typed structures, leveraging
@@ -71,7 +72,7 @@ AI mode's internal typed structures, leveraging
 including nested structures."
   (ai-common--render-struct-to-string struct))
 
-(defun ai-mode-adapter-api--get-cache-ttl (struct)
+(defun ai-mode-adapter-api-get-cache-ttl (struct)
   "Get the cache TTL (time-to-live) for typed structure STRUCT.
 Returns a string representing the cache duration:
 - \"0m\" - no caching needed (highly dynamic content)
@@ -90,12 +91,12 @@ intelligent heuristics based on content type and characteristics."
      ((eq cache-policy 'short) "5m")
      ((eq cache-policy 'long) "1h")
      ;; Apply intelligent heuristics
-     (t (ai-mode-adapter-api--default-cache-ttl-heuristic struct)))))
+     (t (ai-mode-adapter-api-default-cache-ttl-heuristic struct)))))
 
-(defun ai-mode-adapter-api--default-cache-ttl-heuristic (struct)
+(defun ai-mode-adapter-api-default-cache-ttl-heuristic (struct)
   "Apply default caching TTL heuristics based on STRUCT content and type.
 Returns appropriate cache duration string based on content characteristics."
-  (let ((type (ai-mode-adapter-api--get-struct-type struct))
+  (let ((type (ai-mode-adapter-api-get-struct-type struct))
         (subtype (plist-get struct :subtype))
         (content (plist-get struct :content)))
     (cond
@@ -134,7 +135,7 @@ Returns appropriate cache duration string based on content characteristics."
      ;; Default to medium cache for unknown types
      (t "5m"))))
 
-(defun ai-mode-adapter-api--ttl-to-seconds (ttl-string)
+(defun ai-mode-adapter-api-ttl-to-seconds (ttl-string)
   "Convert TTL-STRING to seconds.
 Supported formats:
 - \"0m\" or \"0\" → 0 seconds
@@ -162,11 +163,88 @@ Returns 0 for invalid or unrecognized formats."
    ;; Fallback for unrecognized format
    (t 0)))
 
-(defun ai-mode-adapter-api--should-cache-content-p (struct)
+(defun ai-mode-adapter-api-should-cache-content-p (struct)
   "Determine if the content of typed structure STRUCT should be cached.
 This is a compatibility function that returns t for any non-zero cache TTL.
-For more granular control, use `ai-mode-adapter-api--get-cache-ttl` instead."
-  (not (string= (ai-mode-adapter-api--get-cache-ttl struct) "0m")))
+For more granular control, use `ai-mode-adapter-api-get-cache-ttl` instead."
+  (not (string= (ai-mode-adapter-api-get-cache-ttl struct) "0m")))
+
+(defun ai-mode-adapter-api-prepare-messages (messages)
+  "Prepare a list of MESSAGES for AI API consumption.
+Currently applies message grouping via `ai-mode-adapter-api-group-adjacent-same-type-structs`
+to optimize caching and reduce redundancy. Returns the modified message list.
+
+This is a public interface function that can be extended with additional
+message preparation steps as needed."
+  (ai-mode-adapter-api-group-adjacent-same-type-structs messages))
+
+(defun ai-mode-adapter-api-group-adjacent-same-type-structs (messages)
+  "Group adjacent messages of the same type into grouped structures.
+Takes a list of MESSAGES (typed structures) and merges consecutive messages
+of the same type into a single grouped structure with child elements.
+This enables more efficient caching and rendering of similar content blocks.
+
+The grouped structure will have:
+- :type same as the original type
+- :content list of child structures
+- :grouped t to indicate it's a grouped structure
+- Other properties inherited from the first message in the group
+
+Returns a new list with grouped structures replacing adjacent same-type messages."
+  (when (null messages)
+    (cl-return-from ai-mode-adapter-api-group-adjacent-same-type-structs nil))
+
+  (let ((result '())
+        (current-group '())
+        (current-type nil))
+
+    (dolist (message messages)
+      (let ((message-type (ai-mode-adapter-api-get-struct-type message)))
+        (cond
+         ;; First message or same type as current group
+         ((or (null current-type) (eq message-type current-type))
+          (push message current-group)
+          (setq current-type message-type))
+
+         ;; Different type - finalize current group and start new one
+         (t
+          ;; Finalize current group
+          (if (= (length current-group) 1)
+              ;; Single message - add as-is
+              (push (car current-group) result)
+            ;; Multiple messages - create grouped structure
+            (let* ((first-message (car (reverse current-group)))
+                   (grouped-struct (copy-sequence first-message)))
+              ;; Override content and add grouping marker
+              (setq grouped-struct (plist-put grouped-struct :content (reverse current-group)))
+              (setq grouped-struct (plist-put grouped-struct :grouped t))
+              (push grouped-struct result)))
+
+          ;; Start new group
+          (setq current-group (list message))
+          (setq current-type message-type)))))
+
+    ;; Handle the last group
+    (when current-group
+      (if (= (length current-group) 1)
+          ;; Single message - add as-is
+          (push (car current-group) result)
+        ;; Multiple messages - create grouped structure
+        (let* ((first-message (car (reverse current-group)))
+               (grouped-struct (copy-sequence first-message)))
+          ;; Override content and add grouping marker
+          (setq grouped-struct (plist-put grouped-struct :content (reverse current-group)))
+          (setq grouped-struct (plist-put grouped-struct :grouped t))
+          (push grouped-struct result))))
+
+    (reverse result)))
+
+(defun ai-mode-adapter-api-is-grouped-struct-p (struct)
+  "Check if STRUCT is a grouped structure created by grouping function.
+Returns t if the structure has the :grouped flag set to t, nil otherwise.
+This can be used during rendering to determine if the wrapper container
+should be omitted."
+  (eq (plist-get struct :grouped) t))
 
 (provide 'ai-mode-adapter-api)
 
