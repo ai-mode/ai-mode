@@ -24,6 +24,7 @@ Create a clear, informative commit message that follows conventional commit stan
 - Separate subject from body with a blank line
 - Focus on the business impact and reasoning for the change
 - Include breaking change notes if applicable
+- Ensure body lines do not exceed 140 characters
 
 ## Examples
 ```

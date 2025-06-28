@@ -244,6 +244,12 @@ Controls how files are processed during project indexing:
                  (const :tag "Sequential with session context accumulation" sequential))
   :group 'ai)
 
+(defcustom ai--index-retention-depth 5
+  "Number of index versions to retain before cleanup.
+When exceeded, older index versions will be automatically deleted."
+  :type 'integer
+  :group 'ai)
+
 (defcustom ai--file-command-action-modifiers
   '(("show" . show)
     ("eval" . eval)
@@ -335,6 +341,11 @@ Set to 0 for no delay."
 (defvar ai--project-files-summary-index (make-hash-table :test 'equal)
   "Cached index of project files summary structures.
 Maps project root paths to lists of file summary structs.")
+
+;; Index persistence variables
+(defvar ai--persistent-index-metadata (make-hash-table :test 'equal)
+  "Metadata for persistent index versions.
+Maps project root paths to plists containing version information.")
 
 ;; Progress indicator variables (buffer-local)
 (defvar-local ai--progress-timer nil
@@ -430,6 +441,9 @@ Each entry is a pair: `(COMMAND . CONFIG-PLIST)`.
     (define-key keymap (kbd "i t") 'ai--toggle-indexing-context)
     (define-key keymap (kbd "i r") 'ai--reindex-project-with-context)
     (define-key keymap (kbd "i s") 'ai--switch-indexing-strategy)
+    (define-key keymap (kbd "i v") 'ai--select-index-version)
+    (define-key keymap (kbd "i l") 'ai--list-index-versions)
+    (define-key keymap (kbd "i d") 'ai--delete-old-index-versions)
     keymap)
   "Keymap for AI commands.")
 
@@ -477,6 +491,265 @@ Each entry is a pair: `(COMMAND . CONFIG-PLIST)`.
   (when-let ((project-root (ai-common--get-project-root)))
     (file-name-as-directory
      (expand-file-name ".ai/system" project-root))))
+
+;; Index persistence management
+
+(defun ai--get-project-index-directory (project-root)
+  "Get the index directory for PROJECT-ROOT."
+  (file-name-as-directory (expand-file-name ".ai/index" project-root)))
+
+(defun ai--generate-index-version-name (start-time end-time)
+  "Generate a version name from START-TIME and END-TIME.
+Format: start_YYYYMMDD-HHMMSS_end_YYYYMMDD-HHMMSS"
+  (let ((start-str (format-time-string "%Y%m%d-%H%M%S" start-time))
+        (end-str (format-time-string "%Y%m%d-%H%M%S" end-time)))
+    (format "start_%s_end_%s" start-str end-str)))
+
+(defun ai--parse-index-version-name (version-name)
+  "Parse VERSION-NAME and return (start-time . end-time) or nil if invalid."
+  (when (string-match "start_\\([0-9]\\{8\\}-[0-9]\\{6\\}\\)_end_\\([0-9]\\{8\\}-[0-9]\\{6\\}\\)" version-name)
+    (let ((start-str (match-string 1 version-name))
+          (end-str (match-string 2 version-name)))
+      (condition-case nil
+          (let ((start-iso (concat (substring start-str 0 4) "-"    ; YYYY-
+                                  (substring start-str 4 6) "-"     ; MM-
+                                  (substring start-str 6 8) "T"     ; DDT
+                                  (substring start-str 9 11) ":"    ; HH:
+                                  (substring start-str 11 13) ":"   ; MM:
+                                  (substring start-str 13 15)))     ; SS
+                (end-iso (concat (substring end-str 0 4) "-"        ; YYYY-
+                                (substring end-str 4 6) "-"         ; MM-
+                                (substring end-str 6 8) "T"         ; DDT
+                                (substring end-str 9 11) ":"        ; HH:
+                                (substring end-str 11 13) ":"       ; MM:
+                                (substring end-str 13 15))))        ; SS
+            (cons (date-to-time start-iso)
+                  (date-to-time end-iso)))
+        (error nil)))))
+
+(defun ai--get-index-version-directory (project-root version-name)
+  "Get the directory path for a specific index VERSION-NAME in PROJECT-ROOT."
+  (file-name-as-directory
+   (expand-file-name version-name (ai--get-project-index-directory project-root))))
+
+(defun ai--get-index-metadata-file (project-root version-name)
+  "Get the metadata file path for index VERSION-NAME in PROJECT-ROOT."
+  (expand-file-name "metadata.json" (ai--get-index-version-directory project-root version-name)))
+
+(defun ai--get-index-mapping-file (project-root version-name)
+  "Get the mapping file path for index VERSION-NAME in PROJECT-ROOT."
+  (expand-file-name "mapping.json" (ai--get-index-version-directory project-root version-name)))
+
+(defun ai--generate-index-file-id (relative-path)
+  "Generate a unique file ID for RELATIVE-PATH.
+Returns a hash-based identifier."
+  (let ((hash (secure-hash 'sha256 relative-path)))
+    (substring hash 0 16)))
+
+(defun ai--get-index-file-path (project-root version-name file-id)
+  "Get the path for an index file with FILE-ID in VERSION-NAME for PROJECT-ROOT."
+  (expand-file-name (format "%s.json" file-id)
+                    (ai--get-index-version-directory project-root version-name)))
+
+(defun ai--save-index-metadata (project-root version-name metadata)
+  "Save METADATA for index VERSION-NAME in PROJECT-ROOT."
+  (let ((metadata-file (ai--get-index-metadata-file project-root version-name))
+        (version-dir (ai--get-index-version-directory project-root version-name)))
+    (unless (file-directory-p version-dir)
+      (make-directory version-dir t))
+    (with-temp-file metadata-file
+      (insert (json-encode metadata)))))
+
+(defun ai--load-index-metadata (project-root version-name)
+  "Load metadata for index VERSION-NAME in PROJECT-ROOT.
+Returns nil if metadata file doesn't exist or is invalid."
+  (let ((metadata-file (ai--get-index-metadata-file project-root version-name)))
+    (when (file-readable-p metadata-file)
+      (condition-case nil
+          (with-temp-buffer
+            (insert-file-contents metadata-file)
+            (json-read))
+        (error nil)))))
+
+(defun ai--save-index-mapping (project-root version-name mapping)
+  "Save file MAPPING for index VERSION-NAME in PROJECT-ROOT.
+MAPPING is an alist of (relative-path . file-id) pairs."
+  (let ((mapping-file (ai--get-index-mapping-file project-root version-name))
+        (version-dir (ai--get-index-version-directory project-root version-name)))
+    (unless (file-directory-p version-dir)
+      (make-directory version-dir t))
+    (with-temp-file mapping-file
+      (insert (json-encode mapping)))))
+
+(defun ai--load-index-mapping (project-root version-name)
+  "Load file mapping for index VERSION-NAME in PROJECT-ROOT.
+Returns nil if mapping file doesn't exist or is invalid."
+  (let ((mapping-file (ai--get-index-mapping-file project-root version-name)))
+    (when (file-readable-p mapping-file)
+      (condition-case nil
+          (with-temp-buffer
+            (insert-file-contents mapping-file)
+            (json-read))
+        (error nil)))))
+
+(defun ai--save-index-file (project-root version-name file-id summary-struct)
+  "Save SUMMARY-STRUCT as FILE-ID in VERSION-NAME for PROJECT-ROOT."
+  (let ((index-file (ai--get-index-file-path project-root version-name file-id)))
+    (with-temp-file index-file
+      (insert (json-encode summary-struct)))))
+
+(defun ai--load-index-file (project-root version-name file-id)
+  "Load summary struct for FILE-ID in VERSION-NAME for PROJECT-ROOT.
+Returns nil if file doesn't exist or is invalid."
+  (let ((index-file (ai--get-index-file-path project-root version-name file-id)))
+    (when (file-readable-p index-file)
+      (condition-case nil
+          (with-temp-buffer
+            (insert-file-contents index-file)
+            (json-read))
+        (error nil)))))
+
+(defun ai--get-available-index-versions (project-root)
+  "Get list of available index versions for PROJECT-ROOT.
+Returns a list of version names sorted by creation time (newest first)."
+  (let ((index-dir (ai--get-project-index-directory project-root)))
+    (when (file-directory-p index-dir)
+      (let ((versions nil))
+        (dolist (entry (directory-files index-dir nil "^start_.*_end_.*$"))
+          (when (file-directory-p (expand-file-name entry index-dir))
+            (push entry versions)))
+        ;; Sort by creation time (newest first)
+        (sort versions (lambda (a b)
+                         (let ((time-a (ai--parse-index-version-name a))
+                               (time-b (ai--parse-index-version-name b)))
+                           (when (and time-a time-b)
+                             (time-less-p (cdr time-b) (cdr time-a))))))))))
+
+(defun ai--format-index-version-display (version-name)
+  "Format VERSION-NAME for display in completing-read."
+  (if-let ((times (ai--parse-index-version-name version-name)))
+      (let ((start-time (car times))
+            (end-time (cdr times)))
+        (format "%s → %s (%s)"
+                (format-time-string "%Y-%m-%d %H:%M:%S" start-time)
+                (format-time-string "%Y-%m-%d %H:%M:%S" end-time)
+                version-name))
+    version-name))
+
+(defun ai--save-current-index-to-disk (project-root start-time)
+  "Save current in-memory index to disk for PROJECT-ROOT.
+START-TIME is when the indexing process began."
+  (when-let ((summaries (gethash project-root ai--project-files-summary-index)))
+    (let* ((end-time (current-time))
+           (version-name (ai--generate-index-version-name start-time end-time))
+           (mapping nil)
+           (metadata `((version . ,version-name)
+                      (project-root . ,project-root)
+                      (start-time . ,(format-time-string "%Y-%m-%dT%H:%M:%S" start-time))
+                      (end-time . ,(format-time-string "%Y-%m-%dT%H:%M:%S" end-time))
+                      (file-count . ,(length summaries))
+                      (strategy . ,(symbol-name ai--indexing-strategy)))))
+
+      ;; Create version directory
+      (let ((version-dir (ai--get-index-version-directory project-root version-name)))
+        (make-directory version-dir t))
+
+      ;; Save each summary file and build mapping
+      (dolist (summary summaries)
+        (let* ((relative-path (plist-get summary :relative-path))
+               (file-id (ai--generate-index-file-id relative-path)))
+          (ai--save-index-file project-root version-name file-id summary)
+          (push (cons relative-path file-id) mapping)))
+
+      ;; Save metadata and mapping
+      (ai--save-index-metadata project-root version-name metadata)
+      (ai--save-index-mapping project-root version-name mapping)
+
+      (message "Index version '%s' saved to disk with %d files" version-name (length summaries))
+      version-name)))
+
+(defun ai--load-index-version (project-root version-name)
+  "Load index VERSION-NAME from disk for PROJECT-ROOT into memory.
+Returns the loaded summaries list or nil if loading fails."
+  (when-let* ((mapping (ai--load-index-mapping project-root version-name))
+              (metadata (ai--load-index-metadata project-root version-name)))
+    (let ((summaries nil)
+          (loaded-count 0))
+      (dolist (mapping-entry mapping)
+        (let* ((relative-path (car mapping-entry))
+               (file-id (cdr mapping-entry))
+               (summary (ai--load-index-file project-root version-name file-id)))
+          (when summary
+            (push summary summaries)
+            (setq loaded-count (1+ loaded-count)))))
+
+      (when summaries
+        ;; Update in-memory index
+        (puthash project-root summaries ai--project-files-summary-index)
+        (message "Loaded index version '%s' with %d/%d files"
+                 version-name loaded-count (length mapping))
+        summaries))))
+
+(defun ai--delete-index-version (project-root version-name)
+  "Delete index VERSION-NAME for PROJECT-ROOT from disk."
+  (let ((version-dir (ai--get-index-version-directory project-root version-name)))
+    (when (file-directory-p version-dir)
+      (delete-directory version-dir t)
+      (message "Deleted index version: %s" version-name))))
+
+(defun ai--cleanup-old-index-versions (project-root)
+  "Delete old index versions beyond the retention depth for PROJECT-ROOT."
+  (let ((versions (ai--get-available-index-versions project-root)))
+    (when (> (length versions) ai--index-retention-depth)
+      (let ((versions-to-delete (nthcdr ai--index-retention-depth versions)))
+        (dolist (version versions-to-delete)
+          (ai--delete-index-version project-root version))
+        (message "Cleaned up %d old index versions" (length versions-to-delete))))))
+
+(defun ai--select-index-version ()
+  "Interactively select and load an index version for the current project."
+  (interactive)
+  (if-let ((project-root (ai-common--get-project-root)))
+      (let ((versions (ai--get-available-index-versions project-root)))
+        (if versions
+            (let* ((version-displays (mapcar #'ai--format-index-version-display versions))
+                   (version-alist (cl-mapcar #'cons version-displays versions))
+                   (selected-display (completing-read "Select index version: " version-displays))
+                   (selected-version (cdr (assoc selected-display version-alist))))
+              (when selected-version
+                (ai--load-index-version project-root selected-version)))
+          (message "No index versions found for project")))
+    (message "Not in a project. Cannot select index version.")))
+
+(defun ai--list-index-versions ()
+  "List all available index versions for the current project."
+  (interactive)
+  (if-let ((project-root (ai-common--get-project-root)))
+      (let ((versions (ai--get-available-index-versions project-root)))
+        (if versions
+            (with-output-to-temp-buffer "*AI Index Versions*"
+              (princ (format "Index versions for project: %s\n\n" project-root))
+              (dolist (version versions)
+                (princ (format "• %s\n" (ai--format-index-version-display version)))
+                (when-let ((metadata (ai--load-index-metadata project-root version)))
+                  (princ (format "  Strategy: %s, Files: %s\n"
+                                (alist-get 'strategy metadata "unknown")
+                                (alist-get 'file-count metadata "unknown"))))))
+          (message "No index versions found for project")))
+    (message "Not in a project. Cannot list index versions.")))
+
+(defun ai--delete-old-index-versions ()
+  "Interactively delete old index versions beyond retention depth."
+  (interactive)
+  (if-let ((project-root (ai-common--get-project-root)))
+      (let ((versions (ai--get-available-index-versions project-root)))
+        (if (> (length versions) ai--index-retention-depth)
+            (let ((versions-to-delete (nthcdr ai--index-retention-depth versions)))
+              (when (yes-or-no-p (format "Delete %d old index versions? " (length versions-to-delete)))
+                (ai--cleanup-old-index-versions project-root)))
+          (message "No old index versions to delete (current: %d, retention: %d)"
+                   (length versions) ai--index-retention-depth)))
+    (message "Not in a project. Cannot delete index versions.")))
 
 (defun ai--command-name-to-filename (command-name)
   "Convert COMMAND-NAME to a filesystem-safe filename with extension.
@@ -1420,12 +1693,13 @@ Returns a plist suitable for the backend."
 
     `(:messages ,messages :model-context ,model)))
 
-(defun ai--index-completion-check (pending-count accumulated-summaries-ht target-buffer project-root)
+(defun ai--index-completion-check (pending-count accumulated-summaries-ht target-buffer project-root start-time)
   "Check if indexing is complete and finalize the results.
 PENDING-COUNT is the number of remaining requests.
 ACCUMULATED-SUMMARIES-HT is the hash table containing completed summaries keyed by relative path.
 TARGET-BUFFER is the buffer where the indexing was initiated.
-PROJECT-ROOT is the root path of the project."
+PROJECT-ROOT is the root path of the project.
+START-TIME is when the indexing process began."
   (setq ai--progress-message (format "Indexing project files (%d remaining)" pending-count))
   (force-mode-line-update)
 
@@ -1433,17 +1707,22 @@ PROJECT-ROOT is the root path of the project."
     (ai--progress-stop target-buffer)
     ;; Store the list of summary structs for this project root
     (puthash project-root (hash-table-values accumulated-summaries-ht) ai--project-files-summary-index)
+    ;; Save to disk
+    (ai--save-current-index-to-disk project-root start-time)
+    ;; Cleanup old versions
+    (ai--cleanup-old-index-versions project-root)
     (message "Project files summary index updated with %d files for project '%s'."
              (hash-table-count accumulated-summaries-ht)
              project-root)))
 
-(defun ai--create-file-summarization-success-callback (accumulated-summaries-ht pending-count-ref target-buffer original-file-struct project-root)
+(defun ai--create-file-summarization-success-callback (accumulated-summaries-ht pending-count-ref target-buffer original-file-struct project-root start-time)
   "Create success callback for file summarization.
 ACCUMULATED-SUMMARIES-HT is a hash table to store summaries per file.
 PENDING-COUNT-REF is a cons cell containing the pending requests counter.
 TARGET-BUFFER is the buffer where indexing was initiated.
 ORIGINAL-FILE-STRUCT is the original file struct passed for summarization.
-PROJECT-ROOT is the root path of the project."
+PROJECT-ROOT is the root path of the project.
+START-TIME is when the indexing process began."
   (lambda (messages)
     (let ((summary-struct (ai-utils--get-message messages)))
       (when (and summary-struct (listp summary-struct) (plist-get summary-struct :type))
@@ -1465,15 +1744,17 @@ PROJECT-ROOT is the root path of the project."
         (ai--index-completion-check (car pending-count-ref)
                                     accumulated-summaries-ht
                                     target-buffer
-                                    project-root)))))
+                                    project-root
+                                    start-time)))))
 
-(defun ai--create-file-summarization-fail-callback (pending-count-ref accumulated-summaries-ht target-buffer original-file-struct project-root)
+(defun ai--create-file-summarization-fail-callback (pending-count-ref accumulated-summaries-ht target-buffer original-file-struct project-root start-time)
   "Create failure callback for file summarization.
 PENDING-COUNT-REF is a cons cell containing the pending requests counter.
 ACCUMULATED-SUMMARIES-HT is a hash table to accumulate summaries.
 TARGET-BUFFER is the buffer where indexing was initiated.
 ORIGINAL-FILE-STRUCT is the original file struct that was sent for summarization.
-PROJECT-ROOT is the root path of the project."
+PROJECT-ROOT is the root path of the project.
+START-TIME is when the indexing process began."
   (lambda (request-data error-message)
     (when (buffer-live-p target-buffer)
       (with-current-buffer target-buffer
@@ -1486,11 +1767,13 @@ PROJECT-ROOT is the root path of the project."
         (ai--index-completion-check (car pending-count-ref)
                                     accumulated-summaries-ht
                                     target-buffer
-                                    project-root)))))
+                                    project-root
+                                    start-time)))))
 
-(defun ai--process-files-parallel-independent (file-structs current-model pending-count-ref accumulated-summaries-ht target-buffer project-root)
+(defun ai--process-files-parallel-independent (file-structs current-model pending-count-ref accumulated-summaries-ht target-buffer project-root start-time)
   "Process FILE-STRUCTS for indexing in parallel without context sharing.
-Each file is processed independently without any existing context."
+Each file is processed independently without any existing context.
+START-TIME is when the indexing process began."
   (let ((execution-backend (map-elt current-model :execution-backend)))
 
     (ai-utils--verbose-message "Parallel independent strategy: processing %d files without context sharing"
@@ -1501,9 +1784,9 @@ Each file is processed independently without any existing context."
 
       (let* ((indexing-context (ai--get-indexing-context file-struct current-model))
              (success-callback (ai--create-file-summarization-success-callback
-                                accumulated-summaries-ht pending-count-ref target-buffer file-struct project-root))
+                                accumulated-summaries-ht pending-count-ref target-buffer file-struct project-root start-time))
              (fail-callback (ai--create-file-summarization-fail-callback
-                             pending-count-ref accumulated-summaries-ht target-buffer file-struct project-root)))
+                             pending-count-ref accumulated-summaries-ht target-buffer file-struct project-root start-time)))
 
         (funcall execution-backend
                  indexing-context
@@ -1515,9 +1798,10 @@ Each file is processed independently without any existing context."
       (when (> ai--indexing-call-timeout 0)
         (sit-for ai--indexing-call-timeout)))))
 
-(defun ai--process-files-sequential (file-structs current-model pending-count-ref accumulated-summaries-ht target-buffer project-root)
+(defun ai--process-files-sequential (file-structs current-model pending-count-ref accumulated-summaries-ht target-buffer project-root start-time)
   "Process FILE-STRUCTS for indexing sequentially with session context accumulation only.
-Uses only files from current session for context accumulation, no existing index."
+Uses only files from current session for context accumulation, no existing index.
+START-TIME is when the indexing process began."
   (let ((remaining-files (copy-sequence file-structs)))
 
     (ai-utils--verbose-message "Sequential strategy: processing %d files with session context accumulation only"
@@ -1525,12 +1809,13 @@ Uses only files from current session for context accumulation, no existing index
 
     (when remaining-files
       (ai--process-next-file-sequential remaining-files current-model pending-count-ref
-                                        accumulated-summaries-ht target-buffer project-root))))
+                                        accumulated-summaries-ht target-buffer project-root start-time))))
 
-(defun ai--process-next-file-sequential (remaining-files current-model pending-count-ref accumulated-summaries-ht target-buffer project-root)
+(defun ai--process-next-file-sequential (remaining-files current-model pending-count-ref accumulated-summaries-ht target-buffer project-root start-time)
   "Process the next file in REMAINING-FILES sequentially.
 This is a recursive helper function that processes one file at a time.
-Uses only current session context for accumulation, no existing index."
+Uses only current session context for accumulation, no existing index.
+START-TIME is when the indexing process began."
   (if (null remaining-files)
       ;; No more files to process
       (when (buffer-live-p target-buffer)
@@ -1538,7 +1823,8 @@ Uses only current session context for accumulation, no existing index."
           (ai--index-completion-check (car pending-count-ref)
                                       accumulated-summaries-ht
                                       target-buffer
-                                      project-root)))
+                                      project-root
+                                      start-time)))
     ;; Process the next file
     (let* ((file-struct (car remaining-files))
            (rest-files (cdr remaining-files))
@@ -1557,11 +1843,11 @@ Uses only current session context for accumulation, no existing index."
              (success-callback (ai--create-sequential-success-callback
                                 rest-files current-model pending-count-ref
                                 accumulated-summaries-ht target-buffer
-                                file-struct project-root))
+                                file-struct project-root start-time))
              (fail-callback (ai--create-sequential-fail-callback
                              rest-files current-model pending-count-ref
                              accumulated-summaries-ht target-buffer
-                             file-struct project-root)))
+                             file-struct project-root start-time)))
 
         (funcall execution-backend
                  indexing-context
@@ -1626,8 +1912,9 @@ Returns a plist suitable for the backend."
 
     `(:messages ,messages :model-context ,model)))
 
-(defun ai--create-sequential-success-callback (remaining-files current-model pending-count-ref accumulated-summaries-ht target-buffer original-file-struct project-root)
-  "Create success callback for sequential file processing."
+(defun ai--create-sequential-success-callback (remaining-files current-model pending-count-ref accumulated-summaries-ht target-buffer original-file-struct project-root start-time)
+  "Create success callback for sequential file processing.
+START-TIME is when the indexing process began."
   (lambda (messages)
     ;; Process the successful response
     (let ((summary-struct (ai-utils--get-message messages)))
@@ -1658,10 +1945,11 @@ Returns a plist suitable for the backend."
 
     ;; Continue with next file
     (ai--process-next-file-sequential remaining-files current-model pending-count-ref
-                                      accumulated-summaries-ht target-buffer project-root)))
+                                      accumulated-summaries-ht target-buffer project-root start-time)))
 
-(defun ai--create-sequential-fail-callback (remaining-files current-model pending-count-ref accumulated-summaries-ht target-buffer original-file-struct project-root)
-  "Create failure callback for sequential file processing."
+(defun ai--create-sequential-fail-callback (remaining-files current-model pending-count-ref accumulated-summaries-ht target-buffer original-file-struct project-root start-time)
+  "Create failure callback for sequential file processing.
+START-TIME is when the indexing process began."
   (lambda (request-data error-message)
     ;; Log the error but continue processing
     (when (buffer-live-p target-buffer)
@@ -1680,22 +1968,23 @@ Returns a plist suitable for the backend."
 
     ;; Continue with next file despite the error
     (ai--process-next-file-sequential remaining-files current-model pending-count-ref
-                                      accumulated-summaries-ht target-buffer project-root)))
+                                      accumulated-summaries-ht target-buffer project-root start-time)))
 
-(defun ai--process-file-structs-for-indexing (file-structs current-model pending-count-ref accumulated-summaries-ht target-buffer project-root)
+(defun ai--process-file-structs-for-indexing (file-structs current-model pending-count-ref accumulated-summaries-ht target-buffer project-root start-time)
   "Process FILE-STRUCTS for indexing using the configured strategy.
-Dispatches to either parallel-independent or sequential processing based on ai--indexing-strategy."
+Dispatches to either parallel-independent or sequential processing based on ai--indexing-strategy.
+START-TIME is when the indexing process began."
   (pcase ai--indexing-strategy
     ('parallel-independent
      (ai--process-files-parallel-independent file-structs current-model pending-count-ref
-                                             accumulated-summaries-ht target-buffer project-root))
+                                             accumulated-summaries-ht target-buffer project-root start-time))
     ('sequential
      (ai--process-files-sequential file-structs current-model pending-count-ref
-                                   accumulated-summaries-ht target-buffer project-root))
+                                   accumulated-summaries-ht target-buffer project-root start-time))
     (_
      ;; Fallback to parallel-independent for unknown strategies
      (ai--process-files-parallel-independent file-structs current-model pending-count-ref
-                                             accumulated-summaries-ht target-buffer project-root))))
+                                             accumulated-summaries-ht target-buffer project-root start-time))))
 
 (defun ai--update-project-files-summary-index ()
   "Update the project files summary index with current project files.
@@ -1710,7 +1999,8 @@ from the current project for use in project AI summary context mode."
              (pending-count-ref (cons 0 nil))
              (current-model (ai--get-current-model))
              (execution-backend (map-elt current-model :execution-backend))
-             (target-buffer (current-buffer)))
+             (target-buffer (current-buffer))
+             (start-time (current-time)))
 
         (unless execution-backend
           (user-error "No AI execution backend defined for current model: %s" (map-elt current-model :name)))
@@ -1731,7 +2021,8 @@ from the current project for use in project AI summary context mode."
                                                pending-count-ref
                                                accumulated-summaries-for-this-run
                                                target-buffer
-                                               project-root))
+                                               project-root
+                                               start-time))
     (message "Not in a project. Cannot update project files summary index."))
   nil)
 

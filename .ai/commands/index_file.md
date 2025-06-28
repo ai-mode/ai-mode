@@ -16,6 +16,7 @@ Analyze the provided source code file and extract its essential structural infor
    ```
    FILE: <path/filename>
    LANG: <language/format detected>
+   PURPOSE: <brief 1-2 sentence summary of file's role in the project and logical scope>
    DEPS:
      <external dependency 1>
      <external dependency 2>
@@ -39,7 +40,13 @@ Analyze the provided source code file and extract its essential structural infor
      <message format N with field types>
    ```
 
-3. **Visibility/Scope Markers**:
+3. **File Purpose Summary Requirements**:
+   - **Concise Description**: 1-2 sentences maximum describing the file's primary responsibility
+   - **Project Context**: How this file fits into the larger project architecture
+   - **Logical Scope**: What domain/layer/module this file represents (e.g., "authentication service", "data validation utilities", "React UI components", "configuration management")
+   - **Key Functionality**: Main operations or features provided by this file
+
+4. **Visibility/Scope Markers**:
    - **pub:** - Public/exported entities (functions, classes, variables, types)
    - **priv:** - Private/internal entities (private methods, internal variables)
    - **prot:** - Protected entities (accessible to subclasses)
@@ -47,7 +54,7 @@ Analyze the provided source code file and extract its essential structural infor
    - **const:** - Constants and immutable values
    - **No prefix** - Default visibility or when scope is context-dependent
 
-4. **Type Information Requirements**:
+5. **Type Information Requirements**:
    - **Functions**: Always include parameter types and return types: `pub: func(param: int, flag: bool) -> string`
    - **Variables**: Include variable type and initial value when relevant: `priv: counter: int = 0`
    - **Class/Struct Fields**: Show field names with their types: `pub: User { id: string, age: int, active: bool }`
@@ -56,7 +63,7 @@ Analyze the provided source code file and extract its essential structural infor
    - **Built-in Complex Types**: Union types, tuples, arrays with element types: `string | null`, `[int]`, `(string, int)`
    - **User-Defined Structured Types**: For custom types (e.g., classes, structs, interfaces, enums, discriminated unions) defined in the file, explicitly detail their full internal structure (fields/members with their types, methods with full signatures, enum variants/cases). When these types are referenced elsewhere (e.g., as a function parameter), only their name should be used, assuming their full definition is provided within the index.
 
-5. **Language-Specific Type Adaptations**:
+6. **Language-Specific Type Adaptations**:
    - **Code**: Extract exact type annotations, infer types when not explicit
    - **Config**: Determine value types (string, int, bool, array, object)
    - **Markup**: Component prop types, attribute types, data binding types
@@ -64,7 +71,7 @@ Analyze the provided source code file and extract its essential structural infor
    - **API/Schema**: Request/response types, parameter types, status codes
    - **Scripts**: Variable types, function parameter and return types
 
-6. **Universal Pseudo-Language Format with Types**:
+7. **Universal Pseudo-Language Format with Types**:
    - Functions: `scope: name(param: type, param: type) -> return_type`
    - Classes: `scope: ClassName(BaseClass) { field: type, method(param: type) -> type }`
    - Variables: `scope: name: type = value` or `scope: name: type`
@@ -72,26 +79,26 @@ Analyze the provided source code file and extract its essential structural infor
    - Dependencies: `package@version` or `package: imported_types`
    - Config: `key: type = value` or `section.key: type`
 
-7. **Single Entity Listing Rules**:
+8. **Single Entity Listing Rules**:
    - **No Duplication**: Each entity appears only once in the ENTITIES section with its visibility marker
    - **Complete Information**: Include full type signature and visibility in one place
    - **Hierarchical Grouping**: List entities by visibility (pub, priv, prot) then by type (classes, functions, variables)
    - **Nested Entities**: Inner classes, nested functions, local types shown with dotted notation: `pub: OuterClass.InnerClass`
 
-8. **Comprehensive Coverage Rules**:
+9. **Comprehensive Coverage Rules**:
    - **Include ALL**: Every function, class, variable, type, constant, and configuration from the original file
    - **Public AND Private**: Both exported/public entities and internal/private entities with clear visibility markers
    - **Complete Dependencies**: All imports, includes, and external references
    - **Full Type Hierarchy**: All type definitions, inheritance relationships, and compositions
    - **Nested Entities**: Inner classes, nested functions, local types, closure variables
 
-9. **Type Conciseness Rules**:
-   - Use canonical type names: `int` instead of `Integer`, `str` instead of `String` when appropriate
-   - Group overloaded functions: `pub: process(data: string) | process(data: Buffer) -> Result`
-   - Simplify obvious generics: `List<User>` instead of `java.util.List<com.example.User>`
-   - Show essential constraints: `pub: id: string (non-empty)`, `priv: age: int (0-150)`
+10. **Type Conciseness Rules**:
+    - Use canonical type names: `int` instead of `Integer`, `str` instead of `String` when appropriate
+    - Group overloaded functions: `pub: process(data: string) | process(data: Buffer) -> Result`
+    - Simplify obvious generics: `List<User>` instead of `java.util.List<com.example.User>`
+    - Show essential constraints: `pub: id: string (non-empty)`, `priv: age: int (0-150)`
 
-10. **Output Format**:
+11. **Output Format**:
     - Plain text, no markdown or code blocks
     - Use minimal indentation for hierarchy
     - One item per line, colon-separated key-value format with type information
