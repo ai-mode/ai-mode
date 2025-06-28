@@ -37,6 +37,8 @@
 ;; - Context source tracking and visualization
 ;; - Project context with expandable file sections
 ;; - File-based command inspection and debugging
+;; - System prompts inspection and debugging
+;; - Raw typed structures view in sequential order
 ;; - Performance-optimized content truncation
 ;; - Interactive debugging commands with keyboard shortcuts
 ;; - Buffer refresh capability for dynamic content updates
@@ -48,6 +50,8 @@
 ;; - Context sources including global prompts, memory, and buffer-bound data
 ;; - Project files with individual file sections
 ;; - File-based commands with source location tracking
+;; - System prompts with source location tracking
+;; - Raw typed structures in their original sequence
 ;; - Selection and cursor positioning information
 ;;
 ;; Usage:
@@ -55,6 +59,8 @@
 ;; - `ai-debug-visual': Main debug interface showing current context
 ;; - `ai-debug-show-sources': Display all available context sources
 ;; - `ai-debug-show-file-commands': Display all loaded file-based commands
+;; - `ai-debug-show-system-prompts': Display all loaded system prompts
+;; - `ai-debug-show-raw-structures': Display typed structures in original sequence
 ;; - `ai-debug-completion-limited-context': Debug completion with limited context
 ;; - `ai-debug-completion-full-context': Debug completion with full buffer context
 ;;
@@ -87,6 +93,12 @@
 
 (defvar ai-debug-file-commands-buffer-name "*AI File Commands*"
   "Buffer name for displaying AI file-based commands.")
+
+(defvar ai-debug-system-prompts-buffer-name "*AI System Prompts*"
+  "Buffer name for displaying AI system prompts.")
+
+(defvar ai-debug-raw-structures-buffer-name "*AI Raw Structures*"
+  "Buffer name for displaying AI typed structures in raw format.")
 
 (defcustom ai-debug-truncate-content t
   "Whether to truncate long content in debug buffers for performance.
@@ -197,6 +209,36 @@ Initializes the buffer with magit-section-mode and appropriate keybindings."
       (local-set-key (kbd "C-r") 'ai-debug-refresh-buffer))
     buffer))
 
+(defun ai-debug--create-system-prompts-buffer ()
+  "Create and return the AI system prompts buffer.
+Initializes the buffer with magit-section-mode and appropriate keybindings."
+  (let ((buffer (get-buffer-create ai-debug-system-prompts-buffer-name)))
+    (with-current-buffer buffer
+      (setq buffer-read-only nil)
+      (erase-buffer)
+      (magit-section-mode)
+      (setq header-line-format (format "AI System Prompts - TAB to expand/collapse, truncation: %s (C-c t to toggle, C-r to refresh)"
+                                       (if ai-debug-truncate-content "ON" "OFF")))
+      ;; Add local keymap for debug buffer operations
+      (local-set-key (kbd "C-c t") 'ai-debug-toggle-truncation)
+      (local-set-key (kbd "C-r") 'ai-debug-refresh-buffer))
+    buffer))
+
+(defun ai-debug--create-raw-structures-buffer ()
+  "Create and return the AI raw structures buffer.
+Initializes the buffer with magit-section-mode and appropriate keybindings."
+  (let ((buffer (get-buffer-create ai-debug-raw-structures-buffer-name)))
+    (with-current-buffer buffer
+      (setq buffer-read-only nil)
+      (erase-buffer)
+      (magit-section-mode)
+      (setq header-line-format (format "AI Raw Structures - TAB to expand/collapse, truncation: %s (C-c t to toggle, C-r to refresh)"
+                                       (if ai-debug-truncate-content "ON" "OFF")))
+      ;; Add local keymap for debug buffer operations
+      (local-set-key (kbd "C-c t") 'ai-debug-toggle-truncation)
+      (local-set-key (kbd "C-r") 'ai-debug-refresh-buffer))
+    buffer))
+
 (defun ai-debug-toggle-truncation ()
   "Toggle content truncation in AI debug buffers.
 This affects how much content is displayed in the debug interface
@@ -231,6 +273,20 @@ Calls the appropriate refresh function based on the current buffer type."
     (message "Refreshing AI file commands...")
     (ai-debug-show-file-commands)
     (message "AI file commands refreshed"))
+
+   ;; System prompts debug buffer
+   ((string= (buffer-name) ai-debug-system-prompts-buffer-name)
+    (message "Refreshing AI system prompts...")
+    (ai-debug-show-system-prompts)
+    (message "AI system prompts refreshed"))
+
+   ;; Raw structures debug buffer
+   ((string= (buffer-name) ai-debug-raw-structures-buffer-name)
+    (message "Refreshing AI raw structures...")
+    (if ai-debug--refresh-function
+        (apply ai-debug--refresh-function ai-debug--refresh-args)
+      (ai-debug-show-raw-structures))
+    (message "AI raw structures refreshed"))
 
    ;; Unknown buffer
    (t
@@ -485,6 +541,123 @@ Creates expandable sections for complex data structures."
          (insert "\n\n"))))
     (error
      (insert (propertize (format "[Error displaying structure: %s]\n\n" (error-message-string err)) 'face 'ai-debug-empty-source)))))
+
+(defun ai-debug--insert-raw-typed-struct (struct index)
+  "Insert a single typed structure STRUCT at INDEX in raw sequential format.
+Creates an expandable section with detailed type information and metadata."
+  (condition-case-unless-debug err
+    (let* ((type (condition-case-unless-debug nil (plist-get struct :type) (error "unknown")))
+           (source (condition-case-unless-debug nil (plist-get struct :source) (error nil)))
+           (id (condition-case-unless-debug nil (plist-get struct :id) (error (format "id-%d" (random 10000)))))
+           (content (condition-case-unless-debug nil (plist-get struct :content) (error nil)))
+           (file (condition-case-unless-debug nil (plist-get struct :file) (error nil)))
+           (relative-path (condition-case-unless-debug nil (plist-get struct :relative-path) (error nil)))
+           (timestamp (condition-case-unless-debug nil (plist-get struct :timestamp) (error nil)))
+           (count (condition-case-unless-debug nil (plist-get struct :count) (error nil)))
+           (root (condition-case-unless-debug nil (plist-get struct :root) (error nil)))
+           (render-ignore-fields (condition-case-unless-debug nil (plist-get struct :render-ignore-fields) (error nil)))
+           ;; Calculate TTL using adapter API
+           (cache-ttl (condition-case-unless-debug nil
+                        (when (fboundp 'ai-mode-adapter-api-get-cache-ttl)
+                          (ai-mode-adapter-api-get-cache-ttl struct))
+                        (error nil)))
+           (metadata-parts '()))
+
+      ;; Build comprehensive metadata
+      (when type
+        (push (format "type: %s" type) metadata-parts))
+      (when source
+        (push (format "source: %s" source) metadata-parts))
+      (when id
+        (push (format "id: %s" id) metadata-parts))
+      (when (or file relative-path)
+        (push (format "file: %s" (or file relative-path)) metadata-parts))
+      (when timestamp
+        (push (format "time: %s" timestamp) metadata-parts))
+      (when count
+        (push (format "count: %s" count) metadata-parts))
+      (when root
+        (push (format "root: %s" root) metadata-parts))
+      (when render-ignore-fields
+        (push (format "ignore: %s" render-ignore-fields) metadata-parts))
+      (when cache-ttl
+        (push (format "ttl: %s" cache-ttl) metadata-parts))
+
+      ;; Create section with detailed header
+      (magit-insert-section (ai-raw-struct (format "%d-%s" index id) t) ; Pass 't' as hidden flag
+        (magit-insert-heading
+          (propertize (format "[%d] %s" (1+ index) type) 'face 'ai-debug-context-type)
+          (when metadata-parts
+            (concat " " (propertize (format "(%s)" (mapconcat #'identity metadata-parts " | "))
+                                   'face 'ai-debug-context-metadata))))
+
+        ;; Handle nested content structures
+        (cond
+         ;; If content is itself a list of typed structures
+         ((and content (listp content) (not (null content))
+               (listp (car content)) (keywordp (car (car content))))
+          (insert (propertize (format "  Nested structures (%d items):\n" (length content)) 'face 'ai-debug-context-metadata))
+          (let ((sub-index 0))
+            (dolist (sub-struct content)
+              (when (and (listp sub-struct) (keywordp (car sub-struct)))
+                (ai-debug--insert-raw-typed-struct-nested sub-struct sub-index (1+ 1)))
+              (setq sub-index (1+ sub-index)))))
+
+         ;; Regular content
+         (content
+          (let ((rendered-content (condition-case-unless-debug nil
+                                    (ai-common--render-struct-to-string struct)
+                                    (error content))))
+            (ai-debug--safe-insert-content rendered-content ai-debug-max-recursion-depth 0)))
+
+         ;; No content
+         (t
+          (insert (propertize "  (no content)\n" 'face 'ai-debug-empty-source))))
+
+        (insert "\n")))
+    (error
+     (insert (propertize (format "[Error displaying raw structure %d: %s]\n\n" index (error-message-string err)) 'face 'ai-debug-empty-source)))))
+
+(defun ai-debug--insert-raw-typed-struct-nested (struct index level)
+  "Insert nested typed structure STRUCT at INDEX with indentation LEVEL."
+  (condition-case-unless-debug err
+    (let* ((type (condition-case-unless-debug nil (plist-get struct :type) (error "unknown")))
+           (source (condition-case-unless-debug nil (plist-get struct :source) (error nil)))
+           (id (condition-case-unless-debug nil (plist-get struct :id) (error (format "nested-id-%d" (random 10000)))))
+           (content (condition-case-unless-debug nil (plist-get struct :content) (error nil)))
+           (indent (make-string (* level 2) ? ))
+           (metadata-parts '()))
+
+      ;; Build metadata for nested structure
+      (when type
+        (push (format "type: %s" type) metadata-parts))
+      (when source
+        (push (format "source: %s" source) metadata-parts))
+
+      ;; Create nested section
+      (magit-insert-section (ai-raw-nested-struct (format "nested-%d-%s" index id) t) ; Pass 't' as hidden flag
+        (magit-insert-heading
+          (concat indent
+                  (propertize (format "[%d.%d] %s" level (1+ index) type) 'face 'ai-debug-context-type)
+                  (when metadata-parts
+                    (concat " " (propertize (format "(%s)" (mapconcat #'identity metadata-parts " | "))
+                                           'face 'ai-debug-context-metadata)))))
+
+        ;; Insert nested content with additional indentation
+        (when content
+          (let ((rendered-content (condition-case-unless-debug nil
+                                    (ai-common--render-struct-to-string struct)
+                                    (error content))))
+            ;; Indent the content
+            (let ((content-lines (split-string (format "%s" rendered-content) "\n")))
+              (dolist (line content-lines)
+                (unless (string-empty-p line)
+                  (insert (concat indent "  " (propertize line 'face 'default) "\n"))))))
+          (insert "\n"))))
+    (error
+     (insert (propertize (format "%s[Error displaying nested structure %d: %s]\n"
+                                (make-string (* level 2) ? ) index (error-message-string err))
+                        'face 'ai-debug-empty-source)))))
 
 (defun ai-debug--group-context-by-source (context-list)
   "Group CONTEXT-LIST by :source field preserving execution order.
@@ -1136,6 +1309,50 @@ Returns a plist with command data grouped by location."
       :global-commands ,(reverse global-commands)
       :local-commands ,(reverse local-commands))))
 
+(defun ai-debug--collect-system-prompts ()
+  "Collect all loaded system prompts from all sources.
+Returns a plist with system prompt data grouped by location."
+  (let ((default-prompts '())
+        (global-prompts '())
+        (local-prompts '()))
+
+    ;; Collect from default system prompts (if available)
+    (when (and (boundp 'ai--default-system-prompts-cache)
+               (hash-table-p ai--default-system-prompts-cache))
+      (maphash (lambda (prompt-name content)
+                 (push `(:name ,prompt-name
+                         :content ,content
+                         :location "Default (Package)"
+                         :directory ,(ai--get-default-system-prompts-directory))
+                       default-prompts))
+               ai--default-system-prompts-cache))
+
+    ;; Collect from global system prompts (if available)
+    (when (and (boundp 'ai--global-system-prompts-cache)
+               (hash-table-p ai--global-system-prompts-cache))
+      (maphash (lambda (prompt-name content)
+                 (push `(:name ,prompt-name
+                         :content ,content
+                         :location "Global (~/.ai/system)"
+                         :directory ,(ai--get-global-system-prompts-directory))
+                       global-prompts))
+               ai--global-system-prompts-cache))
+
+    ;; Collect from local system prompts (if available)
+    (when (and (boundp 'ai--local-system-prompts-cache)
+               (hash-table-p ai--local-system-prompts-cache))
+      (maphash (lambda (prompt-name content)
+                 (push `(:name ,prompt-name
+                         :content ,content
+                         :location "Local (Project)"
+                         :directory ,(ai--get-local-system-prompts-directory))
+                       local-prompts))
+               ai--local-system-prompts-cache))
+
+    `(:default-prompts ,(reverse default-prompts)
+      :global-prompts ,(reverse global-prompts)
+      :local-prompts ,(reverse local-prompts))))
+
 (defun ai-debug--extract-modifier-indicators (command-name)
   "Extract modifier indicators from COMMAND-NAME for display.
 Returns a list of shortened modifier indicators."
@@ -1210,6 +1427,33 @@ Returns a list of shortened modifier indicators."
 
       (insert "\n"))))
 
+(defun ai-debug--insert-system-prompt-item (prompt-info)
+  "Insert a single system prompt PROMPT-INFO as an expandable section."
+  (let* ((name (plist-get prompt-info :name))
+         (content (plist-get prompt-info :content))
+         (location (plist-get prompt-info :location))
+         (directory (plist-get prompt-info :directory))
+         (file-path (when directory
+                      (ai--get-instruction-file-path name directory)))
+         (metadata-parts '()))
+
+    ;; Build metadata parts
+    (when file-path
+      (push (format "file: %s" file-path) metadata-parts))
+
+    (magit-insert-section (ai-system-prompt name t) ; Pass 't' as hidden flag
+      (magit-insert-heading
+        (propertize name 'face 'ai-debug-context-type)
+        (when metadata-parts
+          (concat " " (propertize (format "(%s)" (mapconcat #'identity metadata-parts " | "))
+                                 'face 'ai-debug-context-metadata))))
+
+      ;; Full content (truncated if necessary)
+      (when (and content (> (length content) 0))
+        (ai-debug--safe-insert-content content ai-debug-max-recursion-depth 0))
+
+      (insert "\n"))))
+
 (defun ai-debug--insert-file-commands-by-location (location-name commands)
   "Insert file commands from LOCATION-NAME with COMMANDS list."
   (when commands
@@ -1220,6 +1464,17 @@ Returns a list of shortened modifier indicators."
 
       (dolist (command-info commands)
         (ai-debug--insert-file-command-item command-info)))))
+
+(defun ai-debug--insert-system-prompts-by-location (location-name prompts)
+  "Insert system prompts from LOCATION-NAME with PROMPTS list."
+  (when prompts
+    (magit-insert-section (ai-system-prompts-location location-name t) ; Pass 't' as hidden flag
+      (magit-insert-heading
+        (propertize (format "%s (%d prompts)" location-name (length prompts))
+                   'face 'ai-debug-category-header))
+
+      (dolist (prompt-info prompts)
+        (ai-debug--insert-system-prompt-item prompt-info)))))
 
 (defun ai-debug-show-file-commands ()
   "Display all loaded file-based commands in a visual magit-like interface.
@@ -1290,6 +1545,142 @@ expandable sections for detailed inspection."
       (pop-to-buffer buffer))
     (error
      (message "Error in ai-debug-show-file-commands: %s" (error-message-string err)))))
+
+(defun ai-debug-show-system-prompts ()
+  "Display all loaded system prompts in a visual magit-like interface.
+Shows system prompts from default, global, and local sources with
+expandable sections for detailed inspection."
+  (interactive)
+  (condition-case-unless-debug err
+    (let ((buffer (ai-debug--create-system-prompts-buffer)))
+      (with-current-buffer buffer
+        (setq buffer-read-only nil)
+
+        ;; Set up refresh capability for system prompts buffer
+        (setq-local ai-debug--refresh-function 'ai-debug-show-system-prompts)
+        (setq-local ai-debug--refresh-args nil)
+
+        ;; Ensure caches are updated
+        (when (fboundp 'ai--ensure-system-prompts-cache-updated)
+          (condition-case-unless-debug nil
+            (progn
+              (ai--ensure-system-prompts-cache-updated
+               (ai--get-default-system-prompts-directory)
+               ai--default-system-prompts-cache "default-system")
+              (ai--ensure-system-prompts-cache-updated
+               (ai--get-global-system-prompts-directory)
+               ai--global-system-prompts-cache "global-system")
+              (when-let ((local-dir (ai--get-local-system-prompts-directory)))
+                (ai--ensure-system-prompts-cache-updated
+                 local-dir ai--local-system-prompts-cache "local-system")))
+            (error nil)))
+
+        ;; Collect system prompts
+        (let* ((prompts-data (ai-debug--collect-system-prompts))
+               (default-prompts (plist-get prompts-data :default-prompts))
+               (global-prompts (plist-get prompts-data :global-prompts))
+               (local-prompts (plist-get prompts-data :local-prompts))
+               (total-prompts (+ (length default-prompts)
+                                (length global-prompts)
+                                (length local-prompts))))
+
+          ;; Insert main header
+          (magit-insert-section (ai-system-prompts-root)
+            (magit-insert-heading
+              (propertize (format "AI System Prompts (%d total)" total-prompts)
+                         'face 'ai-debug-category-header))
+
+            ;; Insert prompts by location with priority order
+            (ai-debug--insert-system-prompts-by-location "Local (Project)" local-prompts)
+            (ai-debug--insert-system-prompts-by-location "Global (~/.ai/system)" global-prompts)
+            (ai-debug--insert-system-prompts-by-location "Default (Package)" default-prompts)
+
+            ;; Show message if no prompts found
+            (when (= total-prompts 0)
+              (insert (propertize "No system prompts found.\n" 'face 'ai-debug-empty-source))
+              (insert (propertize "System prompts are loaded from:\n" 'face 'ai-debug-context-metadata))
+              (insert (propertize (format "- Default: %s\n" (ai--get-default-system-prompts-directory)) 'face 'ai-debug-context-metadata))
+              (insert (propertize (format "- Global: %s\n" (ai--get-global-system-prompts-directory)) 'face 'ai-debug-context-metadata))
+              (when-let ((local-dir (ai--get-local-system-prompts-directory)))
+                (insert (propertize (format "- Local: %s\n" local-dir) 'face 'ai-debug-context-metadata))))))
+
+        ;; Set up buffer display
+        (setq buffer-read-only t)
+        (goto-char (point-min))
+        ;; Collapse all sections by default
+        (condition-case-unless-debug nil
+          (ai-debug--collapse-all-sections-recursive)
+          (error nil)))
+
+      (pop-to-buffer buffer))
+    (error
+     (message "Error in ai-debug-show-system-prompts: %s" (error-message-string err)))))
+
+(defun ai-debug-show-raw-structures (context)
+  "Display typed structures from CONTEXT in raw sequential format.
+Shows all typed structures in the order they appear in the context
+with detailed type information and nested structure support."
+  (interactive)
+  (condition-case-unless-debug err
+    (let ((buffer (ai-debug--create-raw-structures-buffer))
+          (raw-messages (condition-case-unless-debug nil (plist-get context :messages) (error nil)))
+          (processed-messages nil))
+
+      ;; Process messages through adapter API if available
+      (setq processed-messages
+            (condition-case-unless-debug nil
+              (if (and raw-messages (fboundp 'ai-mode-adapter-api-prepare-messages))
+                  (ai-mode-adapter-api-prepare-messages raw-messages)
+                raw-messages)
+              (error raw-messages)))
+
+      (with-current-buffer buffer
+        (setq buffer-read-only nil)
+
+        ;; Store refresh function and args for later use
+        (setq-local ai-debug--refresh-function 'ai-debug-show-raw-structures)
+        (setq-local ai-debug--refresh-args (list context))
+
+        ;; Insert main header
+        (magit-insert-section (ai-raw-structures-root)
+          (magit-insert-heading
+            (propertize (format "AI Raw Typed Structures (%d total, %d processed)"
+                               (if raw-messages (length raw-messages) 0)
+                               (if processed-messages (length processed-messages) 0))
+                       'face 'ai-debug-category-header))
+
+          (if processed-messages
+              (progn
+                (insert (propertize "Structures are displayed after processing through ai-mode-adapter-api-prepare-messages.\n"
+                                   'face 'ai-debug-context-metadata))
+                (insert (propertize "Each structure shows its type, metadata, TTL, and content in expandable sections.\n\n"
+                                   'face 'ai-debug-context-metadata))
+
+                ;; Insert each structure sequentially
+                (let ((index 0))
+                  (dolist (struct processed-messages)
+                    (when (and (listp struct) (keywordp (car struct)))
+                      (ai-debug--insert-raw-typed-struct struct index))
+                    (setq index (1+ index)))))
+
+            ;; No messages case
+            (insert (propertize "No typed structures found in context.\n" 'face 'ai-debug-empty-source))
+            (insert (propertize "This could indicate:\n" 'face 'ai-debug-context-metadata))
+            (insert (propertize "- Empty or invalid context\n" 'face 'ai-debug-context-metadata))
+            (insert (propertize "- Context not properly loaded\n" 'face 'ai-debug-context-metadata))
+            (insert (propertize "- Error in context generation\n" 'face 'ai-debug-context-metadata))))
+
+        ;; Set up buffer display
+        (setq buffer-read-only t)
+        (goto-char (point-min))
+        ;; Collapse all sections by default
+        (condition-case-unless-debug nil
+          (ai-debug--collapse-all-sections-recursive)
+          (error nil)))
+
+      (pop-to-buffer buffer))
+    (error
+     (message "Error in ai-debug-show-raw-structures: %s" (error-message-string err)))))
 
 (defun ai-debug-show-context-debug (context)
     "Display CONTEXT in a visual magit-like interface.
@@ -1584,6 +1975,31 @@ and message structure for troubleshooting AI operations."
     (error
      (message "Error in ai-debug-show-context: %s" (error-message-string err)))))
 
+(defun ai-debug-show-raw-structures-interactive ()
+  "Show raw typed structures for the current AI operation.
+Interactive command that displays typed structures in their original sequence.
+Useful for understanding the exact order and structure of AI context elements."
+  (interactive)
+  (condition-case-unless-debug err
+    (when (bound-and-true-p ai-mode)
+      (let* ((query-type (condition-case-unless-debug nil
+                           (or (when (fboundp 'ai--get-command-unrestricted)
+                                 (ai--get-command-unrestricted))
+                               "explain")
+                           (error "explain")))
+             (context (condition-case-unless-debug nil
+                          (when (fboundp 'ai--get-executions-context-for-command)
+                            (ai--get-executions-context-for-command
+                             query-type
+                             :model (when (fboundp 'ai--get-current-model)
+                                      (ai--get-current-model))))
+                        (error nil))))
+        (if context
+            (ai-debug-show-raw-structures context)
+          (message "Could not retrieve AI context"))))
+    (error
+     (message "Error in ai-debug-show-raw-structures: %s" (error-message-string err)))))
+
 (defun ai-debug-completion-limited-context ()
   "Debug context for completion with limited context.
 Shows completion context with restricted preceding and following context sizes.
@@ -1651,6 +2067,8 @@ Provides a comprehensive view of AI context, configuration, and data flow."
   (define-key ai-command-map (kbd "d") 'ai-debug-visual)
   (define-key ai-command-map (kbd "D") 'ai-debug-show-sources)
   (define-key ai-command-map (kbd "f") 'ai-debug-show-file-commands)
+  (define-key ai-command-map (kbd "s") 'ai-debug-show-system-prompts)
+  (define-key ai-command-map (kbd "R") 'ai-debug-show-raw-structures-interactive)
   (define-key ai-command-map (kbd "C-d l") 'ai-debug-completion-limited-context)
   (define-key ai-command-map (kbd "C-d f") 'ai-debug-completion-full-context))
 
