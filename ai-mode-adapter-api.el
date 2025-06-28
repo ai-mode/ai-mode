@@ -71,6 +71,52 @@ AI mode's internal typed structures, leveraging
 including nested structures."
   (ai-common--render-struct-to-string struct))
 
+(defun ai-mode-adapter--should-cache-content-p (struct)
+  "Determine if the content of typed structure STRUCT should be cached.
+Returns t if the structure contains a cacheable flag or if the content
+is determined to be suitable for caching based on structure properties,
+nil otherwise.
+
+This function checks for explicit caching instructions in the structure
+and can be extended to include heuristics for determining cacheable content."
+  (let ((cacheable (plist-get struct :cacheable))
+        (cache-policy (plist-get struct :cache-policy)))
+    (cond
+     ;; Explicit cacheable flag
+     ((eq cacheable t) t)
+     ((eq cacheable nil) nil)
+     ;; Cache policy override
+     ((eq cache-policy 'always) t)
+     ((eq cache-policy 'never) nil)
+     ;; Default heuristics based on content type and structure
+     (t (ai-mode-adapter--default-cache-heuristic struct)))))
+
+(defun ai-mode-adapter--default-cache-heuristic (struct)
+  "Apply default caching heuristics to determine if STRUCT content should be cached.
+Returns t if content appears suitable for caching based on type and characteristics."
+  (let ((type (ai-mode-adapter--get-struct-type struct))
+        (subtype (plist-get struct :subtype))
+        (content (plist-get struct :content)))
+    (cond
+     ;; Cache static instruction content
+     ((eq type 'agent-instructions) t)
+     ;; Cache file metadata and structured data
+     ((eq type 'file-metadata) t)
+     ;; Cache memory content for reuse
+     ((eq type 'memory-content) t)
+     ;; Don't cache user input or dynamic content
+     ((eq type 'user-input) nil)
+     ;; Cache action context for potential reuse
+     ((eq type 'action-context) t)
+     ;; For additional context, decide based on subtype
+     ((eq type 'additional-context)
+      (cond
+       ((eq subtype 'project-files) t)
+       ((eq subtype 'context-pool) nil)
+       (t t))) ; Default to cache for additional context
+     ;; Default to not cache for unknown types
+     (t nil))))
+
 (provide 'ai-mode-adapter-api)
 
 ;;; ai-mode-adapter-api.el ends here

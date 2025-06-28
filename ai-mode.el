@@ -228,6 +228,22 @@ Should be a function symbol that returns a string or nil."
   :type 'boolean
   :group 'ai)
 
+(defcustom ai--indexing-include-existing-context t
+  "Include context from already indexed files when indexing new files.
+When enabled, the indexing process will include summaries of previously
+indexed files to ensure consistent format and improve contextual understanding."
+  :type 'boolean
+  :group 'ai)
+
+(defcustom ai--indexing-strategy 'parallel-independent
+  "Strategy for file indexing process.
+Controls how files are processed during project indexing:
+- `parallel-independent': Parallel processing without context sharing between files
+- `sequential': Sequential processing with accumulating context from current session only"
+  :type '(choice (const :tag "Parallel processing without context sharing" parallel-independent)
+                 (const :tag "Sequential with session context accumulation" sequential))
+  :group 'ai)
+
 (defcustom ai--file-command-action-modifiers
   '(("show" . show)
     ("eval" . eval)
@@ -411,6 +427,9 @@ Each entry is a pair: `(COMMAND . CONFIG-PLIST)`.
     (define-key keymap (kbd "e i") 'ai-edit-command-instructions)
     (define-key keymap (kbd "m d") 'ai-describe-command-modifiers)
     (define-key keymap (kbd "m c") 'ai-create-modified-command)
+    (define-key keymap (kbd "i t") 'ai--toggle-indexing-context)
+    (define-key keymap (kbd "i r") 'ai--reindex-project-with-context)
+    (define-key keymap (kbd "i s") 'ai--switch-indexing-strategy)
     keymap)
   "Keymap for AI commands.")
 
@@ -1367,22 +1386,30 @@ Handles both plain contexts and typed structs, including nested structures."
      'external-context))))
 
 (cl-defun ai--get-indexing-context (file-struct model)
-  "Create a simplified execution context for indexing a single FILE-STRUCT.
-MODEL is the current AI model.
-Returns a plist suitable for the backend, focusing only on the file content and instructions."
+  "Create execution context for indexing a single FILE-STRUCT with MODEL.
+Returns a plist suitable for the backend."
   (let* ((instruction-command "index file")
          (config (ai--get-command-config-by-type instruction-command))
-         ;; Minimal context needed to render command instructions
-         (minimal-full-context `(:model-context ,model
-                                 :file-path ,(plist-get file-struct :relative-path)
-                                 :buffer-language ,(plist-get file-struct :buffer-language)
-                                 :file-size ,(plist-get file-struct :file-size)))
+         (project-root (ai-common--get-project-root))
+         ;; Basic context without existing summaries for parallel-independent strategy
+         (basic-full-context `(:model-context ,model
+                               :file-path ,(plist-get file-struct :relative-path)
+                               :buffer-language ,(plist-get file-struct :buffer-language)
+                               :file-size ,(plist-get file-struct :file-size)
+                               :project-root ,project-root
+                               :strategy ,ai--indexing-strategy))
          (command-instructions (ai-common--make-typed-struct
-                                (ai--get-rendered-command-instructions instruction-command minimal-full-context)
+                                (ai--get-rendered-command-instructions instruction-command basic-full-context)
                                 'agent-instructions
                                 'command-specific-instructions))
-         ;; We want the file-struct itself to be the main content for the AI to process
-         (file-content-as-user-input (ai-common--make-typed-struct file-struct 'user-input 'file-to-index))
+
+         ;; File to be indexed
+         (file-content-as-user-input (ai-common--make-typed-struct
+                                      file-struct
+                                      'user-input
+                                      'file-to-index))
+
+         ;; Simple message list for parallel processing
          (messages (list command-instructions file-content-as-user-input)))
 
     ;; Filter out any null messages
@@ -1461,28 +1488,214 @@ PROJECT-ROOT is the root path of the project."
                                     target-buffer
                                     project-root)))))
 
-(defun ai--process-file-structs-for-indexing (file-structs current-model pending-count-ref accumulated-summaries-ht target-buffer project-root)
-  "Process FILE-STRUCTS for indexing with CURRENT-MODEL.
-PENDING-COUNT-REF is a cons cell containing the pending requests counter.
-ACCUMULATED-SUMMARIES-HT is a hash table to accumulate summaries.
-TARGET-BUFFER is the buffer where indexing was initiated.
-PROJECT-ROOT is the root path of the project being indexed."
+(defun ai--process-files-parallel-independent (file-structs current-model pending-count-ref accumulated-summaries-ht target-buffer project-root)
+  "Process FILE-STRUCTS for indexing in parallel without context sharing.
+Each file is processed independently without any existing context."
   (let ((execution-backend (map-elt current-model :execution-backend)))
+
+    (ai-utils--verbose-message "Parallel independent strategy: processing %d files without context sharing"
+                               (length file-structs))
+
     (dolist (file-struct file-structs)
       (setcar pending-count-ref (1+ (car pending-count-ref)))
+
       (let* ((indexing-context (ai--get-indexing-context file-struct current-model))
              (success-callback (ai--create-file-summarization-success-callback
                                 accumulated-summaries-ht pending-count-ref target-buffer file-struct project-root))
              (fail-callback (ai--create-file-summarization-fail-callback
                              pending-count-ref accumulated-summaries-ht target-buffer file-struct project-root)))
+
         (funcall execution-backend
                  indexing-context
                  current-model
                  :success-callback success-callback
                  :fail-callback fail-callback))
+
       ;; Introduce a configurable timeout between indexing calls
       (when (> ai--indexing-call-timeout 0)
         (sit-for ai--indexing-call-timeout)))))
+
+(defun ai--process-files-sequential (file-structs current-model pending-count-ref accumulated-summaries-ht target-buffer project-root)
+  "Process FILE-STRUCTS for indexing sequentially with session context accumulation only.
+Uses only files from current session for context accumulation, no existing index."
+  (let ((remaining-files (copy-sequence file-structs)))
+
+    (ai-utils--verbose-message "Sequential strategy: processing %d files with session context accumulation only"
+                               (length file-structs))
+
+    (when remaining-files
+      (ai--process-next-file-sequential remaining-files current-model pending-count-ref
+                                        accumulated-summaries-ht target-buffer project-root))))
+
+(defun ai--process-next-file-sequential (remaining-files current-model pending-count-ref accumulated-summaries-ht target-buffer project-root)
+  "Process the next file in REMAINING-FILES sequentially.
+This is a recursive helper function that processes one file at a time.
+Uses only current session context for accumulation, no existing index."
+  (if (null remaining-files)
+      ;; No more files to process
+      (when (buffer-live-p target-buffer)
+        (with-current-buffer target-buffer
+          (ai--index-completion-check (car pending-count-ref)
+                                      accumulated-summaries-ht
+                                      target-buffer
+                                      project-root)))
+    ;; Process the next file
+    (let* ((file-struct (car remaining-files))
+           (rest-files (cdr remaining-files))
+           (execution-backend (map-elt current-model :execution-backend))
+           ;; Use only accumulated session summaries for context - no existing index
+           (session-summaries (when ai--indexing-include-existing-context
+                                (hash-table-values accumulated-summaries-ht))))
+
+      (ai-utils--verbose-message "Sequential step: processing file '%s' with %d session summaries for context"
+                                 (plist-get file-struct :relative-path)
+                                 (length (or session-summaries '())))
+
+      (setcar pending-count-ref (1+ (car pending-count-ref)))
+
+      (let* ((indexing-context (ai--get-indexing-context-with-summaries file-struct current-model session-summaries))
+             (success-callback (ai--create-sequential-success-callback
+                                rest-files current-model pending-count-ref
+                                accumulated-summaries-ht target-buffer
+                                file-struct project-root))
+             (fail-callback (ai--create-sequential-fail-callback
+                             rest-files current-model pending-count-ref
+                             accumulated-summaries-ht target-buffer
+                             file-struct project-root)))
+
+        (funcall execution-backend
+                 indexing-context
+                 current-model
+                 :success-callback success-callback
+                 :fail-callback fail-callback)))))
+
+(cl-defun ai--get-indexing-context-with-summaries (file-struct model existing-summaries)
+  "Create execution context for indexing a single FILE-STRUCT with MODEL and EXISTING-SUMMARIES.
+This version includes existing summaries for sequential processing.
+Returns a plist suitable for the backend."
+  (let* ((instruction-command "index file")
+         (config (ai--get-command-config-by-type instruction-command))
+         (project-root (ai-common--get-project-root))
+         ;; Enhanced context with existing summaries information
+         (enhanced-full-context `(:model-context ,model
+                                  :file-path ,(plist-get file-struct :relative-path)
+                                  :buffer-language ,(plist-get file-struct :buffer-language)
+                                  :file-size ,(plist-get file-struct :file-size)
+                                  :project-root ,project-root
+                                  :has-existing-context ,(and ai--indexing-include-existing-context
+                                                             existing-summaries
+                                                             (> (length existing-summaries) 0))
+                                  :context-source "session-accumulation"
+                                  :context-count ,(length existing-summaries)
+                                  :strategy ,ai--indexing-strategy))
+         (command-instructions (ai-common--make-typed-struct
+                                (ai--get-rendered-command-instructions instruction-command enhanced-full-context)
+                                'agent-instructions
+                                'command-specific-instructions))
+
+         ;; Include existing context if enabled and available
+         (existing-context-struct
+          (when (and ai--indexing-include-existing-context
+                     existing-summaries
+                     (> (length existing-summaries) 0))
+            (ai-common--make-typed-struct
+             existing-summaries
+             'additional-context
+             'session-accumulated-files
+             :count (length existing-summaries)
+             :project-root project-root
+             :strategy ai--indexing-strategy)))
+
+         ;; File to be indexed
+         (file-content-as-user-input (ai-common--make-typed-struct
+                                      file-struct
+                                      'user-input
+                                      'file-to-index))
+
+         ;; Combine all messages, filtering out nil values
+         (messages (cl-remove-if #'null
+                                (list command-instructions
+                                      existing-context-struct
+                                      file-content-as-user-input))))
+
+    ;; Filter out any null messages
+    (setq messages (ai-utils-filter-non-empty-content messages))
+
+    ;; Log to prompt buffer for debugging
+    (ai-utils-write-context-to-prompt-buffer messages)
+
+    `(:messages ,messages :model-context ,model)))
+
+(defun ai--create-sequential-success-callback (remaining-files current-model pending-count-ref accumulated-summaries-ht target-buffer original-file-struct project-root)
+  "Create success callback for sequential file processing."
+  (lambda (messages)
+    ;; Process the successful response
+    (let ((summary-struct (ai-utils--get-message messages)))
+      (when (and summary-struct (listp summary-struct) (plist-get summary-struct :type))
+        (let* ((summary-content (plist-get summary-struct :content))
+               (file-path (plist-get original-file-struct :file))
+               (relative-path (plist-get original-file-struct :relative-path))
+               (file-size (plist-get original-file-struct :file-size))
+               (final-summary-struct (ai-common--make-file-summary-struct
+                                      summary-content
+                                      nil
+                                      :file file-path
+                                      :relative-path relative-path
+                                      :file-size file-size)))
+          ;; Store the summary struct in the accumulated hash table
+          (puthash relative-path final-summary-struct accumulated-summaries-ht)
+          (ai-utils--verbose-message "Sequential success: added summary for '%s', total session summaries: %d"
+                                     relative-path
+                                     (hash-table-count accumulated-summaries-ht)))))
+
+    ;; Update counters and progress
+    (setcar pending-count-ref (1- (car pending-count-ref)))
+    (when (buffer-live-p target-buffer)
+      (with-current-buffer target-buffer
+        (setq ai--progress-message (format "Indexing project files (%d remaining)"
+                                           (+ (length remaining-files) (car pending-count-ref))))
+        (force-mode-line-update)))
+
+    ;; Continue with next file
+    (ai--process-next-file-sequential remaining-files current-model pending-count-ref
+                                      accumulated-summaries-ht target-buffer project-root)))
+
+(defun ai--create-sequential-fail-callback (remaining-files current-model pending-count-ref accumulated-summaries-ht target-buffer original-file-struct project-root)
+  "Create failure callback for sequential file processing."
+  (lambda (request-data error-message)
+    ;; Log the error but continue processing
+    (when (buffer-live-p target-buffer)
+      (with-current-buffer target-buffer
+        (message "Failed to summarize file '%s'. Error: %s"
+                 (plist-get original-file-struct :relative-path)
+                 (ai-common--get-text-content-from-struct error-message))))
+
+    ;; Update counters and progress
+    (setcar pending-count-ref (1- (car pending-count-ref)))
+    (when (buffer-live-p target-buffer)
+      (with-current-buffer target-buffer
+        (setq ai--progress-message (format "Indexing project files (%d remaining)"
+                                           (+ (length remaining-files) (car pending-count-ref))))
+        (force-mode-line-update)))
+
+    ;; Continue with next file despite the error
+    (ai--process-next-file-sequential remaining-files current-model pending-count-ref
+                                      accumulated-summaries-ht target-buffer project-root)))
+
+(defun ai--process-file-structs-for-indexing (file-structs current-model pending-count-ref accumulated-summaries-ht target-buffer project-root)
+  "Process FILE-STRUCTS for indexing using the configured strategy.
+Dispatches to either parallel-independent or sequential processing based on ai--indexing-strategy."
+  (pcase ai--indexing-strategy
+    ('parallel-independent
+     (ai--process-files-parallel-independent file-structs current-model pending-count-ref
+                                             accumulated-summaries-ht target-buffer project-root))
+    ('sequential
+     (ai--process-files-sequential file-structs current-model pending-count-ref
+                                   accumulated-summaries-ht target-buffer project-root))
+    (_
+     ;; Fallback to parallel-independent for unknown strategies
+     (ai--process-files-parallel-independent file-structs current-model pending-count-ref
+                                             accumulated-summaries-ht target-buffer project-root))))
 
 (defun ai--update-project-files-summary-index ()
   "Update the project files summary index with current project files.
@@ -1507,7 +1720,10 @@ from the current project for use in project AI summary context mode."
           (remhash project-root ai--project-files-summary-index)
           (cl-return-from ai--update-project-files-summary-index))
 
-        (message "Indexing %d project files for summary for project '%s'... This may take a while." total-files project-root)
+        (message "Indexing %d project files using %s strategy for project '%s'... This may take a while."
+                 total-files
+                 (symbol-name ai--indexing-strategy)
+                 project-root)
         (ai--progress-start (format "Indexing project files (%d remaining)" total-files) target-buffer)
 
         (ai--process-file-structs-for-indexing filtered-file-structs
@@ -1518,6 +1734,25 @@ from the current project for use in project AI summary context mode."
                                                project-root))
     (message "Not in a project. Cannot update project files summary index."))
   nil)
+
+(defun ai--switch-indexing-strategy ()
+  "Interactively switch the indexing strategy."
+  (interactive)
+  (let* ((current-strategy ai--indexing-strategy)
+         (strategies '(("parallel-independent" . parallel-independent)
+                       ("sequential" . sequential)))
+         (strategy-descriptions '((parallel-independent . "Parallel processing without context sharing between files")
+                                  (sequential . "Sequential processing with accumulating context from current session only")))
+         (prompt (format "Current strategy: %s. Select new indexing strategy: "
+                        (cdr (assoc current-strategy strategy-descriptions))))
+         (selected-name (completing-read prompt (mapcar #'car strategies)))
+         (selected-strategy (cdr (assoc selected-name strategies))))
+
+    (setq ai--indexing-strategy selected-strategy)
+    (customize-save-variable 'ai--indexing-strategy selected-strategy)
+    (message "Indexing strategy changed to: %s (%s)"
+             selected-name
+             (cdr (assoc selected-strategy strategy-descriptions)))))
 
 (defun ai--get-full-project-context ()
   "Get project context by collecting all filtered project files.
@@ -1570,6 +1805,36 @@ or nil if no project is detected or index is empty."
                            :root project-root)))
       project-struct)))
 
+(defun ai--get-enhanced-project-ai-summary-context ()
+  "Get enhanced project context using project AI summary mode with dependency awareness."
+  (when-let* ((project-root (ai-common--get-project-root))
+              (files-list (ai-common--get-filtered-project-files t))
+              (summaries-for-current-project (gethash project-root ai--project-files-summary-index)))
+    (let* ((files-count (length files-list))
+           (indexed-count (length summaries-for-current-project))
+           (files-list-content (mapconcat (lambda (file-path)
+                                            (format "- %s" file-path))
+                                          files-list "\n"))
+           (files-list-struct (ai-common--make-typed-struct
+                              files-list-content
+                              'files-list
+                              'project-scan
+                              :root project-root
+                              :count files-count
+                              :indexed-count indexed-count))
+           (files-struct (ai-common--make-typed-struct
+                         (or summaries-for-current-project '())
+                         'files
+                         'project-summary-index
+                         :has-context (> indexed-count 0)))
+           (project-struct (ai-common--make-typed-struct
+                           (list files-list-struct files-struct)
+                           'project-context
+                           'project-ai-indexer
+                           :root project-root
+                           :indexing-mode "enhanced")))
+      project-struct)))
+
 (defun ai--get-project-context ()
   "Get project context based on `ai--project-context-mode` setting.
 Returns a typed struct containing the appropriate project context, or nil if disabled."
@@ -1601,6 +1866,20 @@ Allows user to select between different project context inclusion modes."
     (message "Project context mode changed to: %s (%s)"
              selected-name
              (cdr (assoc selected-mode mode-descriptions)))))
+
+(defun ai--toggle-indexing-context ()
+  "Toggle inclusion of existing context in indexing process."
+  (interactive)
+  (setq ai--indexing-include-existing-context
+        (not ai--indexing-include-existing-context))
+  (message "Indexing context inclusion: %s"
+           (if ai--indexing-include-existing-context "enabled" "disabled")))
+
+(defun ai--reindex-project-with-context ()
+  "Reindex the entire project with existing context enabled."
+  (interactive)
+  (let ((ai--indexing-include-existing-context t))
+    (ai--update-project-files-summary-index)))
 
 (cl-defun ai--get-execution-context (buffer config command &key
                                             (preceding-context-size ai--current-precending-context-size)
