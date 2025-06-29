@@ -325,12 +325,12 @@ These modifiers control the amount of context included with commands."
   "The current backend used to execute requests asynchronously."
   :group 'ai-mode)
 
-(defcustom ai--current-precending-context-size 10
+(defcustom ai--current-precending-context-size 200
   "Number of lines for context."
   :type 'integer
   :group 'ai-completions)
 
-(defcustom ai--current-forwarding-context-size 10
+(defcustom ai--current-forwarding-context-size 200
   "Following context size."
   :type 'integer
   :group 'ai-completions)
@@ -389,8 +389,7 @@ Maps project root paths to plists containing version information.")
     ("index file" . (:instructions nil :result-action show))
 
     ("answer" . (:instructions nil :user-input t :result-action show ))
-    ("add to memory" . (:instructions nil :result-action replace))
-    ("complete" . (:instructions nil :action-type "complete" :result-action complete)))
+    ("add to memory" . (:instructions nil :result-action replace)))
 
   "An association list mapping AI commands to their configurations.
 Each entry is a pair: `(COMMAND . CONFIG-PLIST)`.
@@ -1651,7 +1650,11 @@ Returns the container name or nil if no specific container is needed."
   "Generate contextual action object based on CONFIG and optional context sizes PRECEDING-CONTEXT-SIZE and FOLLOWING-CONTEXT-SIZE."
   (let* ((action (map-elt config :action))
          (result-action (map-elt config :result-action))
-         (container-type (ai--get-container-type-by-result-action result-action)))
+         (container-type (ai--get-container-type-by-result-action result-action))
+         (needs-buffer-context (map-elt config :needs-buffer-context))
+         ;; If needs-buffer-context is true, use nil for full context, otherwise use provided sizes
+         (actual-preceding-size (if needs-buffer-context nil preceding-context-size))
+         (actual-following-size (if needs-buffer-context nil following-context-size)))
 
     (if (equal container-type "complete")
         (ai-common--make-action-object
@@ -1662,7 +1665,9 @@ Returns the container name or nil if no specific container is needed."
          'contextual-action)
       (ai-common--make-action-object
        container-type
-       (ai-common--assemble-edit-context)
+       (ai-common--assemble-edit-context-extended
+        :preceding-context-size actual-preceding-size
+        :following-context-size actual-following-size)
        'contextual-action))))
 
 (defun ai--get-current-buffer-context ()
@@ -1682,8 +1687,7 @@ Returns t if context should be included, nil otherwise."
 
     (and ai--current-buffer-additional-context
          (or (and needs-buffer-context
-                  (not (string= container-type "complete")))
-             (and (eq result-action 'replace) has-region)))))
+                  (not (string= container-type "complete")))))))
 
 (defun ai--get-result-action-prompt (result-action context)
   "Get the prompt for RESULT-ACTION rendered with CONTEXT."

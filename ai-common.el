@@ -669,6 +669,71 @@ Modes of operation:
     (list
      (ai-common--make-file-context-from-buffer))))
 
+
+(cl-defun ai-common--assemble-edit-context-extended
+    (&key
+     (preceding-context-size  ai-utils--default-preceding-context-size)
+     (following-context-size  ai-utils--default-following-context-size))
+  "Return a list of context elements for edit operations with flexible sizing.
+
+Modes of operation:
+1. If the region is active, return `preceding-context`, the selected region as `selection`, and `following-context`.
+2. If not active, return the whole file as `file-context`."
+  (if (use-region-p)
+      ;; Mode 1: Selected region with context
+      (let* ((region-start (region-beginning))
+             (region-end (region-end))
+             (pre-start (if preceding-context-size
+                            (point-min)  ; От начала файла до начала региона
+                          (max (point-min) (- region-start preceding-context-size))))
+             (post-end (if following-context-size
+                           (point-max)  ; От окончания региона до конца файла
+                         (min (point-max) (+ region-end following-context-size))))
+             (pre-content (when (< pre-start region-start)
+                            (buffer-substring-no-properties pre-start region-start)))
+             (post-content (when (< region-end post-end)
+                             (buffer-substring-no-properties region-end post-end)))
+             (selection (ai-common--make-snippet-from-region 'selection))
+             (results (list)))
+
+        ;; Add preceding context if it exists
+        (when (and pre-content (> (length pre-content) 0))
+          (let ((pre-struct (ai-common--make-typed-struct
+                             pre-content 'preceding-context 'edit-context
+                             :file (or (buffer-file-name) (buffer-name))
+                             :buffer (buffer-name)
+                             :start-pos pre-start
+                             :end-pos (- region-start 1)
+                             :start-line (line-number-at-pos pre-start)
+                             :end-line (line-number-at-pos (- region-start 1))
+                             :start-column (car (posn-col-row (posn-at-point pre-start)))
+                             :end-column (car (posn-col-row (posn-at-point (- region-start 1))))
+                             :mode (symbol-name major-mode))))
+            (push pre-struct results)))
+
+        ;; Add selection
+        (push selection results)
+
+        ;; Add following context if it exists
+        (when (and post-content (> (length post-content) 0))
+          (let ((post-struct (ai-common--make-typed-struct
+                              post-content 'following-context 'edit-context
+                              :file (or (buffer-file-name) (buffer-name))
+                              :buffer (buffer-name)
+                              :start-pos (+ region-end 1)
+                              :end-pos post-end
+                              :start-line (line-number-at-pos (+ region-end 1))
+                              :end-line (line-number-at-pos post-end)
+                              :start-column (car (posn-col-row (posn-at-point (+ region-end 1))))
+                              :end-column (car (posn-col-row (posn-at-point post-end)))
+                              :mode (symbol-name major-mode))))
+            (push post-struct results)))
+
+        (nreverse results))
+
+    ;; Mode 2: No region - return whole file
+    (list (ai-common--make-file-context-from-buffer))))
+
 (defun ai-common--render-container-from-elements
     (container-tag elements &optional attrs)
   "Render <CONTAINER-TAG …> … </CONTAINER-TAG>.
