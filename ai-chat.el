@@ -386,6 +386,25 @@
           (format-time-string "%Y%m%d%H%M%S")
           (random 65536)))
 
+(defun ai-chat--create-usage-statistics-callback ()
+  "Create a callback function for displaying usage statistics in AI chat.
+This function attempts to use the ai-mode function if available, otherwise provides a fallback."
+  (if (fboundp 'ai--create-usage-statistics-callback)
+      (funcall 'ai--create-usage-statistics-callback)
+    ;; Fallback implementation if ai-mode function is not available
+    (lambda (usage-stats)
+      (let ((input-tokens (plist-get usage-stats :input-tokens))
+            (output-tokens (plist-get usage-stats :output-tokens))
+            (total-tokens (plist-get usage-stats :total-tokens))
+            (input-tokens-write-cache (plist-get usage-stats :input-tokens-write-cache))
+            (input-tokens-read-cache (plist-get usage-stats :input-tokens-read-cache)))
+        (message "AI Chat Usage: Input=%s, Output=%s, Total=%s%s%s"
+                 (or input-tokens "?")
+                 (or output-tokens "?")
+                 (or total-tokens "?")
+                 (if input-tokens-write-cache (format ", Cache Write=%s" input-tokens-write-cache) "")
+                 (if input-tokens-read-cache (format ", Cache Read=%s" input-tokens-read-cache) ""))))))
+
 ;;; Progress indicator functions
 
 (defun ai-chat--format-elapsed-time (start-time)
@@ -929,7 +948,8 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
                          context
                          execution-model
                          :success-callback wrapped-success-callback
-                         :fail-callback wrapped-fail-callback))
+                         :fail-callback wrapped-fail-callback
+                         :update-usage-callback (ai-chat--create-usage-statistics-callback)))
 
             (error (error  "Evaluation input error: %s" (error-message-string processing-error) ))))))
     (error "AI busy")))

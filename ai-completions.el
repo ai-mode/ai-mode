@@ -322,6 +322,7 @@ STRATEGY may alter the completion behavior."
              execution-model
              :success-callback (ai--progress-wrap-callback success-callback buffer)
              :fail-callback (ai--progress-wrap-callback fail-callback buffer)
+             :update-usage-callback (ai--create-usage-statistics-callback)
              :enable-caching ai--prompt-caching-enabled
              :extra-params execution-context)))
 

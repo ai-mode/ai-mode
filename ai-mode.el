@@ -1407,6 +1407,22 @@ Returns a human-readable description of the command's configuration."
           (message "Creating instruction file for command: %s" full-command-name)
           (ai-edit-command-instructions-for-name full-command-name))))))
 
+;; Usage statistics callback function
+(defun ai--create-usage-statistics-callback ()
+  "Create a callback function for displaying usage statistics."
+  (lambda (usage-stats)
+    (let ((input-tokens (plist-get usage-stats :input-tokens))
+          (output-tokens (plist-get usage-stats :output-tokens))
+          (total-tokens (plist-get usage-stats :total-tokens))
+          (input-tokens-write-cache (plist-get usage-stats :input-tokens-write-cache))
+          (input-tokens-read-cache (plist-get usage-stats :input-tokens-read-cache)))
+      (message "AI Usage: Input=%s, Output=%s, Total=%s%s%s"
+               (or input-tokens "?")
+               (or output-tokens "?")
+               (or total-tokens "?")
+               (if input-tokens-write-cache (format ", Cache Write=%s" input-tokens-write-cache) "")
+               (if input-tokens-read-cache (format ", Cache Read=%s" input-tokens-read-cache) "")))))
+
 ;; Progress indicator functions (buffer-local operations)
 (defun ai--format-elapsed-time (start-time)
   "Format elapsed time since START-TIME as a human-readable string."
@@ -1600,6 +1616,7 @@ Optionally use FAIL-CALLBACK and specify a MODEL."
              execution-model
              :success-callback success-callback
              :fail-callback fail-callback
+             :update-usage-callback (ai--create-usage-statistics-callback)
              :enable-caching ai--prompt-caching-enabled)))
 
 (defun ai--get-selected-region (config full-context)
@@ -1828,6 +1845,7 @@ START-TIME is when the indexing process began."
                  current-model
                  :success-callback success-callback
                  :fail-callback fail-callback
+                 :update-usage-callback (ai--create-usage-statistics-callback)
                  :enable-caching ai--prompt-caching-enabled))
 
       ;; Introduce a configurable timeout between indexing calls
@@ -1890,6 +1908,7 @@ START-TIME is when the indexing process began."
                  current-model
                  :success-callback success-callback
                  :fail-callback fail-callback
+                 :update-usage-callback (ai--create-usage-statistics-callback)
                  :enable-caching ai--prompt-caching-enabled)))))
 
 (cl-defun ai--get-indexing-context-with-summaries (file-struct model existing-summaries)
@@ -2523,6 +2542,7 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
              execution-model
              :success-callback wrapped-success-callback
              :fail-callback wrapped-fail-callback
+             :update-usage-callback (ai--create-usage-statistics-callback)
              :enable-caching ai--prompt-caching-enabled)))
 
 (defun ai-show ()
