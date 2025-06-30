@@ -212,15 +212,22 @@ If BUFFER is not provided, uses the current buffer.
 This includes metadata such as file name, buffer name, and timestamps.
 ADDITIONAL-PROPS are key-value pairs to be included in the resulting structure."
   (with-current-buffer (or buffer (current-buffer))
-    (let ((content (buffer-substring-no-properties (point-min) (point-max))))
+    (let ((content (buffer-substring-no-properties (point-min) (point-max)))
+          (file-path (buffer-file-name))
+          (file-mod-time (when (buffer-file-name)
+                           (format-time-string "%Y-%m-%dT%H:%M:%S"
+                                               (file-attribute-modification-time
+                                                (file-attributes (buffer-file-name)))))))
       (apply #'ai-common--make-typed-struct
              content 'file-context 'current-buffer-content
-             :file (or (buffer-file-name) (buffer-name))
+             :file (or file-path (buffer-name))
              :buffer (buffer-name)
              :start-pos (point-min)
              :end-pos (point-max)
              :file-size (length content)
-             additional-props))))
+             (if file-mod-time
+                 (append (list :file-modified file-mod-time) additional-props)
+               additional-props)))))
 
 
 (defun ai-common--make-file-context-from-file (file-path &optional type source &rest additional-props)
@@ -238,7 +245,10 @@ ADDITIONAL-PROPS are key-value pairs to be included in the resulting structure."
                     (insert-file-contents file-path)
                     (buffer-substring-no-properties (point-min) (point-max))))
          (struct-type (or type 'file-context))
-         (struct-source (or source 'external-file-content)))
+         (struct-source (or source 'external-file-content))
+         (file-attrs (file-attributes file-path))
+         (file-mod-time (format-time-string "%Y-%m-%dT%H:%M:%S"
+                                            (file-attribute-modification-time file-attrs))))
     (apply #'ai-common--make-typed-struct
            content struct-type struct-source
            :file (expand-file-name file-path)
@@ -246,6 +256,7 @@ ADDITIONAL-PROPS are key-value pairs to be included in the resulting structure."
            :start-pos 1
            :end-pos (1+ (length content))
            :file-size (length content)
+           :file-modified file-mod-time
            additional-props)))
 
 (defun ai-common--make-snippet-from-region (&optional tag-type)
@@ -264,21 +275,26 @@ If TAG-TYPE is provided, it is used as the :type value instead of 'snippet."
            (mode       (symbol-name major-mode))
            (ts         (format-time-string "%Y-%m-%dT%H:%M:%S"))
            (id         (ai-common--generate-id type))
-           (content    (buffer-substring-no-properties start end)))
+           (content    (buffer-substring-no-properties start end))
+           (file-mod-time (when (buffer-file-name)
+                            (format-time-string "%Y-%m-%dT%H:%M:%S"
+                                                (file-attribute-modification-time
+                                                 (file-attributes (buffer-file-name)))))))
       `(:type              ,type
-                           :content           ,content
-                           :file              ,file
-                           :buffer            ,buf
-                           :start-pos         ,start
-                           :end-pos           ,end
-                           :start-line        ,line-beg
-                           :end-line          ,line-end
-                           :start-column      ,col-beg
-                           :end-column        ,col-end
-                           :mode              ,mode
-                           :timestamp         ,ts
-                           :source            region-selection
-                           :id                ,id))))
+        :content           ,content
+        :file              ,file
+        :buffer            ,buf
+        :start-pos         ,start
+        :end-pos           ,end
+        :start-line        ,line-beg
+        :end-line          ,line-end
+        :start-column      ,col-beg
+        :end-column        ,col-end
+        :mode              ,mode
+        :timestamp         ,ts
+        :source            region-selection
+        :id                ,id
+        ,@(when file-mod-time (list :file-modified file-mod-time))))))
 
 (defun ai-common--generate-id (type)
   "Generate a unique ID for a struct of TYPE.
@@ -333,21 +349,26 @@ Optional SOURCE parameter specifies the source of the context."
          (mode         (symbol-name major-mode))
          (ts           (format-time-string "%Y-%m-%dT%H:%M:%S"))
          (id           (ai-common--generate-id 'preceding-context))
-         (content      (buffer-substring-no-properties beg end)))
+         (content      (buffer-substring-no-properties beg end))
+         (file-mod-time (when (buffer-file-name)
+                          (format-time-string "%Y-%m-%dT%H:%M:%S"
+                                              (file-attribute-modification-time
+                                               (file-attributes (buffer-file-name)))))))
     `(:type              preceding-context
-                         :content           ,content
-                         :file              ,file
-                         :buffer            ,buf
-                         :start-pos         ,beg
-                         :end-pos           ,end
-                         :start-line        ,start-line
-                         :end-line          ,end-line
-                         :start-column      ,col-beg
-                         :end-column        ,col-end
-                         :mode              ,mode
-                         :timestamp         ,ts
-                         :source            preceding-context
-                         :id                ,id)))
+      :content           ,content
+      :file              ,file
+      :buffer            ,buf
+      :start-pos         ,beg
+      :end-pos           ,end
+      :start-line        ,start-line
+      :end-line          ,end-line
+      :start-column      ,col-beg
+      :end-column        ,col-end
+      :mode              ,mode
+      :timestamp         ,ts
+      :source            preceding-context
+      :id                ,id
+      ,@(when file-mod-time (list :file-modified file-mod-time)))))
 
 (defun ai-common--make-following-context (size)
   "Return a plist describing the following-context of SIZE chars after point."
@@ -362,7 +383,11 @@ Optional SOURCE parameter specifies the source of the context."
          (mode         (symbol-name major-mode))
          (ts           (format-time-string "%Y-%m-%dT%H:%M:%S"))
          (id           (ai-common--generate-id 'following-context))
-         (content      (buffer-substring-no-properties beg end)))
+         (content      (buffer-substring-no-properties beg end))
+         (file-mod-time (when (buffer-file-name)
+                          (format-time-string "%Y-%m-%dT%H:%M:%S"
+                                              (file-attribute-modification-time
+                                               (file-attributes (buffer-file-name)))))))
     `(:type              following-context
       :content           ,content
       :file              ,file
@@ -376,7 +401,8 @@ Optional SOURCE parameter specifies the source of the context."
       :mode              ,mode
       :timestamp         ,ts
       :source            following-context
-      :id                ,id)))
+      :id                ,id
+      ,@(when file-mod-time (list :file-modified file-mod-time)))))
 
 
 (defun ai-common--make-action-object (action-type elements &optional source &rest additional-props)
@@ -413,10 +439,15 @@ ADDITIONAL-PROPS are key-value pairs to be included in the resulting struct.
 The struct type will be 'file-summary and source 'ai-summary.
 This structure is intended for use in file indexing and summarization."
   (let* ((base-props `(:type file-summary :source ai-summary))
+         (file-mod-time (when (and file-path (file-exists-p file-path))
+                          (format-time-string "%Y-%m-%dT%H:%M:%S"
+                                              (file-attribute-modification-time
+                                               (file-attributes file-path)))))
          (file-specific-props (when file-path
                                 `(:file ,(expand-file-name file-path)
                                   :buffer ,(file-name-nondirectory file-path)
-                                  :relative-path ,(file-relative-name file-path (ai-common--get-project-root))))))
+                                  :relative-path ,(file-relative-name file-path (ai-common--get-project-root))
+                                  ,@(when file-mod-time (list :file-modified file-mod-time))))))
     (apply #'ai-common--make-typed-struct
            content
            'file-summary
@@ -694,6 +725,10 @@ Modes of operation:
              (post-content (when (< region-end post-end)
                              (buffer-substring-no-properties region-end post-end)))
              (selection (ai-common--make-snippet-from-region 'selection))
+             (file-mod-time (when (buffer-file-name)
+                              (format-time-string "%Y-%m-%dT%H:%M:%S"
+                                                  (file-attribute-modification-time
+                                                   (file-attributes (buffer-file-name))))))
              (results (list)))
 
         ;; Add preceding context if it exists
@@ -708,7 +743,8 @@ Modes of operation:
                              :end-line (line-number-at-pos (- region-start 1))
                              :start-column (car (posn-col-row (posn-at-point pre-start)))
                              :end-column (car (posn-col-row (posn-at-point (- region-start 1))))
-                             :mode (symbol-name major-mode))))
+                             :mode (symbol-name major-mode)
+                             (if file-mod-time :file-modified file-mod-time))))
             (push pre-struct results)))
 
         ;; Add selection
@@ -726,7 +762,8 @@ Modes of operation:
                               :end-line (line-number-at-pos post-end)
                               :start-column (car (posn-col-row (posn-at-point (+ region-end 1))))
                               :end-column (car (posn-col-row (posn-at-point post-end)))
-                              :mode (symbol-name major-mode))))
+                              :mode (symbol-name major-mode)
+                              (if file-mod-time :file-modified file-mod-time))))
             (push post-struct results)))
 
         (nreverse results))

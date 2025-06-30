@@ -163,6 +163,14 @@ content for caching based on the provider's specific rules."
   :type 'boolean
   :group 'ai-mode)
 
+(defcustom ai--replace-action-use-patch nil
+  "Use unified patch format for replace actions instead of direct replacement.
+When enabled, AI models will generate unified patches that are applied
+using standard patch utilities. When disabled, AI responses directly
+replace the selected content."
+  :type 'boolean
+  :group 'ai-mode)
+
 (defcustom ai--command-prompt "Command or query: "
   "Prompt for selecting the command."
   :type 'string
@@ -451,6 +459,7 @@ Each entry is a pair: `(COMMAND . CONFIG-PLIST)`.
     (define-key keymap (kbd "i l") 'ai--list-index-versions)
     (define-key keymap (kbd "i d") 'ai--delete-old-index-versions)
     (define-key keymap (kbd "c t") 'ai--toggle-prompt-caching)
+    (define-key keymap (kbd "p t") 'ai--toggle-replace-action-use-patch)
     keymap)
   "Keymap for AI commands.")
 
@@ -778,6 +787,14 @@ Returns the loaded summaries list or nil if loading fails."
   (customize-save-variable 'ai--prompt-caching-enabled ai--prompt-caching-enabled)
   (message "Prompt caching %s"
            (if ai--prompt-caching-enabled "enabled" "disabled")))
+
+(defun ai--toggle-replace-action-use-patch ()
+  "Toggle unified patch mode for replace actions."
+  (interactive)
+  (setq ai--replace-action-use-patch (not ai--replace-action-use-patch))
+  (customize-save-variable 'ai--replace-action-use-patch ai--replace-action-use-patch)
+  (message "Replace action patch mode %s"
+           (if ai--replace-action-use-patch "enabled" "disabled")))
 
 (defun ai--command-name-to-filename (command-name)
   "Convert COMMAND-NAME to a filesystem-safe filename with extension.
@@ -1691,7 +1708,9 @@ Returns t if context should be included, nil otherwise."
 
 (defun ai--get-result-action-prompt (result-action context)
   "Get the prompt for RESULT-ACTION rendered with CONTEXT."
-  (let ((prompt-name (format "result_action_%s" (symbol-name result-action))))
+  (let ((prompt-name (if (and (eq result-action 'replace) ai--replace-action-use-patch)
+                         "result_action_apply_patch"
+                       (format "result_action_%s" (symbol-name result-action)))))
     (ai--get-rendered-system-prompt prompt-name context)))
 
 (defun ai--get-user-input ()
@@ -2526,6 +2545,70 @@ MODEL is the model configuration to be set."
   "Toggle file instructions for the current buffer."
   (setq ai--project-file-instructions-enabled (not ai--project-file-instructions-enabled)))
 
+(defun ai--apply-patch-to-buffer (patch-content)
+  "Apply PATCH-CONTENT to the current buffer using unified patch format."
+  (let ((patch-file (make-temp-file "ai-patch" nil ".patch"))
+        (original-buffer (current-buffer))
+        (original-file (buffer-file-name))
+        (result-code nil))
+    (unwind-protect
+        (progn
+          ;; Write patch content to temporary file
+          (with-temp-file patch-file
+            (insert patch-content))
+
+          ;; Save buffer before applying patch if it has a file
+          (when (and original-file (buffer-modified-p))
+            (save-buffer))
+
+          ;; Apply patch to the buffer
+          (if original-file
+              ;; For file-backed buffers, apply patch to file
+              (progn
+                (setq result-code (call-process "patch" nil "*AI Patch Output*" t
+                                              "-p1" "--forward" "--force"
+                                              original-file patch-file))
+                (if (= result-code 0)
+                    (progn
+                      (revert-buffer t t t)
+                      (message "Patch applied successfully"))
+                  (error "Failed to apply patch. Exit code: %d. Check *AI Patch Output* buffer" result-code)))
+            ;; For non-file buffers, create temporary file and apply patch
+            (let ((temp-file (make-temp-file "ai-buffer" nil ".tmp")))
+              (unwind-protect
+                  (progn
+                    ;; Write buffer content to temp file
+                    (write-region (point-min) (point-max) temp-file)
+                    ;; Apply patch to temp file
+                    (setq result-code (call-process "patch" nil "*AI Patch Output*" t
+                                                  "-p1" "--forward" "--force"
+                                                  temp-file patch-file))
+                    (if (= result-code 0)
+                        (progn
+                          ;; Replace buffer content with patched content
+                          (erase-buffer)
+                          (insert-file-contents temp-file)
+                          (message "Patch applied successfully to buffer"))
+                      (error "Failed to apply patch. Exit code: %d. Check *AI Patch Output* buffer" result-code)))
+                (when (file-exists-p temp-file)
+                  (delete-file temp-file))))))
+      ;; Cleanup
+      (when (file-exists-p patch-file)
+        (delete-file patch-file)))))
+
+(defun ai--create-patch-apply-callback (original-buffer)
+  "Create a callback that applies patch content to ORIGINAL-BUFFER."
+  (lambda (messages)
+    (let ((response-content (ai-utils--extract-content-from-messages messages)))
+      (if response-content
+          (with-current-buffer original-buffer
+            (condition-case err
+                (ai--apply-patch-to-buffer response-content)
+              (error
+               (message "Failed to apply patch: %s" (error-message-string err))
+               (ai-utils--show-response-buffer messages))))
+        (message "No patch content received from AI")))))
+
 (cl-defun ai-perform-async-backend-query (context success-callback &key
                                                   (fail-callback nil)
                                                   (extra-params nil)
@@ -2591,8 +2674,12 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
       (message "Command '%s' will insert response at cursor position." command)
       (ai--execute-context context (ai-utils--create-insert-at-point-callback current-buffer cursor-position)))
      ((eq result-action 'replace)
-      ;; Default replace behavior
-      (ai--execute-context context (ai-utils--replace-region-or-insert-in-current-buffer)))
+      ;; Apply patch if patch mode is enabled, otherwise use regular replace behavior
+      (if ai--replace-action-use-patch
+          (progn
+            (message "Command '%s' will generate and apply a unified patch." command)
+            (ai--execute-context context (ai--create-patch-apply-callback current-buffer)))
+        (ai--execute-context context (ai-utils--replace-region-or-insert-in-current-buffer))))
      (t
       ;; Fallback for unconfigured or new actions
       (message "Unknown or unspecified result action for command '%s'. Defaulting to replace." command)
@@ -2633,6 +2720,7 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
   (let* ((model (ai--get-current-model))
          (project-indicator (ai--get-project-context-indicator))
          (cache-indicator (if ai--prompt-caching-enabled "C" ""))
+         (patch-indicator (if ai--replace-action-use-patch "P" ""))
          (progress-indicator (cond
                               ((and ai--progress-active
                                     (eq ai--progress-indicator-style 'spinner))
@@ -2653,9 +2741,10 @@ After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL
          (context-info (if ai--progress-active
                            (when ai--progress-start-time
                              (format "%s" (if (string-empty-p progress-indicator) "" (format "%s" progress-indicator))))
-                         (format "%s%s|%d/%d"
+                         (format "%s%s%s|%d/%d"
                                  project-indicator
                                  cache-indicator
+                                 patch-indicator
                                  ai--current-precending-context-size
                                  ai--current-forwarding-context-size)))
          (ai-mode-line-section
