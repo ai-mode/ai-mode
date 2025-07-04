@@ -55,6 +55,7 @@
 ;;; Code:
 
 (require 'ai-common)
+(require 'ai-network)
 (require 'cl-lib)
 
 (defun ai-mode-adapter-api-get-struct-type (struct)
@@ -241,6 +242,25 @@ Returns t if the structure has the :grouped flag set to t, nil otherwise.
 This can be used during rendering to determine if the wrapper container
 should be omitted."
   (eq (plist-get struct :grouped) t))
+
+;; Network request aliases
+(cl-defun ai-mode-adapter-api-async-request (api-url method body headers callback
+                                                     &key (timeout ai-network--default-request-timeout))
+  "Send an asynchronous HTTP request to API-URL.
+This is an alias for `ai-network--async-request` to provide a stable public API.
+
+METHOD specifies the HTTP method.
+BODY is the request body.
+HEADERS is a list of request headers.
+CALLBACK is a function called with the response.
+TIMEOUT specifies the request timeout."
+  (ai-network--async-request api-url method body headers callback :timeout timeout))
+
+(defalias 'ai-mode-adapter-api-request-async 'ai-mode-adapter-api-async-request
+  "Alternative alias for `ai-mode-adapter-api-async-request`.")
+
+(defalias 'ai-mode-adapter-api-http-request 'ai-mode-adapter-api-async-request
+  "HTTP request alias for `ai-mode-adapter-api-async-request`.")
 
 (provide 'ai-mode-adapter-api)
 
