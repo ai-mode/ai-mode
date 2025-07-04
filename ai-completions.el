@@ -1,6 +1,6 @@
 ;;; ai-completions.el --- Code autocompletion via AI -*- lexical-binding: t -*-
 
-;; Copyright (C) 2023 Alex (https://github.com/lispython)
+;; Copyright (C) 2025 Alex (https://github.com/lispython)
 
 ;; URL: https://github.com/ai-mode/ai-mode
 ;; Version: 0.1
@@ -42,6 +42,11 @@
 ;;; Code:
 
 (require 'ai-common)
+(require 'ai-model-management)
+(require 'ai-execution)
+(require 'ai-context-management)
+(require 'ai-command-management)
+(require 'ai-usage)
 
 (defgroup ai-completions nil
   "AI code completion tool for Emacs."
@@ -262,7 +267,7 @@ STRATEGY may alter the completion behavior."
 
 (defun ai-completions--get-current-model ()
   "Retrieve the current model for completion."
-  (ai--get-current-model))
+  (ai-model-management-get-current))
 
 (defun ai-completions--is-new-completion-required ()
   "Check if a new completion process is necessary."
@@ -287,12 +292,12 @@ STRATEGY may alter the completion behavior."
 (cl-defun ai-completions--update-candidates (buffer)
   "Update the list of candidates for BUFFER."
   (let* ((action-type ai-completions--current-action-type)
-         (config (ai--get-command-config-by-type action-type))
+         (config (ai-command-management--get-command-config-by-type action-type))
          (execution-model (ai-completions--get-current-model))
          (candidates-context (ai-completions--create-candidates-context))
          (external-contexts (when candidates-context (list candidates-context)))
          (execution-context
-          (ai--get-execution-context (ai-completions--get-current-buffer-clone) config action-type
+          (ai-context-management--get-execution-context (ai-completions--get-current-buffer-clone) config action-type
                                      :preceding-context-size ai-completions--current-precending-context-size
                                      :following-context-size ai-completions--current-forwarding-context-size
                                      :model execution-model
@@ -315,15 +320,15 @@ STRATEGY may alter the completion behavior."
     (message (format "Attempting to execute backend for action \"%s\"" (ai-utils-escape-format-specifiers action-type)))
 
     ;; Start progress indicator
-    (ai--progress-start (format "Completing with %s" (map-elt execution-model :name)) buffer)
+    (ai-execution--progress-start (format "Completing with %s" (map-elt execution-model :name)) buffer)
 
     (funcall execution-backend
              execution-context
              execution-model
-             :success-callback (ai--progress-wrap-callback success-callback buffer)
-             :fail-callback (ai--progress-wrap-callback fail-callback buffer)
-             :update-usage-callback (ai--create-usage-statistics-callback)
-             :enable-caching ai--prompt-caching-enabled
+             :success-callback (ai-execution--progress-wrap-callback success-callback buffer)
+             :fail-callback (ai-execution--progress-wrap-callback fail-callback buffer)
+             :update-usage-callback (ai-usage-create-usage-statistics-callback)
+             :enable-caching (bound-and-true-p ai-execution--prompt-caching-enabled)
              :extra-params execution-context)))
 
 (defun ai-completions--get-current-buffer-clone ()
@@ -360,15 +365,15 @@ STRATEGY may alter the completion behavior."
               ai-completions--preview-at-point nil
               ai-completions--active nil
               ai-completions--current-action-type nil
-              ai-completions--current-precending-context-size ai-utils--default-preceding-context-size
-              ai-completions--current-forwarding-context-size ai-utils--default-following-context-size
+              ai-completions--current-precending-context-size ai-context-management--default-preceding-context-size
+              ai-completions--current-forwarding-context-size ai-context-management--default-following-context-size
               ai-completions--current-buffer-clone nil
               ai-completions--strategy nil))
 
 (defun ai-completions--abort ()
   "Abort the completion process."
   (interactive)
-  (ai--progress-stop)
+  (ai-execution--progress-stop)
   (ai-completions--reset-variables-to-defaults)
   (ai-completions--cancel))
 
@@ -381,7 +386,7 @@ STRATEGY may alter the completion behavior."
 
 (defun ai-completions--cancel ()
   "Cancel the ongoing completion process, resetting the state."
-  (ai--progress-stop)
+  (ai-execution--progress-stop)
   (ai-completions--preview-hide)
   (ai-completions--clear-buffer-clone)
   (setq-local ai-completions--current-candidate 0

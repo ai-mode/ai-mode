@@ -1,6 +1,6 @@
 ;;; ai-chat.el --- AI interactive chat -*- lexical-binding: t -*-
 
-;; Copyright (C) 2023 Alex (https://github.com/lispython)
+;; Copyright (C) 2025 Alex (https://github.com/lispython)
 
 ;; URL: https://github.com/ai-mode/ai-mode
 ;; Version: 0.1
@@ -43,6 +43,12 @@
 (require 'cl-lib)
 (require 'comint)
 (require 'ai-utils)
+(require 'ai-model-management)
+(require 'ai-execution)
+(require 'ai-prompt-management)
+(require 'ai-context-management)
+(require 'ai-common)
+(require 'ai-usage)
 
 ;;; Group definition
 
@@ -54,146 +60,146 @@
 
 ;;; Customizable variables
 
-(defcustom ai-chat--prompt "AI> "
+(defcustom ai-chat-prompt "AI> "
   "Prompt text for AI chat."
   :type 'string
   :group 'ai-chat)
 
-(defcustom ai-chat--buffer-context-size 5
+(defcustom ai-chat-buffer-context-size 5
   "Number of historical messages to display for context."
   :type 'integer
   :group 'ai-chat)
 
-(defcustom ai-chat--execution-model nil
+(defcustom ai-chat-execution-model nil
   "The current backend used to execute AI requests asynchronously."
   :group 'ai-chat)
 
-(defcustom ai-chat--change-backend-prompt "Select query backend: "
+(defcustom ai-chat-change-backend-prompt "Select query backend: "
   "Prompt for selecting the query backend in AI chat."
   :type 'string
   :group 'ai-chat)
 
-(defcustom ai-chat--language-mapping '(("elisp" . "emacs-lisp")
-                                       ("objective-c" . "objc")
-                                       ("cpp" . "c++")
-                                       ("c++" . "c++")
-                                       ("csharp" . "c#")
-                                       ("cs" . "c#")
-                                       ("javascript" . "js")
-                                       ("typescript" . "ts")
-                                       ("python" . "python")
-                                       ("py" . "python")
-                                       ("ruby" . "ruby")
-                                       ("rb" . "ruby")
-                                       ("rust" . "rust")
-                                       ("rs" . "rust")
-                                       ("golang" . "go")
-                                       ("go" . "go")
-                                       ("java" . "java")
-                                       ("kotlin" . "kotlin")
-                                       ("kt" . "kotlin")
-                                       ("swift" . "swift")
-                                       ("php" . "php")
-                                       ("perl" . "perl")
-                                       ("pl" . "perl")
-                                       ("r" . "r")
-                                       ("scala" . "scala")
-                                       ("clojure" . "clojure")
-                                       ("clj" . "clojure")
-                                       ("cljs" . "clojurescript")
-                                       ("haskell" . "haskell")
-                                       ("hs" . "haskell")
-                                       ("ocaml" . "ocaml")
-                                       ("ml" . "ocaml")
-                                       ("fsharp" . "f#")
-                                       ("fs" . "f#")
-                                       ("elixir" . "elixir")
-                                       ("ex" . "elixir")
-                                       ("exs" . "elixir")
-                                       ("erlang" . "erlang")
-                                       ("erl" . "erlang")
-                                       ("dart" . "dart")
-                                       ("julia" . "julia")
-                                       ("jl" . "julia")
-                                       ("lua" . "lua")
-                                       ("groovy" . "groovy")
-                                       ("pascal" . "pascal")
-                                       ("pas" . "pascal")
-                                       ("lisp" . "lisp")
-                                       ("lsp" . "lisp")
-                                       ("scheme" . "scheme")
-                                       ("scm" . "scheme")
-                                       ("shell" . "sh")
-                                       ("bash" . "sh")
-                                       ("zsh" . "sh")
-                                       ("fish" . "sh")
-                                       ("powershell" . "powershell")
-                                       ("ps1" . "powershell")
-                                       ("sql" . "sql")
-                                       ("mysql" . "sql")
-                                       ("postgresql" . "sql")
-                                       ("sqlite" . "sql")
-                                       ("html" . "html")
-                                       ("htm" . "html")
-                                       ("xml" . "xml")
-                                       ("css" . "css")
-                                       ("scss" . "scss")
-                                       ("sass" . "sass")
-                                       ("less" . "less")
-                                       ("json" . "json")
-                                       ("yaml" . "yaml")
-                                       ("yml" . "yaml")
-                                       ("toml" . "toml")
-                                       ("ini" . "ini")
-                                       ("conf" . "conf")
-                                       ("config" . "conf")
-                                       ("markdown" . "markdown")
-                                       ("md" . "markdown")
-                                       ("tex" . "latex")
-                                       ("latex" . "latex")
-                                       ("dockerfile" . "dockerfile")
-                                       ("docker" . "dockerfile")
-                                       ("makefile" . "makefile")
-                                       ("make" . "makefile")
-                                       ("cmake" . "cmake")
-                                       ("terraform" . "terraform")
-                                       ("tf" . "terraform")
-                                       ("hcl" . "terraform")
-                                       ("nginx" . "nginx")
-                                       ("apache" . "apache")
-                                       ("vim" . "vim")
-                                       ("vimscript" . "vim")
-                                       ("asm" . "asm")
-                                       ("assembly" . "asm")
-                                       ("diff" . "diff")
-                                       ("patch" . "diff")
-                                       ("gitignore" . "gitignore")
-                                       ("gitconfig" . "gitconfig")
-                                       ("properties" . "properties")
-                                       ("log" . "log")
-                                       ("plain" . "text")
-                                       ("text" . "text")
-                                       ("txt" . "text"))
+(defcustom ai-chat-language-mapping '(("elisp" . "emacs-lisp")
+                                      ("objective-c" . "objc")
+                                      ("cpp" . "c++")
+                                      ("c++" . "c++")
+                                      ("csharp" . "c#")
+                                      ("cs" . "c#")
+                                      ("javascript" . "js")
+                                      ("typescript" . "ts")
+                                      ("python" . "python")
+                                      ("py" . "python")
+                                      ("ruby" . "ruby")
+                                      ("rb" . "ruby")
+                                      ("rust" . "rust")
+                                      ("rs" . "rust")
+                                      ("golang" . "go")
+                                      ("go" . "go")
+                                      ("java" . "java")
+                                      ("kotlin" . "kotlin")
+                                      ("kt" . "kotlin")
+                                      ("swift" . "swift")
+                                      ("php" . "php")
+                                      ("perl" . "perl")
+                                      ("pl" . "perl")
+                                      ("r" . "r")
+                                      ("scala" . "scala")
+                                      ("clojure" . "clojure")
+                                      ("clj" . "clojure")
+                                      ("cljs" . "clojurescript")
+                                      ("haskell" . "haskell")
+                                      ("hs" . "haskell")
+                                      ("ocaml" . "ocaml")
+                                      ("ml" . "ocaml")
+                                      ("fsharp" . "f#")
+                                      ("fs" . "f#")
+                                      ("elixir" . "elixir")
+                                      ("ex" . "elixir")
+                                      ("exs" . "elixir")
+                                      ("erlang" . "erlang")
+                                      ("erl" . "erlang")
+                                      ("dart" . "dart")
+                                      ("julia" . "julia")
+                                      ("jl" . "julia")
+                                      ("lua" . "lua")
+                                      ("groovy" . "groovy")
+                                      ("pascal" . "pascal")
+                                      ("pas" . "pascal")
+                                      ("lisp" . "lisp")
+                                      ("lsp" . "lisp")
+                                      ("scheme" . "scheme")
+                                      ("scm" . "scheme")
+                                      ("shell" . "sh")
+                                      ("bash" . "sh")
+                                      ("zsh" . "sh")
+                                      ("fish" . "sh")
+                                      ("powershell" . "powershell")
+                                      ("ps1" . "powershell")
+                                      ("sql" . "sql")
+                                      ("mysql" . "sql")
+                                      ("postgresql" . "sql")
+                                      ("sqlite" . "sql")
+                                      ("html" . "html")
+                                      ("htm" . "html")
+                                      ("xml" . "xml")
+                                      ("css" . "css")
+                                      ("scss" . "scss")
+                                      ("sass" . "sass")
+                                      ("less" . "less")
+                                      ("json" . "json")
+                                      ("yaml" . "yaml")
+                                      ("yml" . "yaml")
+                                      ("toml" . "toml")
+                                      ("ini" . "ini")
+                                      ("conf" . "conf")
+                                      ("config" . "conf")
+                                      ("markdown" . "markdown")
+                                      ("md" . "markdown")
+                                      ("tex" . "latex")
+                                      ("latex" . "latex")
+                                      ("dockerfile" . "dockerfile")
+                                      ("docker" . "dockerfile")
+                                      ("makefile" . "makefile")
+                                      ("make" . "makefile")
+                                      ("cmake" . "cmake")
+                                      ("terraform" . "terraform")
+                                      ("tf" . "terraform")
+                                      ("hcl" . "terraform")
+                                      ("nginx" . "nginx")
+                                      ("apache" . "apache")
+                                      ("vim" . "vim")
+                                      ("vimscript" . "vim")
+                                      ("asm" . "asm")
+                                      ("assembly" . "asm")
+                                      ("diff" . "diff")
+                                      ("patch" . "diff")
+                                      ("gitignore" . "gitignore")
+                                      ("gitconfig" . "gitconfig")
+                                      ("properties" . "properties")
+                                      ("log" . "log")
+                                      ("plain" . "text")
+                                      ("text" . "text")
+                                      ("txt" . "text"))
   "Maps external language names to Emacs mode names."
   :type '(alist)
   :group 'ai-chat)
 
-(defcustom ai-chat--history-directory (expand-file-name "~/.ai-chat-history")
+(defcustom ai-chat-history-directory (expand-file-name "~/.ai-chat-history")
   "Directory where AI chat history files are stored."
   :type 'directory
   :group 'ai-chat)
 
-(defcustom ai-chat--auto-save-enabled nil
+(defcustom ai-chat-auto-save-enabled nil
   "Whether to automatically save chat sessions to files."
   :type 'boolean
   :group 'ai-chat)
 
-(defcustom ai-chat--progress-indicator-enabled t
+(defcustom ai-chat-progress-indicator-enabled t
   "Enable progress indicator for AI chat requests."
   :type 'boolean
   :group 'ai-chat)
 
-(defcustom ai-chat--progress-indicator-style 'spinner
+(defcustom ai-chat-progress-indicator-style 'spinner
   "Style of progress indicator to use for AI chat requests."
   :type '(choice (const :tag "Spinner animation" spinner)
                  (const :tag "Progress dots" dots)
@@ -202,7 +208,7 @@
 
 ;;; Variables
 
-(defvar ai-chat--buffer-name "*ai-chat*"
+(defvar ai-chat-buffer-name "*ai-chat*"
   "Buffer name for AI chat.")
 
 (defvar ai-chat--busy nil
@@ -211,26 +217,23 @@
 (defvar ai-chat--prompt-internal "AI> "
   "Internal prompt text used by AI chat.")
 
-(defvar ai-chat--buffer-history nil
+(defvar ai-chat-buffer-history nil
   "History of inputs and responses in the AI chat buffer.")
 
-(defvar ai-chat--models-providers nil
-  "List of functions providing available models for AI chat.")
-
-(defvar ai-chat--header
+(defvar ai-chat-header
   "*** Welcome to AI BUDDY chat ***  \n"
   "Message displayed when AI BUDDY chat starts.")
 
-(defvar ai-chat--show-invisible-markers nil
+(defvar ai-chat-show-invisible-markers nil
   "If non-nil, marks invisible text that should not be shown.")
 
 (defvar ai-chat--input nil
   "Stores the last input entered by the user.")
 
-(defvar ai-chat--current-session-start-time nil
+(defvar ai-chat-current-session-start-time nil
   "Timestamp when the current chat session started.")
 
-(defvar ai-chat--current-session-id nil
+(defvar ai-chat-current-session-id nil
   "Unique identifier for the current chat session.")
 
 ;; Progress indicator variables (buffer-local)
@@ -259,16 +262,16 @@
 
 ;;; Keymaps
 
-(defvaralias 'ai-chat--inferior-mode-map 'ai-chat--map)
+(defvaralias 'ai-chat-inferior-mode-map 'ai-chat-map)
 
-(defvar ai-chat--map
+(defvar ai-chat-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "<C-return>") 'ai-chat--return)
-    (define-key map (kbd "C-c C-c") 'ai-chat--interrupt)
-    (define-key map (kbd "RET") 'ai-chat--insert-new-line)
-    (define-key map (kbd "C-c C-e") 'ai-chat--clear-buffer)
-    (define-key map (kbd "C-c +") 'ai-chat--increase-context-size)
-    (define-key map (kbd "C-c -") 'ai-chat--decrease-context-size)
+    (define-key map (kbd "<C-return>") 'ai-chat-return)
+    (define-key map (kbd "C-c C-c") 'ai-chat-interrupt)
+    (define-key map (kbd "RET") 'ai-chat-insert-new-line)
+    (define-key map (kbd "C-c C-e") 'ai-chat-clear-buffer)
+    (define-key map (kbd "C-c +") 'ai-chat-increase-context-size)
+    (define-key map (kbd "C-c -") 'ai-chat-decrease-context-size)
     (define-key map (kbd "C-c C-b") 'ai-chat-change-backend)
     (define-key map (kbd "C-c C-s") 'ai-chat-save-session)
     (define-key map (kbd "C-c C-l") 'ai-chat-load-session)
@@ -278,7 +281,7 @@
 
 ;;; Font lock
 
-(defconst ai-chat--font-lock-keywords
+(defconst ai-chat-font-lock-keywords
   `(;; Markdown triple backticks source blocks
     ("\\(^\\(```\\)\\([^`\n]*\\)\n\\)\\(\\(?:.\\|\n\\)*?\\)\\(^\\(```\\)$\\)"
      ;; (2) ``` (3) language (4) body (6) ```
@@ -311,7 +314,7 @@
 
 (defun ai-chat--buffer ()
   "Return the AI chat buffer."
-  (get-buffer-create ai-chat--buffer-name))
+  (get-buffer-create ai-chat-buffer-name))
 
 (defun ai-chat--process ()
   "Get the process associated with the *ai-chat* buffer."
@@ -319,11 +322,11 @@
 
 (defun ai-chat--set-pm (pos)
   "Set the process mark in the current buffer to POS."
-  (set-marker (process-mark (get-buffer-process (get-buffer-create ai-chat--buffer-name))) pos))
+  (set-marker (process-mark (get-buffer-process (get-buffer-create ai-chat-buffer-name))) pos))
 
 (defun ai-chat--pm ()
   "Return the process mark of the current buffer."
-  (process-mark (get-buffer-process (get-buffer-create ai-chat--buffer-name))))
+  (process-mark (get-buffer-process (get-buffer-create ai-chat-buffer-name))))
 
 (defun ai-chat--get-old-input ()
   "Return the previous input surrounding the point."
@@ -387,11 +390,10 @@
           (random 65536)))
 
 (defun ai-chat--create-usage-statistics-callback ()
-  "Create a callback function for displaying usage statistics in AI chat.
-This function attempts to use the ai-mode function if available, otherwise provides a fallback."
-  (if (fboundp 'ai--create-usage-statistics-callback)
-      (funcall 'ai--create-usage-statistics-callback)
-    ;; Fallback implementation if ai-mode function is not available
+  "Create a callback function for displaying usage statistics in AI chat."
+  (if (fboundp 'ai-usage-create-usage-statistics-callback)
+      (ai-usage-create-usage-statistics-callback)
+    ;; Fallback implementation if ai-usage function is not available
     (lambda (usage-stats)
       (let ((input-tokens (plist-get usage-stats :input-tokens))
             (output-tokens (plist-get usage-stats :output-tokens))
@@ -418,7 +420,7 @@ This function attempts to use the ai-mode function if available, otherwise provi
 
 (defun ai-chat--progress-start (&optional message buffer)
   "Start progress indicator with optional MESSAGE in specified BUFFER or current buffer."
-  (when ai-chat--progress-indicator-enabled
+  (when ai-chat-progress-indicator-enabled
     (with-current-buffer (or buffer (current-buffer))
       (setq ai-chat--progress-active t
             ai-chat--progress-counter 0
@@ -426,11 +428,11 @@ This function attempts to use the ai-mode function if available, otherwise provi
             ai-chat--progress-message (or message "AI request in progress"))
 
       (cond
-       ((eq ai-chat--progress-indicator-style 'spinner)
+       ((eq ai-chat-progress-indicator-style 'spinner)
         (ai-chat--progress-start-spinner))
-       ((eq ai-chat--progress-indicator-style 'dots)
+       ((eq ai-chat-progress-indicator-style 'dots)
         (ai-chat--progress-start-dots))
-       ((eq ai-chat--progress-indicator-style 'message)
+       ((eq ai-chat-progress-indicator-style 'message)
         (ai-chat-mode-update-mode-line-info))))))
 
 (defun ai-chat--progress-stop (&optional buffer)
@@ -481,7 +483,7 @@ This function attempts to use the ai-mode function if available, otherwise provi
 (defun ai-chat--fontify-source-block (lang start end)
   "Fontify a block of code from START to END using LANG mode."
   (let ((lang-mode (intern (concat (or
-                                    (map-elt ai-chat--language-mapping
+                                    (map-elt ai-chat-language-mapping
                                              (downcase (string-trim lang)))
                                     (downcase (string-trim lang)))
                                    "-mode")))
@@ -512,56 +514,75 @@ This function attempts to use the ai-mode function if available, otherwise provi
 
 (defun ai-chat--get-global-system-prompts ()
   "Fallback function to get global system prompts."
-  nil)
+  (if (fboundp 'ai-context-management--get-global-system-prompts)
+      (ai-context-management--get-global-system-prompts)
+    nil))
 
-(defun ai-chat--set-global-system-prompts (_prompts)
-  "Fallback function to set global system prompts."
-  nil)
+(defun ai-chat--set-global-system-prompts (prompts)
+  "Fallback function to set global system prompts to PROMPTS."
+  (if (fboundp 'ai-context-management--add-global-system-prompts)
+      (ai-context-management--add-global-system-prompts prompts)
+    nil))
 
 (defun ai-chat--get-global-memory ()
   "Fallback function to get global memory."
-  nil)
+  (if (fboundp 'ai-context-management--get-global-memory)
+      (ai-context-management--get-global-memory)
+    nil))
 
-(defun ai-chat--set-global-memory (_memory)
-  "Fallback function to set global memory."
-  nil)
+(defun ai-chat--set-global-memory (memory)
+  "Fallback function to set global memory to MEMORY."
+  (if (fboundp 'ai-context-management--add-to-global-memory)
+      (ai-context-management--add-to-global-memory memory)
+    nil))
 
 (defun ai-chat--get-buffer-bound-prompts ()
   "Fallback function to get buffer bound prompts."
-  nil)
+  (if (fboundp 'ai-context-management--get-buffer-bound-prompts)
+      (ai-context-management--get-buffer-bound-prompts)
+    nil))
 
-(defun ai-chat--set-buffer-bound-prompts (_prompts)
-  "Fallback function to set buffer bound prompts."
-  nil)
+(defun ai-chat--set-buffer-bound-prompts (prompts)
+  "Fallback function to set buffer bound prompts to PROMPTS."
+  (if (fboundp 'ai-context-management--add-buffer-bound-prompts)
+      (ai-context-management--add-buffer-bound-prompts prompts)
+    nil))
 
 (defun ai-chat--get-context-pool ()
   "Fallback function to get context pool."
-  nil)
+  (if (fboundp 'ai-context-management--get-context-pool)
+      (ai-context-management--get-context-pool)
+    nil))
 
-(defun ai-chat--set-context-pool (_context)
-  "Fallback function to set context pool."
-  nil)
+(defun ai-chat--set-context-pool (context)
+  "Fallback function to set context pool to CONTEXT."
+  (if (fboundp 'ai-context-management--add-to-context-pool)
+      (ai-context-management--add-to-context-pool context)
+    nil))
 
 (defun ai-chat--render-struct-to-string (struct)
   "Fallback function to render struct to string."
-  (ai-chat--get-text-content-from-struct struct))
+  (if (fboundp 'ai-common--render-struct-to-string)
+      (ai-common--render-struct-to-string struct)
+    (ai-chat--get-text-content-from-struct struct)))
 
-(defun ai-chat--get-rendered-action-prompt (_action-type _context)
-  "Fallback function to get rendered action prompt."
-  "You are an AI assistant. Please help the user with their request.")
+(defun ai-chat--get-rendered-action-prompt (action-type context)
+  "Fallback function to get rendered action prompt for ACTION-TYPE with CONTEXT."
+  (if (fboundp 'ai-prompt-management--render-system-prompt)
+      (ai-prompt-management--render-system-prompt action-type context)
+    "You are an AI assistant. Please help the user with their request."))
 
 ;;; Model management
 
 (defun ai-chat--get-models ()
   "Return a flat list of available AI models retrieved from multiple sources."
-  (if (not ai-chat--models-providers)
-      (error "You need to setup ai-chat--models-providers"))
-  (let ((model-funcs ai-chat--models-providers))
-    (apply #'append (mapcar #'funcall model-funcs))))
+  (if (not ai-model-management-providers)
+      (error "You need to setup ai-model-management-providers"))
+  (ai-model-management-get-available))
 
 (defun ai-chat--get-current-model ()
   "Retrieve the current execution model for AI chat."
-  (or ai-chat--execution-model
+  (or ai-chat-execution-model
       (let ((default-model (car (ai-chat--get-models))))
         (ai-chat--set-execution-model default-model)
         default-model)))
@@ -571,28 +592,32 @@ This function attempts to use the ai-mode function if available, otherwise provi
   (let ((setup-function (map-elt model :setup-function)))
     (when setup-function
       (funcall setup-function))
-    (setq ai-chat--execution-model model)
-    (customize-save-variable 'ai-chat--execution-model model) ; Save the setting persistently
+    (setq ai-chat-execution-model model)
+    (customize-save-variable 'ai-chat-execution-model model) ; Save the setting persistently
     (run-hooks 'ai-chat-change-model-hook)))
 
 ;;; Context management
 
-(cl-defun ai-chat--get-buffer-history-context (&optional (size ai-chat--buffer-context-size))
+(cl-defun ai-chat--get-buffer-history-context (&optional (size ai-chat-buffer-context-size))
   "Retrieve a slice of the chat history based on SIZE.
 
 SIZE is the number of historical messages to include. If SIZE is less than or equal to 0, return the full history."
   (condition-case-unless-debug _
       (with-current-buffer (ai-chat--buffer)
-        (if (or (<= size 0) (> size (length ai-chat--buffer-history)))
-            ai-chat--buffer-history
-          (seq-subseq ai-chat--buffer-history (* -1 size))))
+        (if (or (<= size 0) (> size (length ai-chat-buffer-history)))
+            ai-chat-buffer-history
+          (seq-subseq ai-chat-buffer-history (* -1 size))))
     (error (list))))
 
 (cl-defun ai-chat--get-execution-context ()
   "Construct the execution context for the current chat interaction."
   (let* ((messages-history (ai-chat--get-buffer-history-context))
          (full-context '())
-         (basic-file-prompt (ai-chat--make-typed-struct (ai-chat--get-rendered-action-prompt "chat-basic" full-context) 'agent-instructions))
+         ;; Use fallback if prompt management is not available
+         (basic-prompt-content (if (fboundp 'ai-prompt-management--render-system-prompt)
+                                   (ai-prompt-management--render-system-prompt "chat-basic" full-context)
+                                 (ai-chat--get-rendered-action-prompt "chat-basic" full-context)))
+         (basic-file-prompt (ai-chat--make-typed-struct basic-prompt-content 'agent-instructions))
          (global-system-prompts (ai-chat--get-global-system-prompts))
          (global-memory (ai-chat--get-global-memory))
          (buffer-bound-prompts (ai-chat--get-buffer-bound-prompts))
@@ -605,7 +630,7 @@ SIZE is the number of historical messages to include. If SIZE is less than or eq
          (messages
           (cl-remove-if #'null
                         (append
-                         (when (boundp 'ai--extended-instructions-enabled)
+                         (when (boundp 'ai-context-management--extended-instructions-enabled)
                            (list basic-file-prompt
                                  global-system-prompts
                                  global-memory
@@ -625,33 +650,33 @@ MESSAGE-TYPE specifies the type of message and is optional."
                         (plist-get input :type))
                    input
                  (ai-chat--make-typed-struct (ai-chat--clear-text-properties input) message-type))))
-    (setq-local ai-chat--buffer-history (append ai-chat--buffer-history `(,entry)))))
+    (setq-local ai-chat-buffer-history (append ai-chat-buffer-history `(,entry)))))
 
 ;;; Session management
 
 (defun ai-chat--ensure-history-directory ()
   "Ensure the AI chat history directory exists."
-  (unless (file-exists-p ai-chat--history-directory)
-    (make-directory ai-chat--history-directory t)))
+  (unless (file-exists-p ai-chat-history-directory)
+    (make-directory ai-chat-history-directory t)))
 
 (defun ai-chat--get-session-filename ()
   "Generate filename for current chat session based on start time and session ID."
-  (when (and ai-chat--current-session-start-time ai-chat--current-session-id)
+  (when (and ai-chat-current-session-start-time ai-chat-current-session-id)
     (expand-file-name
      (format "%s_%s.el"
-             (format-time-string "%Y-%m-%dT%H-%M-%S" ai-chat--current-session-start-time)
-             ai-chat--current-session-id)
-     ai-chat--history-directory)))
+             (format-time-string "%Y-%m-%dT%H-%M-%S" ai-chat-current-session-start-time)
+             ai-chat-current-session-id)
+     ai-chat-history-directory)))
 
 (defun ai-chat--start-new-session ()
   "Start a new chat session with timestamp and unique ID."
-  (setq ai-chat--current-session-start-time (current-time))
-  (setq ai-chat--current-session-id (ai-chat--generate-session-id))
+  (setq ai-chat-current-session-start-time (current-time))
+  (setq ai-chat-current-session-id (ai-chat--generate-session-id))
   (ai-chat--clear-buffer-history))
 
 (defun ai-chat--initialize-session ()
   "Initialize a new chat session if none exists."
-  (unless (and ai-chat--current-session-start-time ai-chat--current-session-id)
+  (unless (and ai-chat-current-session-start-time ai-chat-current-session-id)
     (ai-chat--start-new-session)))
 
 (defun ai-chat--save-session-context ()
@@ -659,15 +684,15 @@ MESSAGE-TYPE specifies the type of message and is optional."
   (interactive)
   (ai-chat--ensure-history-directory)
   (when-let ((filename (ai-chat--get-session-filename)))
-    (let* ((buffer-history ai-chat--buffer-history)
-           (buffer-context-size ai-chat--buffer-context-size)
-           (session-start-time ai-chat--current-session-start-time)
-           (session-id ai-chat--current-session-id)
+    (let* ((buffer-history ai-chat-buffer-history)
+           (buffer-context-size ai-chat-buffer-context-size)
+           (session-start-time ai-chat-current-session-start-time)
+           (session-id ai-chat-current-session-id)
            (global-system-prompts (ai-chat--get-global-system-prompts))
            (global-memory (ai-chat--get-global-memory))
            (buffer-bound-prompts (ai-chat--get-buffer-bound-prompts))
            (context-pool (ai-chat--get-context-pool))
-           (execution-model ai-chat--execution-model))
+           (execution-model ai-chat-execution-model))
       (with-temp-file filename
         (insert ";; AI Chat Session History\n")
         (insert (format ";; Saved on: %s\n" (current-time-string)))
@@ -699,17 +724,17 @@ MESSAGE-TYPE specifies the type of message and is optional."
 
 (defun ai-chat--auto-save-session ()
   "Automatically save session context after each interaction if auto-save is enabled."
-  (when (and ai-chat--auto-save-enabled ai-chat--current-session-start-time ai-chat--current-session-id)
+  (when (and ai-chat-auto-save-enabled ai-chat-current-session-start-time ai-chat-current-session-id)
     (ai-chat--save-session-context)))
 
 (defun ai-chat--get-history-files ()
   "Get list of available chat history files."
-  (when (file-exists-p ai-chat--history-directory)
-    (directory-files ai-chat--history-directory nil "\\.el$")))
+  (when (file-exists-p ai-chat-history-directory)
+    (directory-files ai-chat-history-directory nil "\\.el$")))
 
 (defun ai-chat--load-session-from-file (filename)
   "Load chat session context from FILENAME."
-  (let ((filepath (expand-file-name filename ai-chat--history-directory)))
+  (let ((filepath (expand-file-name filename ai-chat-history-directory)))
     (when (file-exists-p filepath)
       (with-temp-buffer
         (insert-file-contents filepath)
@@ -727,17 +752,17 @@ MESSAGE-TYPE specifies the type of message and is optional."
 
               (when (plist-get session-data :buffer-history)
                 (with-current-buffer (ai-chat--buffer)
-                  (setq-local ai-chat--buffer-history
+                  (setq-local ai-chat-buffer-history
                               (ai-chat--reconstruct-list-of-typed-structs (plist-get session-data :buffer-history)))))
 
               (when (plist-get session-data :buffer-context-size)
-                (setq ai-chat--buffer-context-size (plist-get session-data :buffer-context-size)))
+                (setq ai-chat-buffer-context-size (plist-get session-data :buffer-context-size)))
 
               (when (plist-get session-data :session-start-time)
-                (setq ai-chat--current-session-start-time (plist-get session-data :session-start-time)))
+                (setq ai-chat-current-session-start-time (plist-get session-data :session-start-time)))
 
               (when (plist-get session-data :session-id)
-                (setq ai-chat--current-session-id (plist-get session-data :session-id)))
+                (setq ai-chat-current-session-id (plist-get session-data :session-id)))
 
               (when (plist-get session-data :global-system-prompts)
                 (ai-chat--set-global-system-prompts
@@ -756,7 +781,7 @@ MESSAGE-TYPE specifies the type of message and is optional."
                  (ai-chat--reconstruct-single-typed-struct (plist-get session-data :context-pool))))
 
               (when (plist-get session-data :execution-model)
-                (setq ai-chat--execution-model (plist-get session-data :execution-model)))
+                (setq ai-chat-execution-model (plist-get session-data :execution-model)))
 
               (ai-chat--restore-chat-display)
               (message "Chat session loaded from: %s" filename))
@@ -769,18 +794,18 @@ MESSAGE-TYPE specifies the type of message and is optional."
           (process (ai-chat--process)))
       (erase-buffer)
       ;; Insert header at the top
-      (insert ai-chat--header)
+      (insert ai-chat-header)
       ;; Set process mark after header
       (ai-chat--set-pm (point-max))
 
-      (dolist (entry ai-chat--buffer-history)
+      (dolist (entry ai-chat-buffer-history)
         (let* ((content (ai-chat--get-text-content-from-struct entry))
                (type (ai-chat--get-struct-type entry)))
           (cond
            ((eq type 'user-input)
             ;; Insert prompt with proper properties and face
             (let ((prompt-start (point)))
-              (insert ai-chat--prompt)
+              (insert ai-chat-prompt)
               (let ((prompt-end (point)))
                 ;; Apply prompt face to the prompt text
                 (add-text-properties prompt-start prompt-end
@@ -794,7 +819,7 @@ MESSAGE-TYPE specifies the type of message and is optional."
                 (let ((marker-start (point)))
                   (insert "<ai--chat-end-of-prompt>")
                   (add-text-properties marker-start (point)
-                                       (list 'invisible (not ai-chat--show-invisible-markers)))))))
+                                       (list 'invisible (not ai-chat-show-invisible-markers)))))))
            ((eq type 'assistant-response)
             ;; Insert assistant response with proper formatting
             (insert "\n" (string-trim content) "\n\n")))))
@@ -846,7 +871,7 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
                                 (string-trim reply)
                                 (if failed
                                     (propertize "\n<ai--chat-ignored-response>"
-                                                'invisible (not ai-chat--show-invisible-markers))
+                                                'invisible (not ai-chat-show-invisible-markers))
                                   "")
                                 "\n\n"
                                 ai-chat--prompt-internal)))
@@ -858,7 +883,7 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
   (let* ((model (ai-chat--get-current-model))
          (progress-indicator (cond
                               ((and ai-chat--progress-active
-                                    (eq ai-chat--progress-indicator-style 'spinner))
+                                    (eq ai-chat-progress-indicator-style 'spinner))
                                (let ((spinner-chars '("○" "◔" "◑" "◕" "●" "◕" "◑" "◔"))
                                      (elapsed-time (when ai-chat--progress-start-time
                                                      (ai-chat--format-elapsed-time ai-chat--progress-start-time))))
@@ -866,7 +891,7 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
                                          (nth (% ai-chat--progress-counter (length spinner-chars)) spinner-chars)
                                          (if elapsed-time (format ":%s" elapsed-time) ""))))
                               ((and ai-chat--progress-active
-                                    (eq ai-chat--progress-indicator-style 'dots))
+                                    (eq ai-chat-progress-indicator-style 'dots))
                                (let ((elapsed-time (when ai-chat--progress-start-time
                                                      (ai-chat--format-elapsed-time ai-chat--progress-start-time))))
                                  (format "%s%s"
@@ -882,15 +907,15 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
           (format "AI-CHAT[%s|%s%s]"
                   (map-elt model :name)
                   context-info
-                  (if ai-chat--auto-save-enabled "|AS" ""))))
+                  (if ai-chat-auto-save-enabled "|AS" ""))))
     ai-chat-mode-line-section))
 
 (defun ai-chat-get-context-size ()
   "Return the current context size for AI chat."
-  ai-chat--buffer-context-size)
+  ai-chat-buffer-context-size)
 
 (defun ai-chat-update-mode-name ()
-  "Set dynamic mode name for `ai-chat--inferior-mode`."
+  "Set dynamic mode name for `ai-chat-inferior-mode`."
   (setq-local mode-name (ai-chat-mode-line-info)))
 
 (defun ai-chat-mode-update-mode-line-info ()
@@ -900,12 +925,12 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
 
 ;;; Interactive commands
 
-(defun ai-chat--insert-new-line ()
+(defun ai-chat-insert-new-line ()
   "Insert a new line in AI chat."
   (interactive)
   (newline))
 
-(defun ai-chat--return ()
+(defun ai-chat-return ()
   "Handle the <C-return> key binding to send input."
   (interactive)
   (ai-chat--send-input))
@@ -930,7 +955,7 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
          (t
           (comint-output-filter (ai-chat--process)
                                 (propertize "<ai--chat-end-of-prompt>"
-                                            'invisible (not ai-chat--show-invisible-markers)))
+                                            'invisible (not ai-chat-show-invisible-markers)))
           (ai-chat--add-entry-to-history input-string 'user-input)
 
           (condition-case-unless-debug processing-error
@@ -954,7 +979,7 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
             (error (error  "Evaluation input error: %s" (error-message-string processing-error) ))))))
     (error "AI busy")))
 
-(defun ai-chat--clear-buffer ()
+(defun ai-chat-clear-buffer ()
   "Clear the AI chat buffer."
   (interactive)
   (with-current-buffer (ai-chat--buffer)
@@ -962,7 +987,7 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
           (process (ai-chat--process)))
       (erase-buffer)
       ;; Insert header at the top after clearing
-      (insert ai-chat--header)
+      (insert ai-chat-header)
       ;; Set process mark after header
       (ai-chat--set-pm (point-max))
       ;; Insert prompt for next input
@@ -973,31 +998,31 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
 (defun ai-chat--clear-buffer-history ()
   "Clear the history in the AI chat buffer."
   (with-current-buffer (current-buffer)
-    (setq-local ai-chat--buffer-history '())))
+    (setq-local ai-chat-buffer-history '())))
 
-(defun ai-chat--increase-context-size ()
+(defun ai-chat-increase-context-size ()
   "Increase the context size for AI chat."
   (interactive)
-  (setq ai-chat--buffer-context-size (+ ai-chat--buffer-context-size 1))
-  (message (format "Current context size: %d" ai-chat--buffer-context-size))
+  (setq ai-chat-buffer-context-size (+ ai-chat-buffer-context-size 1))
+  (message (format "Current context size: %d" ai-chat-buffer-context-size))
   (run-hooks 'ai-chat-change-params-hook))
 
-(defun ai-chat--decrease-context-size ()
+(defun ai-chat-decrease-context-size ()
   "Decrease the context size for AI chat."
   (interactive)
-  (if (> ai-chat--buffer-context-size 1)
-      (setq ai-chat--buffer-context-size (- ai-chat--buffer-context-size 1)))
-  (message (format "Current context size: %d" ai-chat--buffer-context-size))
+  (if (> ai-chat-buffer-context-size 1)
+      (setq ai-chat-buffer-context-size (- ai-chat-buffer-context-size 1)))
+  (message (format "Current context size: %d" ai-chat-buffer-context-size))
   (run-hooks 'ai-chat-change-params-hook))
 
-(defun ai-chat--set-context-size (size)
+(defun ai-chat-set-context-size (size)
   "Set context to SIZE."
   (interactive (list (read-number "Enter context size: ")))
-  (setq ai-chat--buffer-context-size size)
-  (message (format "Current context size: %s" ai-chat--buffer-context-size))
+  (setq ai-chat-buffer-context-size size)
+  (message (format "Current context size: %s" ai-chat-buffer-context-size))
   (run-hooks 'ai-chat-change-params-hook))
 
-(defun ai-chat--interrupt ()
+(defun ai-chat-interrupt ()
   "Interrupt the current request being processed by AI."
   (interactive)
   (with-current-buffer (ai-chat--buffer)
@@ -1005,7 +1030,7 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
     (goto-char (point-max))
     (comint-output-filter (ai-chat--process)
                           (concat (propertize "<ai--chat-end-of-prompt>\n<ai--chat-ignored-response>"
-                                              'invisible (not ai-chat--show-invisible-markers))
+                                              'invisible (not ai-chat-show-invisible-markers))
                                   "\n"
                                   ai-chat--prompt-internal))
     (ai-chat--progress-stop)
@@ -1015,16 +1040,16 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
   "Change the chat query backend to MODEL-NAME."
   (interactive)
   (let* ((names (mapcar (lambda (item) `(,(map-elt item :name) ,item)) (ai-chat--get-models)))
-         (value (or model-name (completing-read ai-chat--change-backend-prompt (mapcar #'car names))))
-         (model (ai-utils--find-model-config-by-name value (ai-chat--get-models))))
+         (value (or model-name (completing-read ai-chat-change-backend-prompt (mapcar #'car names))))
+         (model (ai-model-management--find-model-config-by-name value (ai-chat--get-models))))
     (ai-chat--set-execution-model model)
     (message (format "AI chat query async backend is changed to \"%s\"" value))))
 
 (defun ai-chat-toggle-auto-save ()
   "Toggle automatic saving of chat sessions."
   (interactive)
-  (setq ai-chat--auto-save-enabled (not ai-chat--auto-save-enabled))
-  (if ai-chat--auto-save-enabled
+  (setq ai-chat-auto-save-enabled (not ai-chat-auto-save-enabled))
+  (if ai-chat-auto-save-enabled
       (progn
         (ai-chat--initialize-session)
         (message "Auto-save enabled. Sessions will be automatically saved."))
@@ -1038,12 +1063,12 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
     (if history-files
         (let ((selected-file (completing-read "Select chat session to load: " history-files)))
           (ai-chat--load-session-from-file selected-file))
-      (message "No chat history files found in %s" ai-chat--history-directory))))
+      (message "No chat history files found in %s" ai-chat-history-directory))))
 
 (defun ai-chat-save-session ()
   "Manually save the current chat session."
   (interactive)
-  (if (and ai-chat--current-session-start-time ai-chat--current-session-id)
+  (if (and ai-chat-current-session-start-time ai-chat-current-session-id)
       (ai-chat--save-session-context)
     (progn
       (ai-chat--initialize-session)
@@ -1051,12 +1076,12 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
 
 ;;; Major mode
 
-(define-derived-mode ai-chat--inferior-mode comint-mode "AI CHAT MODE"
+(define-derived-mode ai-chat-inferior-mode comint-mode "AI CHAT MODE"
   "Major mode for interactively evaluating AI prompts.
 
 This mode allows users to interact with AI models through `comint-mode`."
   (visual-line-mode +1)
-  (setq comint-prompt-regexp (concat "^" (regexp-quote ai-chat--prompt)))
+  (setq comint-prompt-regexp (concat "^" (regexp-quote ai-chat-prompt)))
   (setq-local paragraph-separate "\\'")
   (setq-local paragraph-start comint-prompt-regexp)
   (setq comint-input-sender 'ai-chat--input-sender)
@@ -1065,7 +1090,7 @@ This mode allows users to interact with AI models through `comint-mode`."
   (setq comint-get-old-input 'ai-chat--get-old-input)
   (setq-local comint-completion-addsuffix nil)
 
-  (setq-local ai-chat--prompt-internal ai-chat--prompt)
+  (setq-local ai-chat--prompt-internal ai-chat-prompt)
 
   (local-unset-key (kbd "RET"))
   (local-set-key (kbd "RET") 'newline-and-indent)
@@ -1090,7 +1115,7 @@ This mode allows users to interact with AI models through `comint-mode`."
     (setq-local comint-inhibit-carriage-motion t)
 
     ;; Add a welcome header
-    (insert ai-chat--header)
+    (insert ai-chat-header)
     (ai-chat--set-pm (point-max))
     (unless comint-use-prompt-regexp
       (let ((inhibit-read-only t))
@@ -1101,7 +1126,7 @@ This mode allows users to interact with AI models through `comint-mode`."
     (set-marker comint-last-input-start (ai-chat--pm))
     (set-process-filter (get-buffer-process (current-buffer)) 'comint-output-filter))
 
-  (font-lock-add-keywords nil ai-chat--font-lock-keywords))
+  (font-lock-add-keywords nil ai-chat-font-lock-keywords))
 
 ;;; Main entry point
 
@@ -1111,22 +1136,22 @@ This mode allows users to interact with AI models through `comint-mode`."
   (interactive)
   (message "Starting new chat with AI BUDDY")
   (let ((old-point)
-        (buf-name ai-chat--buffer-name))
+        (buf-name ai-chat-buffer-name))
     (unless (comint-check-proc buf-name)
-      (with-current-buffer (get-buffer-create ai-chat--buffer-name)
+      (with-current-buffer (get-buffer-create ai-chat-buffer-name)
         (setq-local ai-chat--busy nil)
         (set-buffer-multibyte t)
-        (setq-local ai-chat--buffer-history '())
+        (setq-local ai-chat-buffer-history '())
         (unless (zerop (buffer-size))
           (setq old-point (point)))
-        (ai-chat--inferior-mode)))
+        (ai-chat-inferior-mode)))
     (pop-to-buffer-same-window buf-name)
     (when old-point
       (push-mark old-point))))
 
 ;;; Hook setup
 
-(add-hook 'ai-chat--inferior-mode-hook 'ai-chat-mode-update-mode-line-info)
+(add-hook 'ai-chat-inferior-mode-hook 'ai-chat-mode-update-mode-line-info)
 (add-hook 'ai-chat-change-model-hook 'ai-chat-mode-update-mode-line-info)
 (add-hook 'ai-chat-change-params-hook  'ai-chat-mode-update-mode-line-info)
 (add-hook 'ai-chat-change-params-hook 'ai-chat--auto-save-session)

@@ -1,8 +1,8 @@
 ;;; ai-common.el --- Common AI logic -*- lexical-binding: t -*-
 ;;
-;; This file is part of GNU Emacs.
+;; Copyright (C) 2025 Alex (https://github.com/lispython)
 ;;
-;; Copyright (C) 2023 Alex (https://github.com/lispython)
+;; This file is part of ai-mode.
 ;;
 ;; URL: https://github.com/ai-mode/ai-mode
 ;; Version: 0.1
@@ -22,41 +22,19 @@
 ;; GNU General Public License for more details.
 ;;
 ;;; Commentary:
-;; This file contains common logic for AI functionalities, focusing on managing
-;; contexts and memories related to AI interactions.
+;; This file contains common logic for AI functionalities, focusing on
+;; project file filtering, data structure creation, and rendering utilities.
 ;;
 ;; The main features include:
-;; - Global and buffer-specific memory management
-;; - Context and snippet handling for AI interactions
-;; - Support for user input and context pool management
+;; - Project file filtering and ignore pattern handling
+;; - Typed struct creation and manipulation
+;; - XML-like rendering of data structures
+;; - File context and snippet creation utilities
 ;;
 ;;; Code:
 
 (require 'ai-utils)
 (require 'projectile nil 'noerror) ; Ensure projectile is loaded for project root detection.
-
-;;; Memory and context variables for AI interaction
-
-(defvar ai--global-memo-context nil
-  "Global memory context for storing important information that persists across all buffers.
-This variable holds data that should be available to AI in any interaction session.")
-
-(defvar ai-common--context-pool nil
-  "Temporary context pool for the current interaction session.
-Unlike global memory, this holds context that is only relevant for the current
-AI operation and will be cleared after completion.")
-
-(defvar-local ai-common--buffer-bound-prompts nil
-  "Buffer-local instructions that apply only to the current buffer.
-These prompts are specifically tied to a particular buffer and do not affect
-other buffers or global AI behavior.")
-
-(defcustom ai-common--global-system-prompts nil
-  "Global system instructions for AI.
-These define the fundamental behavior and capabilities of the AI assistant
-across all interactions and buffers."
-  :type 'string
-  :group 'ai)
 
 (defcustom ai-common-ignore-file-name ".ai-ignore"
   "Name of the AI ignore file, typically in the project root."
@@ -127,84 +105,6 @@ Structs with these types will render as plain text content instead of
 being wrapped in XML-like tags."
   :type '(repeat (symbol :tag "Struct type"))
   :group 'ai-common)
-
-(defun ai-common--add-to-global-memory (input)
-  "Add INPUT to `ai--global-memo-context'.
-INPUT is a string representing the context or information to be remembered globally."
-  (interactive
-   (list (if (region-active-p)
-             (buffer-substring-no-properties (region-beginning) (region-end))
-           (read-string "Enter instruction: "))))
-  (let ((struct (ai-common--make-typed-struct input 'global-memory-item 'user-input)))
-    (setq ai--global-memo-context (append ai--global-memo-context `(,struct)))
-    (message "AI memory context added")))
-
-(defun ai-common--clear-global-memory ()
-  "Clear the global memory context."
-  (interactive)
-  (setq ai--global-memo-context nil)
-  (message "AI buffer context cleared"))
-
-(defun ai-common--get-global-memory ()
-  "Return the current global memory context."
-  ai--global-memo-context)
-
-(defun ai-common--add-buffer-bound-prompts (input)
-  "Add INPUT as buffer-specific instructions.
-INPUT can be entered by the user or taken from the active region."
-  (interactive
-   (list (if (region-active-p)
-             (buffer-substring-no-properties (region-beginning) (region-end))
-           (read-string "Enter buffer bound prompt: "))))
-
-  (with-current-buffer (current-buffer)
-    (let ((struct (ai-common--make-typed-struct input 'buffer-bound-prompt 'user-input)))
-      (message "AI buffer bound context added")
-      (setq-local ai-common--buffer-bound-prompts (append ai-common--buffer-bound-prompts `(,struct))))))
-
-(defun ai-common--clear-buffer-bound-prompts ()
-  "Clear all buffer-specific instructions."
-  (interactive)
-  (with-current-buffer (current-buffer)
-    (message "AI buffer context cleared")
-    (setq-local ai-common--buffer-bound-prompts nil)))
-
-(defun ai-common--get-buffer-bound-prompts ()
-  "Return the current buffer-specific instructions."
-  ai-common--buffer-bound-prompts)
-
-(defun ai-common--add-global-system-prompts (input)
-  "Add INPUT to the global system prompts.
-INPUT can be entered by the user or taken from the active region."
-  (interactive
-   (list (if (region-active-p)
-             (buffer-substring-no-properties (region-beginning) (region-end))
-           (read-string "Enter global system prompt: "))))
-
-  (with-current-buffer (current-buffer)
-    (let ((struct (ai-common--make-typed-struct input 'global-system-prompt 'user-input)))
-      (setq ai-common--global-system-prompts
-            (append ai-common--global-system-prompts `(,struct))))))
-
-(defun ai-common--clear-global-system-prompts ()
-  "Clear all global system instructions."
-  (interactive)
-  (with-current-buffer (current-buffer)
-    (setq ai-common--global-system-prompts nil)))
-
-(defun ai-common--get-global-system-prompts ()
-  "Return the current global system instructions."
-  ai-common--global-system-prompts)
-
-(defun ai-common--clear-context-pool ()
-  "Clear the temporary context pool."
-  (interactive)
-  (setq ai-common--context-pool nil)
-  (message "Clear context pool"))
-
-(defun ai-common--get-context-pool ()
-  "Return the current context pool."
-  ai-common--context-pool)
 
 (defun ai-common--make-file-context-from-buffer (&optional buffer &rest additional-props)
   "Create a file-context structure from BUFFER.
@@ -324,12 +224,6 @@ Returns a plist with :type, :content, :timestamp, :source, :id fields and any ad
       (setq base-plist (append base-plist additional-props)))
 
     base-plist))
-
-(defun ai-common--get-user-input ()
-  "Create a plist structure based on user input via minibuffer."
-  (let ((text (read-string "Enter instruction or context for AI: ")))
-    (ai-common--make-typed-struct text 'user-input 'user-input
-                                  :render-ignore-fields '(:source))))
 
 (defun ai-common--make-additional-context (content &optional source)
   "Create a plist structure with type 'additional-context' from CONTENT.
@@ -453,66 +347,6 @@ This structure is intended for use in file indexing and summarization."
            'file-summary
            'ai-summary
            (append file-specific-props additional-props))))
-
-(defun ai-common--add-to-context-pool (item)
-  "Add ITEM (plist-structure) to `ai-common--context-pool`."
-  (push item ai-common--context-pool))
-
-(defun ai-common--format-context-pool-item-for-selection (item)
-  "Format a context pool ITEM for display in completing-read.
-Returns a string representation of the item for user selection."
-  (let* ((type (plist-get item :type))
-         (source (plist-get item :source))
-         (id (plist-get item :id))
-         (content (plist-get item :content))
-         (file (plist-get item :file))
-         (preview (if (stringp content)
-                      (substring content 0 (min 50 (length content)))
-                    ""))
-         (preview (replace-regexp-in-string "\n" " " preview)))
-    (format "%s | %s | %s%s%s"
-            (or type "unknown")
-            (or source "unknown")
-            (if file (format "%s | " (file-name-nondirectory file)) "")
-            preview
-            (if (> (length content) 50) "..." ""))))
-
-(defun ai-common--remove-from-context-pool ()
-  "Remove selected item from context pool via minibuffer selection."
-  (interactive)
-  (if (null ai-common--context-pool)
-      (message "Context pool is empty")
-    (let* ((items-with-display (mapcar (lambda (item)
-                                         (cons (ai-common--format-context-pool-item-for-selection item) item))
-                                       ai-common--context-pool))
-           (selected-display (completing-read "Remove from context pool: "
-                                              (mapcar #'car items-with-display)
-                                              nil t))
-           (selected-item (cdr (assoc selected-display items-with-display))))
-      (when selected-item
-        (setq ai-common--context-pool
-              (cl-remove selected-item ai-common--context-pool :test #'equal))
-        (message "Removed item from context pool: %s"
-                 (ai-common--format-context-pool-item-for-selection selected-item))))))
-
-(defun ai-common--capture-region-snippet ()
-  "Create a snippet from the region and add it to the context pool."
-  (interactive)
-  (let ((snippet (ai-common--make-snippet-from-region)))
-    (when snippet
-      (ai-common--add-to-context-pool snippet))))
-
-(defun ai-common--capture-user-input ()
-  "Capture user input and add it to the context pool."
-  (interactive)
-  (ai-common--add-to-context-pool (ai-common--get-user-input)))
-
-(defun ai-common--capture-file-context ()
-  "Adds the entire file content to the context pool."
-  (interactive)
-  (let ((file-context (ai-common--make-file-context-from-buffer)))
-    (ai-common--add-to-context-pool file-context)
-    (message "File content added to context pool.")))
 
 (defun ai-common--stringify (val)
   "Convert VAL to a simple string."
@@ -646,130 +480,6 @@ only renders the child elements without the wrapper container."
 
    ;; Fallback for other types
    (t (format "%s" struct))))
-
-
-(cl-defun ai-common--assemble-completion-context
-    (&key
-     (preceding-context-size  ai-utils--default-preceding-context-size)
-     (following-context-size  ai-utils--default-following-context-size))
-  "Return a list of context elements for <completion>.
-
-Modes of operation:
-1. If the region is active, return the selected region as `preceding-context` and `:cursor`.
-2. If not active, return `preceding-context` and `following-context` with specified sizes.
-3. If `preceding-context-size` or `following-context-size` are nil, use the beginning/end of file respectively."
-  (cond
-   ;; Mode 1: Selected region
-   ((use-region-p)
-    (list
-     (ai-common--make-snippet-from-region 'preceding-context)
-     :cursor))
-
-   ;; Mode 2: Contexts of specified size
-   ((and preceding-context-size following-context-size)
-    (let* ((pre  (ai-common--make-preceding-context preceding-context-size))
-           (post (ai-common--make-following-context following-context-size))
-           (post-content (plist-get post :content)))
-      (append
-       (list pre :cursor)
-       (when (and post-content
-                  (> (length post-content) 0))
-         (list post)))))
-
-   ;; Modes 3 & 4: Contexts from start/to end of file
-   (t
-    (let* ((pre  (ai-common--make-preceding-context (- (point) (point-min))))
-           (post (ai-common--make-following-context (- (point-max) (point))))
-           (post-content (plist-get post :content)))
-      (append
-       (list pre :cursor)
-       (when (and post-content
-                  (> (length post-content) 0))
-         (list post)))))))
-
-(defun ai-common--assemble-edit-context ()
-  "Return a list of context elements for an edit operation.
-
-• If REGION is active → a single element with tag `<selection>…</selection>`.
-• If REGION is not active → a single element with tag `<file-context>…</file-context>`."
-  (if (use-region-p)
-      ;; Highlighted fragment as <selection>
-      (list
-       (ai-common--make-snippet-from-region 'selection))
-    ;; Otherwise, the whole buffer as <file-context>
-    (list
-     (ai-common--make-file-context-from-buffer))))
-
-
-(cl-defun ai-common--assemble-edit-context-extended
-    (&key
-     (preceding-context-size  ai-utils--default-preceding-context-size)
-     (following-context-size  ai-utils--default-following-context-size))
-  "Return a list of context elements for edit operations with flexible sizing.
-
-Modes of operation:
-1. If the region is active, return `preceding-context`, the selected region as `selection`, and `following-context`.
-2. If not active, return the whole file as `file-context`."
-  (if (use-region-p)
-      ;; Mode 1: Selected region with context
-      (let* ((region-start (region-beginning))
-             (region-end (region-end))
-             (pre-start (if preceding-context-size
-                            (point-min)  ; От начала файла до начала региона
-                          (max (point-min) (- region-start preceding-context-size))))
-             (post-end (if following-context-size
-                           (point-max)  ; От окончания региона до конца файла
-                         (min (point-max) (+ region-end following-context-size))))
-             (pre-content (when (< pre-start region-start)
-                            (buffer-substring-no-properties pre-start region-start)))
-             (post-content (when (< region-end post-end)
-                             (buffer-substring-no-properties region-end post-end)))
-             (selection (ai-common--make-snippet-from-region 'selection))
-             (file-mod-time (when (buffer-file-name)
-                              (format-time-string "%Y-%m-%dT%H:%M:%S"
-                                                  (file-attribute-modification-time
-                                                   (file-attributes (buffer-file-name))))))
-             (results (list)))
-
-        ;; Add preceding context if it exists
-        (when (and pre-content (> (length pre-content) 0))
-          (let ((pre-struct (ai-common--make-typed-struct
-                             pre-content 'preceding-context 'edit-context
-                             :file (or (buffer-file-name) (buffer-name))
-                             :buffer (buffer-name)
-                             :start-pos pre-start
-                             :end-pos (- region-start 1)
-                             :start-line (line-number-at-pos pre-start)
-                             :end-line (line-number-at-pos (- region-start 1))
-                             :start-column (car (posn-col-row (posn-at-point pre-start)))
-                             :end-column (car (posn-col-row (posn-at-point (- region-start 1))))
-                             :mode (symbol-name major-mode)
-                             (if file-mod-time :file-modified file-mod-time))))
-            (push pre-struct results)))
-
-        ;; Add selection
-        (push selection results)
-
-        ;; Add following context if it exists
-        (when (and post-content (> (length post-content) 0))
-          (let ((post-struct (ai-common--make-typed-struct
-                              post-content 'following-context 'edit-context
-                              :file (or (buffer-file-name) (buffer-name))
-                              :buffer (buffer-name)
-                              :start-pos (+ region-end 1)
-                              :end-pos post-end
-                              :start-line (line-number-at-pos (+ region-end 1))
-                              :end-line (line-number-at-pos post-end)
-                              :start-column (car (posn-col-row (posn-at-point (+ region-end 1))))
-                              :end-column (car (posn-col-row (posn-at-point post-end)))
-                              :mode (symbol-name major-mode)
-                              (if file-mod-time :file-modified file-mod-time))))
-            (push post-struct results)))
-
-        (nreverse results))
-
-    ;; Mode 2: No region - return whole file
-    (list (ai-common--make-file-context-from-buffer))))
 
 (defun ai-common--render-container-from-elements
     (container-tag elements &optional attrs)
@@ -1082,14 +792,6 @@ Returns a list of typed structs with :type 'project-file."
       (progn
         (message "Not in a Projectile project. Cannot get project files.")
         nil))))
-
-(defun ai-common--add-project-files-to-context-pool ()
-  "Add all filtered project files as typed structs to the context pool."
-  (interactive)
-  (let ((file-structs (ai-common--get-filtered-project-files-as-structs)))
-    (dolist (struct file-structs)
-      (ai-common--add-to-context-pool struct))
-    (message "Added %d project files to context pool" (length file-structs))))
 
 
 (provide 'ai-common)
