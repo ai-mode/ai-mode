@@ -78,6 +78,12 @@
 (require 'magit-section)
 (require 'ai-common)
 (require 'ai-utils)
+(require 'ai-context-management)
+(require 'ai-command-management)
+(require 'ai-prompt-management)
+(require 'ai-model-management)
+(require 'ai-mode-adapter-api)
+(require 'ai-completions)
 
 (defgroup ai-debug nil
   "Debug and introspection tools for AI Mode."
@@ -697,7 +703,7 @@ Handles large context lists efficiently with safety limits."
 (defun ai-debug--get-project-context-structs ()
   "Get project context as list of typed structs for debug display.
 Returns filtered project files as individual structs without container wrapping.
-Similar to `ai--get-project-context` but returns raw structs for debugging."
+Similar to `ai-context-management--get-project-context` but returns raw structs for debugging."
   (condition-case-unless-debug nil
     (when-let ((project-files (ai-common--get-filtered-project-files-as-structs)))
       project-files)
@@ -1004,35 +1010,23 @@ Converts names like 'agent-instructions' to 'AGENT INSTRUCTIONS'."
       (propertize "AI Mode Settings" 'face 'ai-debug-category-header))
 
     ;; Core AI Mode Settings
-    (let ((settings `(("Extended Instructions" . ,(if (boundp 'ai--extended-instructions-enabled)
-                                                      ai--extended-instructions-enabled
+    (let ((settings `(("Extended Instructions" . ,(if (boundp 'ai-context-management--extended-instructions-enabled)
+                                                      ai-context-management--extended-instructions-enabled
                                                       "unbound"))
-                      ("Global Prompts" . ,(if (boundp 'ai--global-prompts-enabled)
-                                              ai--global-prompts-enabled
-                                              "unbound"))
-                      ("Project File Instructions" . ,(if (boundp 'ai--project-file-instructions-enabled)
-                                                         ai--project-file-instructions-enabled
-                                                         "unbound"))
-                      ("Current Buffer Context" . ,(if (boundp 'ai--current-buffer-additional-context)
-                                                      ai--current-buffer-additional-context
+                      ("Current Buffer Context" . ,(if (boundp 'ai-context-management--current-buffer-additional-context)
+                                                      ai-context-management--current-buffer-additional-context
                                                       "unbound"))
-                      ("Project Context Mode" . ,(if (boundp 'ai--project-context-mode)
-                                                    ai--project-context-mode
+                      ("Project Context Mode" . ,(if (boundp 'ai-context-management--project-context-mode)
+                                                    ai-context-management--project-context-mode
                                                     "unbound"))
-                      ("User Input Method" . ,(if (boundp 'ai--user-input-method)
-                                                 ai--user-input-method
+                      ("User Input Method" . ,(if (boundp 'ai-context-management--user-input-method)
+                                                 ai-context-management--user-input-method
                                                  "unbound"))
-                      ("Progress Indicator" . ,(if (boundp 'ai--progress-indicator-enabled)
-                                                  ai--progress-indicator-enabled
-                                                  "unbound"))
-                      ("Progress Style" . ,(if (boundp 'ai--progress-indicator-style)
-                                              ai--progress-indicator-style
-                                              "unbound"))
-                      ("Preceding Context Size" . ,(if (boundp 'ai--current-precending-context-size)
-                                                      ai--current-precending-context-size
+                      ("Preceding Context Size" . ,(if (boundp 'ai-context-management--current-precending-context-size)
+                                                      ai-context-management--current-precending-context-size
                                                       "unbound"))
-                      ("Following Context Size" . ,(if (boundp 'ai--current-forwarding-context-size)
-                                                      ai--current-forwarding-context-size
+                      ("Following Context Size" . ,(if (boundp 'ai-context-management--current-forwarding-context-size)
+                                                      ai-context-management--current-forwarding-context-size
                                                       "unbound")))))
 
       (dolist (setting settings)
@@ -1273,37 +1267,37 @@ Returns a plist with command data grouped by location."
         (local-commands '()))
 
     ;; Collect from default instructions (if available)
-    (when (and (boundp 'ai--default-instructions-cache)
-               (hash-table-p ai--default-instructions-cache))
+    (when (and (boundp 'ai-prompt-management--default-instructions-cache)
+               (hash-table-p ai-prompt-management--default-instructions-cache))
       (maphash (lambda (command-name content)
                  (push `(:name ,command-name
                          :content ,content
                          :location "Default (Package)"
-                         :directory ,(ai--get-default-instructions-directory))
+                         :directory ,(ai-prompt-management--get-default-instructions-directory))
                        default-commands))
-               ai--default-instructions-cache))
+               ai-prompt-management--default-instructions-cache))
 
     ;; Collect from global instructions (if available)
-    (when (and (boundp 'ai--global-instructions-cache)
-               (hash-table-p ai--global-instructions-cache))
+    (when (and (boundp 'ai-prompt-management--global-instructions-cache)
+               (hash-table-p ai-prompt-management--global-instructions-cache))
       (maphash (lambda (command-name content)
                  (push `(:name ,command-name
                          :content ,content
                          :location "Global (~/.ai)"
-                         :directory ,(ai--get-global-instructions-directory))
+                         :directory ,(ai-prompt-management--get-global-instructions-directory))
                        global-commands))
-               ai--global-instructions-cache))
+               ai-prompt-management--global-instructions-cache))
 
     ;; Collect from local instructions (if available)
-    (when (and (boundp 'ai--local-instructions-cache)
-               (hash-table-p ai--local-instructions-cache))
+    (when (and (boundp 'ai-prompt-management--local-instructions-cache)
+               (hash-table-p ai-prompt-management--local-instructions-cache))
       (maphash (lambda (command-name content)
                  (push `(:name ,command-name
                          :content ,content
                          :location "Local (Project)"
-                         :directory ,(ai--get-local-instructions-directory))
+                         :directory ,(ai-prompt-management--get-local-instructions-directory))
                        local-commands))
-               ai--local-instructions-cache))
+               ai-prompt-management--local-instructions-cache))
 
     `(:default-commands ,(reverse default-commands)
       :global-commands ,(reverse global-commands)
@@ -1317,37 +1311,37 @@ Returns a plist with system prompt data grouped by location."
         (local-prompts '()))
 
     ;; Collect from default system prompts (if available)
-    (when (and (boundp 'ai--default-system-prompts-cache)
-               (hash-table-p ai--default-system-prompts-cache))
+    (when (and (boundp 'ai-prompt-management--default-system-prompts-cache)
+               (hash-table-p ai-prompt-management--default-system-prompts-cache))
       (maphash (lambda (prompt-name content)
                  (push `(:name ,prompt-name
                          :content ,content
                          :location "Default (Package)"
-                         :directory ,(ai--get-default-system-prompts-directory))
+                         :directory ,(ai-prompt-management--get-default-system-prompts-directory))
                        default-prompts))
-               ai--default-system-prompts-cache))
+               ai-prompt-management--default-system-prompts-cache))
 
     ;; Collect from global system prompts (if available)
-    (when (and (boundp 'ai--global-system-prompts-cache)
-               (hash-table-p ai--global-system-prompts-cache))
+    (when (and (boundp 'ai-prompt-management--global-system-prompts-cache)
+               (hash-table-p ai-prompt-management--global-system-prompts-cache))
       (maphash (lambda (prompt-name content)
                  (push `(:name ,prompt-name
                          :content ,content
                          :location "Global (~/.ai/system)"
-                         :directory ,(ai--get-global-system-prompts-directory))
+                         :directory ,(ai-prompt-management--get-global-system-prompts-directory))
                        global-prompts))
-               ai--global-system-prompts-cache))
+               ai-prompt-management--global-system-prompts-cache))
 
     ;; Collect from local system prompts (if available)
-    (when (and (boundp 'ai--local-system-prompts-cache)
-               (hash-table-p ai--local-system-prompts-cache))
+    (when (and (boundp 'ai-prompt-management--local-system-prompts-cache)
+               (hash-table-p ai-prompt-management--local-system-prompts-cache))
       (maphash (lambda (prompt-name content)
                  (push `(:name ,prompt-name
                          :content ,content
                          :location "Local (Project)"
-                         :directory ,(ai--get-local-system-prompts-directory))
+                         :directory ,(ai-prompt-management--get-local-system-prompts-directory))
                        local-prompts))
-               ai--local-system-prompts-cache))
+               ai-prompt-management--local-system-prompts-cache))
 
     `(:default-prompts ,(reverse default-prompts)
       :global-prompts ,(reverse global-prompts)
@@ -1357,8 +1351,8 @@ Returns a plist with system prompt data grouped by location."
   "Extract modifier indicators from COMMAND-NAME for display.
 Returns a list of shortened modifier indicators."
   (condition-case-unless-debug nil
-    (when (and (fboundp 'ai--parse-command-modifiers) (string-match-p "__" command-name))
-      (let* ((parsed (ai--parse-command-modifiers command-name))
+    (when (and (fboundp 'ai-command-management--parse-command-modifiers) (string-match-p "__" command-name))
+      (let* ((parsed (ai-command-management--parse-command-modifiers command-name))
              (modifier-config (cdr parsed))
              (indicators '()))
 
@@ -1404,7 +1398,7 @@ Returns a list of shortened modifier indicators."
          (location (plist-get command-info :location))
          (directory (plist-get command-info :directory))
          (file-path (when directory
-                      (ai--get-instruction-file-path name directory)))
+                      (ai-prompt-management--get-file-path-for-name name directory nil)))
          (modifier-indicators (ai-debug--extract-modifier-indicators name))
          (metadata-parts '()))
 
@@ -1434,7 +1428,7 @@ Returns a list of shortened modifier indicators."
          (location (plist-get prompt-info :location))
          (directory (plist-get prompt-info :directory))
          (file-path (when directory
-                      (ai--get-instruction-file-path name directory)))
+                      (ai-prompt-management--get-file-path-for-name name directory t)))
          (metadata-parts '()))
 
     ;; Build metadata parts
@@ -1491,18 +1485,18 @@ expandable sections for detailed inspection."
         (setq-local ai-debug--refresh-args nil)
 
         ;; Ensure caches are updated
-        (when (fboundp 'ai--ensure-instructions-cache-updated)
+        (when (fboundp 'ai-prompt-management--ensure-cache-updated)
           (condition-case-unless-debug nil
             (progn
-              (ai--ensure-instructions-cache-updated
-               (ai--get-default-instructions-directory)
-               ai--default-instructions-cache "default")
-              (ai--ensure-instructions-cache-updated
-               (ai--get-global-instructions-directory)
-               ai--global-instructions-cache "global")
-              (when-let ((local-dir (ai--get-local-instructions-directory)))
-                (ai--ensure-instructions-cache-updated
-                 local-dir ai--local-instructions-cache "local")))
+              (ai-prompt-management--ensure-cache-updated
+               (ai-prompt-management--get-default-instructions-directory)
+               ai-prompt-management--default-instructions-cache "default" nil)
+              (ai-prompt-management--ensure-cache-updated
+               (ai-prompt-management--get-global-instructions-directory)
+               ai-prompt-management--global-instructions-cache "global" nil)
+              (when-let ((local-dir (ai-prompt-management--get-local-instructions-directory)))
+                (ai-prompt-management--ensure-cache-updated
+                 local-dir ai-prompt-management--local-instructions-cache "local" nil)))
             (error nil)))
 
         ;; Collect file commands
@@ -1529,9 +1523,9 @@ expandable sections for detailed inspection."
             (when (= total-commands 0)
               (insert (propertize "No file-based commands found.\n" 'face 'ai-debug-empty-source))
               (insert (propertize "File commands are loaded from:\n" 'face 'ai-debug-context-metadata))
-              (insert (propertize (format "- Default: %s\n" (ai--get-default-instructions-directory)) 'face 'ai-debug-context-metadata))
-              (insert (propertize (format "- Global: %s\n" (ai--get-global-instructions-directory)) 'face 'ai-debug-context-metadata))
-              (when-let ((local-dir (ai--get-local-instructions-directory)))
+              (insert (propertize (format "- Default: %s\n" (ai-prompt-management--get-default-instructions-directory)) 'face 'ai-debug-context-metadata))
+              (insert (propertize (format "- Global: %s\n" (ai-prompt-management--get-global-instructions-directory)) 'face 'ai-debug-context-metadata))
+              (when-let ((local-dir (ai-prompt-management--get-local-instructions-directory)))
                 (insert (propertize (format "- Local: %s\n" local-dir) 'face 'ai-debug-context-metadata))))))
 
         ;; Set up buffer display
@@ -1561,18 +1555,18 @@ expandable sections for detailed inspection."
         (setq-local ai-debug--refresh-args nil)
 
         ;; Ensure caches are updated
-        (when (fboundp 'ai--ensure-system-prompts-cache-updated)
+        (when (fboundp 'ai-prompt-management--ensure-cache-updated)
           (condition-case-unless-debug nil
             (progn
-              (ai--ensure-system-prompts-cache-updated
-               (ai--get-default-system-prompts-directory)
-               ai--default-system-prompts-cache "default-system")
-              (ai--ensure-system-prompts-cache-updated
-               (ai--get-global-system-prompts-directory)
-               ai--global-system-prompts-cache "global-system")
-              (when-let ((local-dir (ai--get-local-system-prompts-directory)))
-                (ai--ensure-system-prompts-cache-updated
-                 local-dir ai--local-system-prompts-cache "local-system")))
+              (ai-prompt-management--ensure-cache-updated
+               (ai-prompt-management--get-default-system-prompts-directory)
+               ai-prompt-management--default-system-prompts-cache "default-system" t)
+              (ai-prompt-management--ensure-cache-updated
+               (ai-prompt-management--get-global-system-prompts-directory)
+               ai-prompt-management--global-system-prompts-cache "global-system" t)
+              (when-let ((local-dir (ai-prompt-management--get-local-system-prompts-directory)))
+                (ai-prompt-management--ensure-cache-updated
+                 local-dir ai-prompt-management--local-system-prompts-cache "local-system" t)))
             (error nil)))
 
         ;; Collect system prompts
@@ -1599,9 +1593,9 @@ expandable sections for detailed inspection."
             (when (= total-prompts 0)
               (insert (propertize "No system prompts found.\n" 'face 'ai-debug-empty-source))
               (insert (propertize "System prompts are loaded from:\n" 'face 'ai-debug-context-metadata))
-              (insert (propertize (format "- Default: %s\n" (ai--get-default-system-prompts-directory)) 'face 'ai-debug-context-metadata))
-              (insert (propertize (format "- Global: %s\n" (ai--get-global-system-prompts-directory)) 'face 'ai-debug-context-metadata))
-              (when-let ((local-dir (ai--get-local-system-prompts-directory)))
+              (insert (propertize (format "- Default: %s\n" (ai-prompt-management--get-default-system-prompts-directory)) 'face 'ai-debug-context-metadata))
+              (insert (propertize (format "- Global: %s\n" (ai-prompt-management--get-global-system-prompts-directory)) 'face 'ai-debug-context-metadata))
+              (when-let ((local-dir (ai-prompt-management--get-local-system-prompts-directory)))
                 (insert (propertize (format "- Local: %s\n" local-dir) 'face 'ai-debug-context-metadata))))))
 
         ;; Set up buffer display
@@ -1773,34 +1767,34 @@ The interface provides expandable sections for detailed inspection."
   "Collect all context sources safely with comprehensive error handling.
 Returns a plist with all context source data and their counts."
   (let* ((global-system-prompts (condition-case-unless-debug nil
-                                    (ai-common--get-global-system-prompts)
+                                    (ai-context-management--get-global-system-prompts)
                                   (error nil)))
          (global-memory (condition-case-unless-debug nil
-                            (ai-common--get-global-memory)
+                            (ai-context-management--get-global-memory)
                           (error nil)))
          (buffer-bound-prompts (condition-case-unless-debug nil
-                                   (ai-common--get-buffer-bound-prompts)
+                                   (ai-context-management--get-buffer-bound-prompts)
                                  (error nil)))
          (context-pool (condition-case-unless-debug nil
-                           (ai-common--get-context-pool)
+                           (ai-context-management--get-context-pool)
                          (error nil)))
          (project-context (condition-case-unless-debug nil
-                              (when (and (fboundp 'ai--get-full-project-context)
+                              (when (and (fboundp 'ai-context-management--get-full-project-context)
                                          (fboundp 'ai-common--get-project-root)
                                          (ai-common--get-project-root))
-                                (ai--get-full-project-context))
+                                (ai-context-management--get-full-project-context))
                             (error nil)))
          (project-root (condition-case-unless-debug nil
                            (ai-common--get-project-root)
                          (error nil)))
          (project-summary-index (condition-case-unless-debug nil
-                                    (when (and (boundp 'ai--project-files-summary-index) project-root)
-                                      (gethash project-root ai--project-files-summary-index))
+                                    (when (and (boundp 'ai-context-management--project-files-summary-index) project-root)
+                                      (gethash project-root ai-context-management--project-files-summary-index))
                                   (error nil)))
          (current-buffer-context (condition-case-unless-debug nil
                                      (unless (use-region-p)
-                                       (when (fboundp 'ai--get-current-buffer-context)
-                                         (ai--get-current-buffer-context)))
+                                       (when (fboundp 'ai-context-management--get-current-buffer-context)
+                                         (ai-context-management--get-current-buffer-context)))
                                    (error nil)))
          (current-selection (condition-case-unless-debug nil
                                 (when (use-region-p)
@@ -1853,7 +1847,7 @@ Returns a plist with total, non-empty, and file counts."
   "Insert all source sections with SOURCES data and COUNTS information."
   (let* ((project-files-count (plist-get counts :project-files-count))
          (project-summary-count (plist-get counts :project-summary-count))
-         (project-context-mode-display (ai-debug--get-project-context-mode-display-name ai--project-context-mode)))
+         (project-context-mode-display (ai-debug--get-project-context-mode-display-name ai-context-management--project-context-mode)))
 
     ;; Insert each source section with error protection
     (ai-debug--insert-source-section
@@ -1957,16 +1951,16 @@ and message structure for troubleshooting AI operations."
   (condition-case-unless-debug err
     (when (bound-and-true-p ai-mode)
       (let* ((query-type (condition-case-unless-debug nil
-                           (or (when (fboundp 'ai--get-command-unrestricted)
-                                 (ai--get-command-unrestricted))
+                           (or (when (fboundp 'ai-command-management--get-command-unrestricted)
+                                 (ai-command-management--get-command-unrestricted))
                                "explain")
                            (error "explain")))
              (context (condition-case-unless-debug nil
-                          (when (fboundp 'ai--get-executions-context-for-command)
-                            (ai--get-executions-context-for-command
+                          (when (fboundp 'ai-context-management--get-executions-context-for-command)
+                            (ai-context-management--get-executions-context-for-command
                              query-type
-                             :model (when (fboundp 'ai--get-current-model)
-                                      (ai--get-current-model))))
+                             :model (when (fboundp 'ai-model-management-get-current)
+                                      (ai-model-management-get-current))))
 
                         (error nil))))
         (if context
@@ -1983,16 +1977,16 @@ Useful for understanding the exact order and structure of AI context elements."
   (condition-case-unless-debug err
     (when (bound-and-true-p ai-mode)
       (let* ((query-type (condition-case-unless-debug nil
-                           (or (when (fboundp 'ai--get-command-unrestricted)
-                                 (ai--get-command-unrestricted))
+                           (or (when (fboundp 'ai-command-management--get-command-unrestricted)
+                                 (ai-command-management--get-command-unrestricted))
                                "explain")
                            (error "explain")))
              (context (condition-case-unless-debug nil
-                          (when (fboundp 'ai--get-executions-context-for-command)
-                            (ai--get-executions-context-for-command
+                          (when (fboundp 'ai-context-management--get-executions-context-for-command)
+                            (ai-context-management--get-executions-context-for-command
                              query-type
-                             :model (when (fboundp 'ai--get-current-model)
-                                      (ai--get-current-model))))
+                             :model (when (fboundp 'ai-model-management-get-current)
+                                      (ai-model-management-get-current))))
                         (error nil))))
         (if context
             (ai-debug-show-raw-structures context)
@@ -2008,12 +2002,12 @@ Useful for debugging completion performance and context truncation issues."
   (condition-case-unless-debug err
     (when (bound-and-true-p ai-mode)
       (let* ((context (condition-case-unless-debug nil
-                          (when (and (fboundp 'ai--get-execution-context)
-                                     (fboundp 'ai--get-command-config-by-type)
-                                     (fboundp 'ai--get-current-model))
-                            (ai--get-execution-context
+                          (when (and (fboundp 'ai-context-management--get-execution-context)
+                                     (fboundp 'ai-command-management--get-command-config-by-type)
+                                     (fboundp 'ai-model-management-get-current))
+                            (ai-context-management--get-execution-context
                              (current-buffer)
-                             (ai--get-command-config-by-type "complete")
+                             (ai-command-management--get-command-config-by-type "complete")
                              "complete"
                              :preceding-context-size (if (boundp 'ai-completions--current-precending-context-size)
                                                          ai-completions--current-precending-context-size
@@ -2021,7 +2015,7 @@ Useful for debugging completion performance and context truncation issues."
                              :following-context-size (if (boundp 'ai-completions--current-forwarding-context-size)
                                                         ai-completions--current-forwarding-context-size
                                                       20)
-                             :model (ai--get-current-model)))
+                             :model (ai-model-management-get-current)))
                         (error nil))))
         (if context
             (ai-debug-show-context-debug context)
@@ -2037,17 +2031,17 @@ Useful for debugging issues with full-buffer completion strategies."
   (condition-case-unless-debug err
     (when (bound-and-true-p ai-mode)
       (let* ((context (condition-case-unless-debug nil
-                          (when (and (fboundp 'ai--get-execution-context)
-                                     (fboundp 'ai--get-command-config-by-type)
-                                     (fboundp 'ai--get-current-model))
-                            (ai--get-execution-context
+                          (when (and (fboundp 'ai-context-management--get-execution-context)
+                                     (fboundp 'ai-command-management--get-command-config-by-type)
+                                     (fboundp 'ai-model-management-get-current))
+                            (ai-context-management--get-execution-context
                              (current-buffer)
-                             (ai--get-command-config-by-type "complete")
+                             (ai-command-management--get-command-config-by-type "complete")
 
                              "complete"
                              :preceding-context-size nil
                              :following-context-size nil
-                             :model (ai--get-current-model)))
+                             :model (ai-model-management-get-current)))
                         (error nil))))
         (if context
             (ai-debug-show-context-debug context)
