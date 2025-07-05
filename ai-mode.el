@@ -102,7 +102,7 @@
 ;; - C-c i s   - Show AI response in separate buffer
 ;; - C-c i x   - Execute and evaluate AI-generated code
 ;; - C-c i c c - Start AI chat session
-;; - C-c i b c - Change AI backend/model
+;; - C-c i c m - Change AI model (alias)
 ;; - C-c i p c - Execute AI coordinator (smart completion)
 ;; - C-c i e i - Edit command instructions
 ;; - C-c i m c - Create command with modifiers
@@ -161,7 +161,7 @@
 (defvar ai-command-map
   (let ((keymap (make-sparse-keymap)))
     (define-key keymap (kbd "c c") 'ai-chat)
-    (define-key keymap (kbd "b c") 'ai-model-management-change)
+    (define-key keymap (kbd "c m") 'ai-change-model)
     (define-key keymap (kbd "f") 'ai--switch-file-instructions-enabled)
     (define-key keymap (kbd "p c") 'ai-perform-coordinator)
     (define-key keymap (kbd "r") 'ai-perform)
@@ -270,6 +270,15 @@ See the package commentary for detailed usage instructions."
   "Explain the selected code region and display the explanation in a help buffer."
   (interactive)
   (ai-execution--execute-context (ai-context-management--get-executions-context-for-command "explain") 'ai-response-processors--show-explain-help-buffer))
+
+(defun ai-change-model (&optional model-name)
+  "Change the current AI model/backend.
+
+This is a convenient alias for `ai-model-management-change'.
+If MODEL-NAME is provided, change to that model directly.
+Otherwise, prompt the user to select from available models."
+  (interactive)
+  (ai-model-management-change model-name))
 
 (defun ai-show ()
   "Execute command and show the response in a special buffer, filtering by show-compatible commands."
