@@ -28,7 +28,7 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'ai-common) ; For ai-common--get-project-root
+(require 'ai-project) ; For ai-project--get-project-root
 (require 'ai-telemetry) ; For ai-telemetry--verbose-message
 
 (defcustom ai-prompt-management--instruction-file-extension ".md"
@@ -133,7 +133,7 @@ with `ai-prompt-management--legacy-instruction-file-extension'."
 
 (defun ai-prompt-management--get-local-instructions-directory ()
   "Get the local instructions directory from current project root."
-  (when-let ((project-root (ai-common--get-project-root)))
+  (when-let ((project-root (ai-project--get-project-root)))
     (file-name-as-directory
      (expand-file-name ".ai/commands" project-root))))
 
@@ -150,7 +150,7 @@ with `ai-prompt-management--legacy-instruction-file-extension'."
 
 (defun ai-prompt-management--get-local-system-prompts-directory ()
   "Get the local system prompts directory from current project root."
-  (when-let ((project-root (ai-common--get-project-root)))
+  (when-let ((project-root (ai-project--get-project-root)))
     (file-name-as-directory
      (expand-file-name ".ai/system" project-root))))
 

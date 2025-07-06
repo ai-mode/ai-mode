@@ -69,7 +69,6 @@ MODEL is the model configuration to be set."
 
 (defun ai-model-management-change (&optional model-name)
   "Change command backend interactively, or use MODEL-NAME if given."
-  (interactive)
   (let* ((models (mapcar (lambda (item) `(,(map-elt item :name) ,item)) (ai-model-management-get-available)))
          (value (or model-name
                     (completing-read ai-model-management-change-execution-backend-prompt (mapcar #'car models))))

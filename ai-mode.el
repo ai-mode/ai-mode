@@ -107,7 +107,13 @@
 ;; - C-c i e i - Edit command instructions
 ;; - C-c i m c - Create command with modifiers
 ;; - C-c i p s - Switch project context mode
-;; - C-c i p u - Update project files summary index
+;; - C-c i u   - Update project files summary index
+;; - C-c i t   - Toggle indexing context
+;; - C-c i R   - Reindex project with context
+;; - C-c i S   - Switch indexing strategy
+;; - C-c i v   - Select index version
+;; - C-c i l   - List index versions
+;; - C-c i d   - Delete old index versions
 ;;
 ;; Project Context Modes:
 ;; - disabled: No project context included
@@ -144,6 +150,7 @@
 (require 'ai-execution)
 (require 'ai-mode-indexing)
 (require 'ai-response-processors)
+(require 'ai-core)
 
 (defvar url-http-end-of-headers)
 
@@ -173,16 +180,16 @@
     (define-key keymap (kbd "m c") 'ai-common--clear-global-memory)
     (define-key keymap (kbd "a c") 'ai-common--add-to-context-pool)
     (define-key keymap (kbd "p s") 'ai-context-management--switch-project-context-mode)
-    (define-key keymap (kbd "p u") 'ai-mode-indexing-update-project-files-summary-index)
+    (define-key keymap (kbd "u") 'ai-index-update)
     (define-key keymap (kbd "e i") 'ai-command-management-edit-command-instructions)
     (define-key keymap (kbd "m d") 'ai-command-management-describe-command-modifiers)
     (define-key keymap (kbd "m c") 'ai-command-management-create-modified-command)
-    (define-key keymap (kbd "i t") 'ai-mode-indexing-toggle-indexing-context)
-    (define-key keymap (kbd "i r") 'ai-mode-indexing-reindex-project-with-context)
-    (define-key keymap (kbd "i s") 'ai-mode-indexing-switch-indexing-strategy)
-    (define-key keymap (kbd "i v") 'ai-mode-indexing-select-index-version)
-    (define-key keymap (kbd "i l") 'ai-mode-indexing-list-index-versions)
-    (define-key keymap (kbd "i d") 'ai-mode-indexing-delete-old-index-versions)
+    (define-key keymap (kbd "t") 'ai-index-toggle-context)
+    (define-key keymap (kbd "R") 'ai-index-reindex-with-context)
+    (define-key keymap (kbd "S") 'ai-index-switch-strategy)
+    (define-key keymap (kbd "v") 'ai-index-select-version)
+    (define-key keymap (kbd "l") 'ai-index-list-versions)
+    (define-key keymap (kbd "D") 'ai-index-delete-old-versions)
     (define-key keymap (kbd "c t") 'ai-execution--toggle-prompt-caching)
     (define-key keymap (kbd "p t") 'ai-execution--toggle-replace-action-use-patch)
     keymap)
@@ -266,11 +273,6 @@ See the package commentary for detailed usage instructions."
   "Initialize prompt caches."
   (ai-prompt-management--update-caches))
 
-(defun ai-explain-code-region ()
-  "Explain the selected code region and display the explanation in a help buffer."
-  (interactive)
-  (ai-execution--execute-context (ai-context-management--get-executions-context-for-command "explain") 'ai-response-processors--show-explain-help-buffer))
-
 (defun ai-change-model (&optional model-name)
   "Change the current AI model/backend.
 
@@ -283,64 +285,63 @@ Otherwise, prompt the user to select from available models."
 (defun ai-show ()
   "Execute command and show the response in a special buffer, filtering by show-compatible commands."
   (interactive)
-  (let* ((command (ai-command-management--get-informational-command))
-         (context (ai-context-management--get-executions-context-for-command command :default-result-action 'show)))
-    (ai-execution--execute-context context 'ai-response-processors--show-response-buffer)))
+  (ai-core-show))
 
 (defun ai-execute ()
   "Execute command and show the response for evaluation, filtering by eval-compatible commands."
   (interactive)
-  (let* ((command (ai-command-management--get-executable-command))
-         (context (ai-context-management--get-executions-context-for-command command :default-result-action 'eval)))
-    (ai-execution--execute-context context 'ai-response-processors--show-and-eval-response)))
+  (ai-core-execute))
 
 (defun ai-perform ()
-  "Execute request and apply the result based on command's specified result action or default to replace.
-   If result action is 'replace', it replaces the selected region or inserts in current buffer.
-   If result action is 'show', it shows the response in a special buffer.
-   If result action is 'eval', it shows the response and asks for permission to evaluate.
-   If result action is 'insert-at-point', it inserts the response at the cursor position."
+  "Execute request and apply the result based on command's specified result action or default to replace."
   (interactive)
-  (let* ((command (ai-command-management--get-command-unrestricted))
-         (context (ai-context-management--get-executions-context-for-command command :default-result-action 'replace))
-         (config (ai-command-management--get-command-config-by-type command 'replace))
-         (result-action (map-elt config :result-action))
-         (current-buffer (current-buffer))
-         (cursor-position (point)))
-    (cond
-     ((eq result-action 'show)
-      ;; If the selected command is meant to be shown, delegate
-      (message "Command '%s' is informational. Displaying in a new buffer." command)
-      (ai-execution--execute-context context 'ai-response-processors--show-response-buffer))
-     ((eq result-action 'eval)
-      ;; Show response and ask for permission to evaluate
-      (message "Command '%s' will generate code for evaluation." command)
-      (ai-execution--execute-context context 'ai-response-processors--show-and-eval-response))
-     ((eq result-action 'insert-at-point)
-      ;; Insert at the cursor position captured when the command was invoked
-      (message "Command '%s' will insert response at cursor position." command)
-      (ai-execution--execute-context context (ai-response-processors--create-insert-at-point-callback current-buffer cursor-position)))
-     ((eq result-action 'replace)
-      ;; Apply patch if patch mode is enabled, otherwise use regular replace behavior
-      (if (bound-and-true-p ai-execution--replace-action-use-patch)
-          (progn
-            (message "Command '%s' will generate and apply a unified patch." command)
-            (ai-execution--execute-context context (ai-response-processors--create-patch-apply-callback current-buffer)))
-        (ai-execution--execute-context context (ai-response-processors--replace-region-or-insert-in-current-buffer))))
-     (t
-      ;; Fallback for unconfigured or new actions
-      (message "Unknown or unspecified result action for command '%s'. Defaulting to replace." command)
-      (ai-execution--execute-context context 'ai-response-processors--show-response-buffer)))))
+  (ai-core-perform))
 
 (defun ai-perform-coordinator ()
   "Decide whether to continue the previous process of supplementation or to start a new one."
   (interactive)
-  (ai-completions--coordinator :action-type (ai-command-management--get-command-unrestricted) :strategy 'replace))
+  (ai-core-perform-coordinator))
 
 (defun ai-debug ()
   "Debug AI mode by printing region status and execution context."
   (interactive)
-  (ai-utils--show-context-debug (ai-context-management--get-executions-context-for-command (ai-command-management--get-command-unrestricted) :model (ai-model-management-get-current))))
+  (ai-core-debug))
+
+;; Indexing command aliases
+(defun ai-index-update ()
+  "Update the project files summary index."
+  (interactive)
+  (ai-mode-indexing-update-project-files-summary-index))
+
+(defun ai-index-toggle-context ()
+  "Toggle inclusion of existing context in indexing process."
+  (interactive)
+  (ai-mode-indexing-toggle-indexing-context))
+
+(defun ai-index-reindex-with-context ()
+  "Reindex the entire project with existing context enabled."
+  (interactive)
+  (ai-mode-indexing-reindex-project-with-context))
+
+(defun ai-index-switch-strategy ()
+  "Interactively switch the indexing strategy."
+  (interactive)
+  (ai-mode-indexing-switch-indexing-strategy))
+
+(defun ai-index-select-version ()
+  "Interactively select and load an index version for the current project."
+  (interactive)
+  (ai-mode-indexing-select-index-version))
+
+(defun ai-index-list-versions ()
+  "List all available index versions for the current project."
+  (interactive)
+  (ai-mode-indexing-list-index-versions))
+
+(defun ai-index-delete-old-versions ()
+  "Interactively delete old index versions beyond retention depth."
+  (interactive)
+  (ai-mode-indexing-delete-old-index-versions))
 
 (add-hook 'ai-model-management-change-hook 'ai-mode-line-update-mode-line-info)
 

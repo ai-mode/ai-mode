@@ -28,6 +28,7 @@
 (require 'cl-lib)
 (require 'ai-utils)
 (require 'ai-common)
+(require 'ai-project)
 (require 'ai-prompt-management)
 (require 'ai-command-management)
 (require 'ai-user-input)
@@ -292,10 +293,10 @@ Maps project root paths to lists of file summary structs.")
    ((eq location 'global)
     (expand-file-name ".ai/memory.md" "~"))
    ((eq location 'local)
-    (when-let ((project-root (ai-common--get-project-root)))
+    (when-let ((project-root (ai-project--get-project-root)))
       (expand-file-name ".ai/memory.md" project-root)))
    ((eq location 'local-team)
-    (when-let ((project-root (ai-common--get-project-root)))
+    (when-let ((project-root (ai-project--get-project-root)))
       (expand-file-name ".ai/memory.local.md" project-root)))))
 
 (defun ai-context-management--read-memory-file (location)
@@ -689,9 +690,9 @@ Handles both plain contexts and typed structs, including nested structures."
 (defun ai-context-management--get-full-project-context ()
   "Get project context by collecting all filtered project files.
 Returns a typed struct containing the project files context, or nil if no project is detected."
-  (when-let* ((project-root (ai-common--get-project-root))
-              (files-list (ai-common--get-filtered-project-files t)) ; Request relative paths
-              (project-files (ai-common--get-filtered-project-files-as-structs)))
+  (when-let* ((project-root (ai-project--get-project-root))
+              (files-list (ai-project--get-filtered-project-files t)) ; Request relative paths
+              (project-files (ai-project--get-filtered-project-files-as-structs)))
     (when project-files
       (let* ((files-list-content (mapconcat (lambda (file-path)
                                               (format "- %s" file-path))
@@ -714,8 +715,8 @@ Returns a typed struct containing the project files context, or nil if no projec
   "Get project context using project AI summary mode with cached index.
 Returns a typed struct containing the project files summary from cached index,
 or nil if no project is detected or index is empty."
-  (when-let* ((project-root (ai-common--get-project-root))
-              (files-list (ai-common--get-filtered-project-files t))
+  (when-let* ((project-root (ai-project--get-project-root))
+              (files-list (ai-project--get-filtered-project-files t))
               (summaries-for-current-project (gethash project-root ai-context-management--project-files-summary-index)))
     (let* ((files-list-content (mapconcat (lambda (file-path)
                                             (format "- %s" file-path))
@@ -739,8 +740,8 @@ or nil if no project is detected or index is empty."
 
 (defun ai-context-management--get-enhanced-project-ai-summary-context ()
   "Get enhanced project context using project AI summary mode with dependency awareness."
-  (when-let* ((project-root (ai-common--get-project-root))
-              (files-list (ai-common--get-filtered-project-files t))
+  (when-let* ((project-root (ai-project--get-project-root))
+              (files-list (ai-project--get-filtered-project-files t))
               (summaries-for-current-project (gethash project-root ai-context-management--project-files-summary-index)))
     (let* ((files-count (length files-list))
            (indexed-count (length summaries-for-current-project))

@@ -77,6 +77,7 @@
 (require 'cl-lib)
 (require 'magit-section)
 (require 'ai-common)
+(require 'ai-project)
 (require 'ai-utils)
 (require 'ai-context-management)
 (require 'ai-command-management)
@@ -705,7 +706,7 @@ Handles large context lists efficiently with safety limits."
 Returns filtered project files as individual structs without container wrapping.
 Similar to `ai-context-management--get-project-context` but returns raw structs for debugging."
   (condition-case-unless-debug nil
-    (when-let ((project-files (ai-common--get-filtered-project-files-as-structs)))
+    (when-let ((project-files (ai-project--get-filtered-project-files-as-structs)))
       project-files)
     (error nil)))
 
@@ -831,7 +832,7 @@ Shows patterns from global hardcoded, global files, project .gitignore, and proj
 followed by an aggregated result section."
   (condition-case-unless-debug err
       (let ((project-root (condition-case-unless-debug nil
-                            (ai-common--get-project-root)
+                            (ai-project--get-project-root)
                             (error nil))))
         (magit-insert-section (ai-ignore-patterns nil t) ; Pass 't' as hidden flag
           (magit-insert-heading
@@ -839,7 +840,7 @@ followed by an aggregated result section."
 
           ;; Global hardcoded patterns subsection
           (let ((hardcoded-patterns (condition-case-unless-debug nil
-                                      (ai-common--get-global-hardcoded-patterns)
+                                      (ai-project--get-global-hardcoded-patterns)
                                       (error nil))))
             (magit-insert-section (ai-ignore-hardcoded nil t) ; Pass 't' as hidden flag
               (magit-insert-heading
@@ -859,7 +860,7 @@ followed by an aggregated result section."
 
           ;; Global ignore files patterns subsection
           (let ((global-file-patterns (condition-case-unless-debug nil
-                                        (ai-common--get-global-ignore-file-patterns)
+                                        (ai-project--get-global-ignore-file-patterns)
                                         (error nil))))
             (magit-insert-section (ai-ignore-global-files nil t) ; Pass 't' as hidden flag
               (magit-insert-heading
@@ -880,7 +881,7 @@ followed by an aggregated result section."
           ;; Project .gitignore patterns subsection
           (when project-root
             (let ((gitignore-patterns (condition-case-unless-debug nil
-                                        (ai-common--get-project-gitignore-patterns project-root)
+                                        (ai-project--get-project-gitignore-patterns project-root)
                                         (error nil))))
               (magit-insert-section (ai-ignore-gitignore nil t) ; Pass 't' as hidden flag
                 (magit-insert-heading
@@ -901,7 +902,7 @@ followed by an aggregated result section."
           ;; Project .ai-ignore patterns subsection
           (when project-root
             (let ((ai-ignore-patterns (condition-case-unless-debug nil
-                                        (ai-common--get-project-ai-ignore-patterns project-root)
+                                        (ai-project--get-project-ai-ignore-patterns project-root)
                                         (error nil))))
               (magit-insert-section (ai-ignore-ai-ignore nil t) ; Pass 't' as hidden flag
                 (magit-insert-heading
@@ -922,7 +923,7 @@ followed by an aggregated result section."
           ;; Aggregated patterns section
           (when project-root
             (let ((all-patterns (condition-case-unless-debug nil
-                                  (ai-common--get-all-ignore-patterns project-root)
+                                  (ai-project--get-all-ignore-patterns project-root)
                                   (error nil))))
               (magit-insert-section (ai-ignore-aggregated nil t) ; Pass 't' as hidden flag
                 (magit-insert-heading
@@ -1780,12 +1781,12 @@ Returns a plist with all context source data and their counts."
                          (error nil)))
          (project-context (condition-case-unless-debug nil
                               (when (and (fboundp 'ai-context-management--get-full-project-context)
-                                         (fboundp 'ai-common--get-project-root)
-                                         (ai-common--get-project-root))
+                                         (fboundp 'ai-project--get-project-root)
+                                         (ai-project--get-project-root))
                                 (ai-context-management--get-full-project-context))
                             (error nil)))
          (project-root (condition-case-unless-debug nil
-                           (ai-common--get-project-root)
+                           (ai-project--get-project-root)
                          (error nil)))
          (project-summary-index (condition-case-unless-debug nil
                                     (when (and (boundp 'ai-context-management--project-files-summary-index) project-root)

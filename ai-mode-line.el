@@ -20,7 +20,7 @@
 ;; GNU General Public License for more details.
 
 ;; For a full copy of the GNU General Public License
-;; see <https://www.gnu.org/licenses/>.
+;; see https://www.gnu.org/licenses/.
 
 ;;; Commentary:
 ;;
@@ -31,9 +31,9 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'ai-execution)
 (require 'ai-context-management)
 (require 'ai-model-management)
+(require 'ai-progress)
 
 (defcustom ai-mode-line-progress-indicator-enabled t
   "Enable progress indicator for AI requests."
@@ -67,26 +67,41 @@
         (format "%dm%ds" minutes seconds)
       (format "%ds" seconds))))
 
-(defun ai-mode-line-progress-start (&optional message buffer)
+(defun ai-mode-line-progress-start (&optional message buffer total-count current-count operation-type)
   "Start progress indicator animation with optional MESSAGE in specified BUFFER or current buffer."
   (when ai-mode-line-progress-indicator-enabled
     (with-current-buffer (or buffer (current-buffer))
       (setq ai-mode-line-progress-counter 0)
 
-      (cond
-       ((eq ai-mode-line-progress-indicator-style 'spinner)
-        (ai-mode-line-progress-start-spinner))
-       ((eq ai-mode-line-progress-indicator-style 'dots)
-        (ai-mode-line-progress-start-dots))
-       ((eq ai-mode-line-progress-indicator-style 'message)
-        (force-mode-line-update))))))
+      ;; Start timer for spinner and dots styles if not already running
+      (when (and (or (eq ai-mode-line-progress-indicator-style 'spinner)
+                     (eq ai-mode-line-progress-indicator-style 'dots))
+                 (not ai-mode-line-progress-timer))
+        (let ((current-buffer (current-buffer)))
+          (setq ai-mode-line-progress-timer
+                (run-with-timer 0 0.5
+                                (lambda ()
+                                  (when (buffer-live-p current-buffer)
+                                    (with-current-buffer current-buffer
+                                      (when (ai-progress-is-buffer-active-p)
+                                        (setq ai-mode-line-progress-counter (1+ ai-mode-line-progress-counter))
+                                        (force-mode-line-update)))))))))
 
-(defun ai-mode-line-progress-stop (&optional buffer)
+      (force-mode-line-update))))
+
+(defun ai-mode-line-progress-stop (&optional buffer final-processed-count final-total-count operation-type)
   "Stop progress indicator animation in specified BUFFER or current buffer."
   (with-current-buffer (or buffer (current-buffer))
-    (when ai-mode-line-progress-timer
+    (when (and ai-mode-line-progress-timer
+               (not (ai-progress-is-buffer-active-p)))
       (cancel-timer ai-mode-line-progress-timer)
       (setq ai-mode-line-progress-timer nil))
+    (force-mode-line-update)))
+
+(defun ai-mode-line-progress-increment (&optional buffer current-count total-count operation-type)
+  "Handle progress increment for animation updates."
+  (with-current-buffer (or buffer (current-buffer))
+    (setq ai-mode-line-progress-counter (1+ ai-mode-line-progress-counter))
     (force-mode-line-update)))
 
 (defun ai-mode-line-progress-start-spinner ()
@@ -97,10 +112,9 @@
                           (lambda ()
                             (when (buffer-live-p current-buffer)
                               (with-current-buffer current-buffer
-                                (let ((progress-info (ai-execution--get-progress-info)))
-                                  (when (plist-get progress-info :active)
-                                    (setq ai-mode-line-progress-counter (1+ ai-mode-line-progress-counter))
-                                    (force-mode-line-update))))))))))
+                                (when (ai-progress-is-active-p)
+                                  (setq ai-mode-line-progress-counter (1+ ai-mode-line-progress-counter))
+                                  (force-mode-line-update)))))))))
 
 (defun ai-mode-line-progress-start-dots ()
   "Start dots-style progress indicator."
@@ -110,10 +124,9 @@
                           (lambda ()
                             (when (buffer-live-p current-buffer)
                               (with-current-buffer current-buffer
-                                (let ((progress-info (ai-execution--get-progress-info)))
-                                  (when (plist-get progress-info :active)
-                                    (setq ai-mode-line-progress-counter (1+ ai-mode-line-progress-counter))
-                                    (force-mode-line-update))))))))))
+                                (when (ai-progress-is-active-p)
+                                  (setq ai-mode-line-progress-counter (1+ ai-mode-line-progress-counter))
+                                  (force-mode-line-update)))))))))
 
 (defun ai-mode-line-progress-wrap-callback (original-callback &optional buffer)
   "Wrap ORIGINAL-CALLBACK to stop progress indicator when called in specified BUFFER."
@@ -137,26 +150,41 @@
          (project-indicator (ai-mode-line-get-project-context-indicator))
          (cache-indicator (if (bound-and-true-p ai-execution--prompt-caching-enabled) "C" ""))
          (patch-indicator (if (bound-and-true-p ai-execution--replace-action-use-patch) "P" ""))
-         (execution-progress-data (ai-execution--get-progress-info))
-         (progress-indicator (cond
-                              ((and (plist-get execution-progress-data :active)
-                                    (eq ai-mode-line-progress-indicator-style 'spinner))
-                               (let ((spinner-chars ai-mode-line-progress-spinner-chars)
-                                     (elapsed-time (when (plist-get execution-progress-data :start-time)
-                                                     (ai-mode-line-format-elapsed-time (plist-get execution-progress-data :start-time)))))
-                                 (format "%s%s"
-                                         (nth (% ai-mode-line-progress-counter (length spinner-chars)) spinner-chars)
-                                         (if elapsed-time (format ":%s" elapsed-time) ""))))
-                              ((and (plist-get execution-progress-data :active)
-                                    (eq ai-mode-line-progress-indicator-style 'dots))
-                               (let ((elapsed-time (when (plist-get execution-progress-data :start-time)
-                                                     (ai-mode-line-format-elapsed-time (plist-get execution-progress-data :start-time)))))
-                                 (format "%s%s"
-                                         (make-string (% ai-mode-line-progress-counter 4) ?.)
-                                         (if elapsed-time (format ":%s" elapsed-time) ""))))
-                              ((plist-get execution-progress-data :active) "⚡")
-                              (t "")))
-         (context-info (if (plist-get execution-progress-data :active)
+         (progress-info (ai-progress-get-display-info))
+         (batch-progress-data (ai-progress-get-batch-info))
+         (single-progress-data (ai-progress-get-single-info))
+         ;; Create base animation for all progress types
+         (base-animation
+          (cond
+           ((eq ai-mode-line-progress-indicator-style 'spinner)
+            (let ((spinner-chars ai-mode-line-progress-spinner-chars))
+              (nth (% ai-mode-line-progress-counter (length spinner-chars)) spinner-chars)))
+           ((eq ai-mode-line-progress-indicator-style 'dots)
+            (make-string (1+ (% ai-mode-line-progress-counter 3)) ?.))
+           (t "⚡")))
+         (progress-indicator
+          (cond
+           ;; Batch progress
+           ((ai-progress-is-batch-operation-p)
+            (let* ((total (plist-get batch-progress-data :total))
+                   (processed (plist-get batch-progress-data :processed))
+                   (start-time (plist-get batch-progress-data :start-time))
+                   (elapsed-time (when start-time (ai-progress-format-elapsed-time start-time))))
+              (format "%s %s|%s/%s"
+                      base-animation
+                      (or elapsed-time "")
+                      processed
+                      total)))
+           ;; Single request progress
+           ((ai-progress-is-single-request-p)
+            (let* ((start-time (plist-get single-progress-data :start-time))
+                   (elapsed-time (when start-time (ai-progress-format-elapsed-time start-time))))
+              (format "%s %s"
+                      base-animation
+                      (or elapsed-time ""))))
+           ;; No active progress
+           (t "")))
+         (context-info (if (ai-progress-is-buffer-active-p)
                            (format "%s" progress-indicator)
                          (format "%s%s%s|%d/%d"
                                  project-indicator
@@ -175,14 +203,10 @@
   (force-mode-line-update))
 
 (defun ai-mode-line-initialize ()
-  "Initialize AI mode line by registering callbacks with ai-execution."
-  (ai-execution-register-progress-start-callback #'ai-mode-line-progress-start)
-  (ai-execution-register-progress-stop-callback #'ai-mode-line-progress-stop))
-
-;; Create aliases for backward compatibility with existing code
-(defalias 'ai--progress-start #'ai-mode-line-progress-start)
-(defalias 'ai--progress-stop #'ai-mode-line-progress-stop)
-(defalias 'ai--progress-wrap-callback #'ai-mode-line-progress-wrap-callback)
+  "Initialize AI mode line by registering callbacks with ai-progress."
+  (ai-progress-register-start-callback #'ai-mode-line-progress-start)
+  (ai-progress-register-stop-callback #'ai-mode-line-progress-stop)
+  (ai-progress-register-increment-callback #'ai-mode-line-progress-increment))
 
 (when (require 'doom-modeline nil 'noerror)
 

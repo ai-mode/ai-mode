@@ -47,6 +47,7 @@
 (require 'ai-context-management)
 (require 'ai-command-management)
 (require 'ai-usage)
+(require 'ai-progress)
 
 (defgroup ai-completions nil
   "AI code completion tool for Emacs."
@@ -320,7 +321,7 @@ STRATEGY may alter the completion behavior."
     (message (format "Attempting to execute backend for action \"%s\"" (ai-utils-escape-format-specifiers action-type)))
 
     ;; Start progress indicator
-    (ai-execution--progress-start (format "Completing with %s" (map-elt execution-model :name)) buffer)
+    (ai-progress-start-single-request (format "Completing with %s" (map-elt execution-model :name)) buffer)
 
     (funcall execution-backend
              execution-context
@@ -373,7 +374,7 @@ STRATEGY may alter the completion behavior."
 (defun ai-completions--abort ()
   "Abort the completion process."
   (interactive)
-  (ai-execution--progress-stop)
+  (ai-progress-stop-single-request)
   (ai-completions--reset-variables-to-defaults)
   (ai-completions--cancel))
 
@@ -386,7 +387,7 @@ STRATEGY may alter the completion behavior."
 
 (defun ai-completions--cancel ()
   "Cancel the ongoing completion process, resetting the state."
-  (ai-execution--progress-stop)
+  (ai-progress-stop-single-request)
   (ai-completions--preview-hide)
   (ai-completions--clear-buffer-clone)
   (setq-local ai-completions--current-candidate 0
