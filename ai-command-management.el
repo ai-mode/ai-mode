@@ -219,7 +219,7 @@ Commands are collected from all instruction locations but not from ai-command-ma
                 (let ((command-name (ai-command-management--filename-to-command-name file)))
                   ;; Add to list if not configured and not already seen
                   (unless (or (member command-name configured-commands)
-                             (gethash command-name commands-set))) ; Fix: Added missing ')' to close the 'or' condition.
+                             (gethash command-name commands-set)))
                     (puthash command-name t commands-set)
                     (push command-name file-commands))))))))
 
@@ -443,7 +443,6 @@ If no instructions are found for COMMAND, returns nil."
 
 (defun ai-command-management--get-command ()
   "Prompt the user to select the command using `completing-read`."
-  (interactive)
   (let* ((all-commands (ai-command-management--get-ordered-command-names))
          (command-displays (mapcar #'ai-command-management--get-command-display-name all-commands))
          (command-alist (cl-mapcar #'cons command-displays all-commands))
@@ -453,7 +452,6 @@ If no instructions are found for COMMAND, returns nil."
 
 (defun ai-command-management--get-informational-command ()
   "Prompt the user to select an informational command, filtering by :result-action 'show'."
-  (interactive)
   (let* ((configured-show-commands
           (mapcar #'car
                   (cl-remove-if-not
@@ -470,7 +468,6 @@ If no instructions are found for COMMAND, returns nil."
 
 (defun ai-command-management--get-executable-command ()
   "Prompt the user to select an executable command, filtering by :result-action 'eval'."
-  (interactive)
   (let* ((eval-commands
           (mapcar #'car
                   (cl-remove-if-not
@@ -489,7 +486,6 @@ If no instructions are found for COMMAND, returns nil."
 
 (defun ai-command-management--get-command-unrestricted ()
   "Prompt the user to select any available command without restrictions."
-  (interactive)
   (ai-command-management--get-command))
 
 (defun ai-command-management--get-command-for-editing ()

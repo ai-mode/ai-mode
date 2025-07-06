@@ -104,16 +104,33 @@
 ;; - C-c i c c - Start AI chat session
 ;; - C-c i c m - Change AI model (alias)
 ;; - C-c i p c - Execute AI coordinator (smart completion)
-;; - C-c i e i - Edit command instructions
+;;
+;; Command Management (prefix C-c i m):
+;; - C-c i m e - Edit command instructions
+;; - C-c i m d - Describe command modifiers
 ;; - C-c i m c - Create command with modifiers
-;; - C-c i p s - Switch project context mode
-;; - C-c i u   - Update project files summary index
-;; - C-c i t   - Toggle indexing context
-;; - C-c i R   - Reindex project with context
-;; - C-c i S   - Switch indexing strategy
-;; - C-c i v   - Select index version
-;; - C-c i l   - List index versions
-;; - C-c i d   - Delete old index versions
+;;
+;; Context Management (prefix C-c i k):
+;; - C-c i k a - Add to context pool
+;; - C-c i k c - Clear context pool
+;; - C-c i k s - Switch project context mode
+;; - C-c i k b - Add buffer-bound prompts
+;; - C-c i k B - Clear buffer-bound prompts
+;; - C-c i k m - Add to global memory
+;; - C-c i k M - Clear global memory
+;;
+;; Execution Control (prefix C-c i e):
+;; - C-c i e c - Toggle prompt caching
+;; - C-c i e p - Toggle replace action patch mode
+;;
+;; Indexing (prefix C-c i i):
+;; - C-c i i u - Update project files summary index
+;; - C-c i i t - Toggle indexing context
+;; - C-c i i R - Reindex project with context
+;; - C-c i i s - Switch indexing strategy
+;; - C-c i i v - Select index version
+;; - C-c i i l - List index versions
+;; - C-c i i d - Delete old index versions
 ;;
 ;; Project Context Modes:
 ;; - disabled: No project context included
@@ -167,31 +184,41 @@
 
 (defvar ai-command-map
   (let ((keymap (make-sparse-keymap)))
+    ;; Main commands
     (define-key keymap (kbd "c c") 'ai-chat)
     (define-key keymap (kbd "c m") 'ai-change-model)
-    (define-key keymap (kbd "f") 'ai--switch-file-instructions-enabled)
     (define-key keymap (kbd "p c") 'ai-perform-coordinator)
     (define-key keymap (kbd "r") 'ai-perform)
     (define-key keymap (kbd "s") 'ai-show)
     (define-key keymap (kbd "x") 'ai-execute)
-    (define-key keymap (kbd "b a") 'ai-common--add-buffer-bound-prompts)
-    (define-key keymap (kbd "b c") 'ai-common--clear-buffer-bound-prompts)
-    (define-key keymap (kbd "m a") 'ai-common--add-to-global-memory)
-    (define-key keymap (kbd "m c") 'ai-common--clear-global-memory)
-    (define-key keymap (kbd "a c") 'ai-common--add-to-context-pool)
-    (define-key keymap (kbd "p s") 'ai-context-management--switch-project-context-mode)
-    (define-key keymap (kbd "u") 'ai-index-update)
-    (define-key keymap (kbd "e i") 'ai-command-management-edit-command-instructions)
-    (define-key keymap (kbd "m d") 'ai-command-management-describe-command-modifiers)
-    (define-key keymap (kbd "m c") 'ai-command-management-create-modified-command)
-    (define-key keymap (kbd "t") 'ai-index-toggle-context)
-    (define-key keymap (kbd "R") 'ai-index-reindex-with-context)
-    (define-key keymap (kbd "S") 'ai-index-switch-strategy)
-    (define-key keymap (kbd "v") 'ai-index-select-version)
-    (define-key keymap (kbd "l") 'ai-index-list-versions)
-    (define-key keymap (kbd "D") 'ai-index-delete-old-versions)
-    (define-key keymap (kbd "c t") 'ai-execution--toggle-prompt-caching)
-    (define-key keymap (kbd "p t") 'ai-execution--toggle-replace-action-use-patch)
+
+    ;; Command management (prefix: m)
+    (define-key keymap (kbd "m e") 'ai-command-edit-instructions)
+    (define-key keymap (kbd "m d") 'ai-command-describe-modifiers)
+    (define-key keymap (kbd "m c") 'ai-command-create-modified)
+
+    ;; Context management (prefix: k)
+    (define-key keymap (kbd "k a") 'ai-context-add-to-pool)
+    (define-key keymap (kbd "k c") 'ai-context-clear-pool)
+    (define-key keymap (kbd "k s") 'ai-context-switch-project-mode)
+    (define-key keymap (kbd "k b") 'ai-context-add-buffer-prompts)
+    (define-key keymap (kbd "k B") 'ai-context-clear-buffer-prompts)
+    (define-key keymap (kbd "k m") 'ai-context-add-to-memory)
+    (define-key keymap (kbd "k M") 'ai-context-clear-memory)
+
+    ;; Execution control (prefix: e)
+    (define-key keymap (kbd "e c") 'ai-execution-toggle-caching)
+    (define-key keymap (kbd "e p") 'ai-execution-toggle-patch-mode)
+
+    ;; Indexing (prefix: i)
+    (define-key keymap (kbd "i u") 'ai-indexing-update)
+    (define-key keymap (kbd "i t") 'ai-indexing-toggle-context)
+    (define-key keymap (kbd "i R") 'ai-indexing-reindex-with-context)
+    (define-key keymap (kbd "i s") 'ai-indexing-switch-strategy)
+    (define-key keymap (kbd "i v") 'ai-indexing-select-version)
+    (define-key keymap (kbd "i l") 'ai-indexing-list-versions)
+    (define-key keymap (kbd "i d") 'ai-indexing-delete-old-versions)
+
     keymap)
   "Keymap for AI commands.")
 
@@ -273,6 +300,7 @@ See the package commentary for detailed usage instructions."
   "Initialize prompt caches."
   (ai-prompt-management--update-caches))
 
+;; Core command aliases
 (defun ai-change-model (&optional model-name)
   "Change the current AI model/backend.
 
@@ -307,38 +335,107 @@ Otherwise, prompt the user to select from available models."
   (interactive)
   (ai-core-debug))
 
-;; Indexing command aliases
-(defun ai-index-update ()
+;; Command management aliases (prefix: ai-command-)
+(defun ai-command-edit-instructions ()
+  "Edit instruction files for commands with improved interface."
+  (interactive)
+  (ai-command-management-edit-command-instructions))
+
+(defun ai-command-describe-modifiers ()
+  "Interactively describe modifiers for a selected command."
+  (interactive)
+  (ai-command-management-describe-command-modifiers))
+
+(defun ai-command-create-modified ()
+  "Interactively create a new file-based command with modifiers."
+  (interactive)
+  (ai-command-management-create-modified-command))
+
+;; Context management aliases (prefix: ai-context-)
+(defun ai-context-add-to-pool ()
+  "Capture user input and add it to the context pool."
+  (interactive)
+  (ai-context-management--capture-user-input))
+
+(defun ai-context-clear-pool ()
+  "Clear the temporary context pool."
+  (interactive)
+  (ai-context-management--clear-context-pool))
+
+(defun ai-context-switch-project-mode ()
+  "Interactively switch the project context mode."
+  (interactive)
+  (ai-context-management--switch-project-context-mode))
+
+(defun ai-context-add-buffer-prompts ()
+  "Add buffer-specific instructions from region or user input."
+  (interactive)
+  (ai-context-management--add-buffer-bound-prompts
+   (if (region-active-p)
+       (buffer-substring-no-properties (region-beginning) (region-end))
+     (read-string "Enter buffer bound prompt: "))))
+
+(defun ai-context-clear-buffer-prompts ()
+  "Clear all buffer-specific instructions."
+  (interactive)
+  (ai-context-management--clear-buffer-bound-prompts))
+
+(defun ai-context-add-to-memory ()
+  "Add content to global memory context."
+  (interactive)
+  (ai-context-management--add-to-global-memory
+   (if (region-active-p)
+       (buffer-substring-no-properties (region-beginning) (region-end))
+     (read-string "Enter instruction: "))))
+
+(defun ai-context-clear-memory ()
+  "Clear the global memory context."
+  (interactive)
+  (ai-context-management--clear-global-memory))
+
+;; Execution control aliases (prefix: ai-execution-)
+(defun ai-execution-toggle-caching ()
+  "Toggle prompt caching for AI requests."
+  (interactive)
+  (ai-execution--toggle-prompt-caching))
+
+(defun ai-execution-toggle-patch-mode ()
+  "Toggle unified patch mode for replace actions."
+  (interactive)
+  (ai-execution--toggle-replace-action-use-patch))
+
+;; Indexing aliases (prefix: ai-indexing-)
+(defun ai-indexing-update ()
   "Update the project files summary index."
   (interactive)
   (ai-mode-indexing-update-project-files-summary-index))
 
-(defun ai-index-toggle-context ()
+(defun ai-indexing-toggle-context ()
   "Toggle inclusion of existing context in indexing process."
   (interactive)
   (ai-mode-indexing-toggle-indexing-context))
 
-(defun ai-index-reindex-with-context ()
+(defun ai-indexing-reindex-with-context ()
   "Reindex the entire project with existing context enabled."
   (interactive)
   (ai-mode-indexing-reindex-project-with-context))
 
-(defun ai-index-switch-strategy ()
+(defun ai-indexing-switch-strategy ()
   "Interactively switch the indexing strategy."
   (interactive)
   (ai-mode-indexing-switch-indexing-strategy))
 
-(defun ai-index-select-version ()
+(defun ai-indexing-select-version ()
   "Interactively select and load an index version for the current project."
   (interactive)
   (ai-mode-indexing-select-index-version))
 
-(defun ai-index-list-versions ()
+(defun ai-indexing-list-versions ()
   "List all available index versions for the current project."
   (interactive)
   (ai-mode-indexing-list-index-versions))
 
-(defun ai-index-delete-old-versions ()
+(defun ai-indexing-delete-old-versions ()
   "Interactively delete old index versions beyond retention depth."
   (interactive)
   (ai-mode-indexing-delete-old-index-versions))

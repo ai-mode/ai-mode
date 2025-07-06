@@ -223,7 +223,6 @@ Maps project root paths to lists of file summary structs.")
 
 (defun ai-context-management--get-buffer-path (buffer)
   "Return the file path associated with the BUFFER, or nil if none."
-  (interactive)
   (with-current-buffer buffer
     (if (projectile-project-p)
         (let ((project-root (projectile-project-root))
@@ -361,7 +360,6 @@ INPUT can be entered by the user or taken from the active region."
 
 (defun ai-context-management--clear-buffer-bound-prompts ()
   "Clear all buffer-specific instructions."
-  (interactive)
   (with-current-buffer (current-buffer)
     (message "AI buffer context cleared")
     (setq-local ai-context-management--buffer-bound-prompts nil)))
@@ -385,7 +383,6 @@ INPUT can be entered by the user or taken from the active region."
 
 (defun ai-context-management--clear-global-system-prompts ()
   "Clear all global system instructions."
-  (interactive)
   (with-current-buffer (current-buffer)
     (setq ai-context-management--global-system-prompts nil)))
 
@@ -395,7 +392,6 @@ INPUT can be entered by the user or taken from the active region."
 
 (defun ai-context-management--clear-context-pool ()
   "Clear the temporary context pool."
-  (interactive)
   (setq ai-context-management--context-pool nil)
   (message "Clear context pool"))
 
@@ -428,7 +424,6 @@ Returns a string representation of the item for user selection."
 
 (defun ai-context-management--remove-from-context-pool ()
   "Remove selected item from context pool via minibuffer selection."
-  (interactive)
   (if (null ai-context-management--context-pool)
       (message "Context pool is empty")
     (let* ((items-with-display (mapcar (lambda (item)
@@ -446,19 +441,16 @@ Returns a string representation of the item for user selection."
 
 (defun ai-context-management--capture-region-snippet ()
   "Create a snippet from the region and add it to the context pool."
-  (interactive)
   (let ((snippet (ai-common--make-snippet-from-region)))
     (when snippet
       (ai-context-management--add-to-context-pool snippet))))
 
 (defun ai-context-management--capture-user-input ()
   "Capture user input and add it to the context pool."
-  (interactive)
   (ai-context-management--add-to-context-pool (ai-context-management--get-user-input-struct)))
 
 (defun ai-context-management--capture-file-context ()
   "Adds the entire file content to the context pool."
-  (interactive)
   (let ((file-context (ai-common--make-file-context-from-buffer)))
     (ai-context-management--add-to-context-pool file-context)
     (message "File content added to context pool.")))
@@ -781,7 +773,6 @@ Returns a typed struct containing the appropriate project context, or nil if dis
 (defun ai-context-management--switch-project-context-mode ()
   "Interactively switch the project context mode.
 Allows user to select between different project context inclusion modes."
-  (interactive)
   (let* ((current-mode ai-context-management--project-context-mode)
          (modes '(("disabled" . disabled)
                   ("full-project" . full-project)

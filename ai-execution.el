@@ -58,7 +58,6 @@ replace the selected content."
 
 (defun ai-execution--toggle-prompt-caching ()
   "Toggle prompt caching for AI requests."
-  (interactive)
   (setq ai-execution--prompt-caching-enabled (not ai-execution--prompt-caching-enabled))
   (customize-save-variable 'ai-execution--prompt-caching-enabled ai-execution--prompt-caching-enabled)
   (message "Prompt caching %s"
@@ -66,7 +65,6 @@ replace the selected content."
 
 (defun ai-execution--toggle-replace-action-use-patch ()
   "Toggle unified patch mode for replace actions."
-  (interactive)
   (setq ai-execution--replace-action-use-patch (not ai-execution--replace-action-use-patch))
   (customize-save-variable 'ai-execution--replace-action-use-patch ai-execution--replace-action-use-patch)
   (message "Replace action patch mode %s"

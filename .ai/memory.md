@@ -22,3 +22,4 @@
 *   **`ai-utils.el`**: Contains general-purpose utility functions that do not fit into other specific categories, such as logging, HTTP request handling, basic buffer manipulation, and string templating.
 *   **`ai-telemetry.el`**: Handles the collection and reporting of telemetry data for usage statistics and performance monitoring.
 *   **`ai-network.el`**: Manages network communication and connectivity for AI mode, including HTTP request handling, connection pooling, retry logic, timeout management, and network-related error handling for AI service interactions.
+*   **`ai-progress.el`**: Manages progress tracking business logic for long-running AI operations, including progress state management, cancellation support, and data structures for tracking AI request progress.
