@@ -389,7 +389,8 @@ Now supports modifier parsing for file-based commands with instruction files."
         ;; Regular command without instructions - use base configuration
         (let ((base-config (append ai-command-management-command-config `(:command ,command))))
           (if default-result-action
-              (plist-put base-config :result-action default-result-action)
+              (progn
+                (plist-put base-config :result-action default-result-action))
             base-config))))))
 
 (defun ai-command-management--get-rendered-command-instructions (command context)
@@ -446,9 +447,10 @@ If no instructions are found for COMMAND, returns nil."
   (let* ((all-commands (ai-command-management--get-ordered-command-names))
          (command-displays (mapcar #'ai-command-management--get-command-display-name all-commands))
          (command-alist (cl-mapcar #'cons command-displays all-commands))
-         (selected-display (completing-read ai-command-management-command-prompt command-displays))
+         (selected-display (completing-read ai-command-management-command-prompt command-displays nil nil))
          (selected-command (cdr (assoc selected-display command-alist))))
-    selected-command))
+    ;; If command is not found in alist, return the input as-is
+    (or selected-command selected-display)))
 
 (defun ai-command-management--get-informational-command ()
   "Prompt the user to select an informational command, filtering by :result-action 'show'."
@@ -462,9 +464,10 @@ If no instructions are found for COMMAND, returns nil."
          (all-commands (ai-command-management--get-ordered-command-names))
          (command-displays (mapcar #'ai-command-management--get-command-display-name all-commands))
          (command-alist (cl-mapcar #'cons command-displays all-commands))
-         (selected-display (completing-read ai-command-management-command-prompt command-displays))
+         (selected-display (completing-read ai-command-management-command-prompt command-displays nil nil))
          (selected-command (cdr (assoc selected-display command-alist))))
-    selected-command))
+    ;; If command is not found in alist, return the input as-is
+    (or selected-command selected-display)))
 
 (defun ai-command-management--get-executable-command ()
   "Prompt the user to select an executable command, filtering by :result-action 'eval'."
@@ -476,9 +479,10 @@ If no instructions are found for COMMAND, returns nil."
                    ai-command-management-commands-config-map)))
          (command-displays (mapcar #'ai-command-management--get-command-display-name eval-commands))
          (command-alist (cl-mapcar #'cons command-displays eval-commands))
-         (selected-display (completing-read ai-command-management-command-prompt command-displays))
+         (selected-display (completing-read ai-command-management-command-prompt command-displays nil nil))
          (selected-command (cdr (assoc selected-display command-alist))))
-    selected-command))
+    ;; If command is not found in alist, return the input as-is
+    (or selected-command selected-display)))
 
 (defun ai-command-management--get-all-available-commands ()
   "Get all available commands including those from config and additional actions."
