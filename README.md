@@ -16,12 +16,15 @@
   - [Interactive AI Chat](#interactive-ai-chat)
   - [Code Manipulation](#code-manipulation)
   - [System & Session Context Management](#system--session-context-management)
+  - [Execution Control](#execution-control)
   - [Extending AI Mode with Custom Commands](#extending-ai-mode-with-custom-commands)
   - [Other Commands](#other-commands)
 - [Debugging & Introspection](#debugging--introspection)
 - [Understanding AI Context](#understanding-ai-context)
 - [Customization Options](#customization-options)
+- [File Structure Overview](#file-structure-overview)
 - [Related Projects](#related-projects)
+- [Legal Notice](#legal-notice)
 
 ## Overview
 
@@ -40,6 +43,7 @@ AI mode for Emacs is a comprehensive package that integrates powerful artificial
 -   **Customizable Commands**: Tailor AI operations to your specific development needs by defining custom commands and integrating them seamlessly into your Emacs setup.
 -   **Flexible Context Management**: Manage global, buffer-local, and temporary context pools, ensuring the AI receives precise and relevant information, including project-wide context via indexing.
 -   **Real-time Previews & Progress Indicators**: Get instant visual feedback for completions and track the progress of ongoing AI requests.
+-   **Structured Request Auditing**: Detailed logging of AI requests, contexts, and responses for debugging, performance analysis, and security auditing.
 
 Whether you're debugging complex code, exploring new technologies, or enhancing your documentation, AI mode provides the tools to accelerate your productivity and enhance your Emacs experience.
 
@@ -260,26 +264,39 @@ These commands manage global and buffer-local system instructions and temporary 
 
 | Command | Description |
 |---|---|
-| `ai-context-management--add-to-global-memory` | Add content (from region or user input) to the global memory context, accessible across all buffers. |
-| `ai-context-management--clear-global-memory` | Clear all entries from the global memory context. |
-| `ai-context-management--add-buffer-bound-prompts` | Add content (from region or user input) as buffer-specific instructions, affecting only the current buffer. |
-| `ai-context-management--clear-buffer-bound-prompts` | Clear all buffer-specific instructions for the current buffer. |
-| `ai-context-management--add-global-system-prompts` | Add content (from region or user input) to global system prompts, defining fundamental AI behavior. |
-| `ai-context-management--clear-global-system-prompts` | Clear all global system prompts. |
-| `ai-context-management--add-to-context-pool` | Manually add a data item (e.g., snippet, user input, file context) to the temporary context pool for the current interaction. |
-| `ai-context-management--clear-context-pool` | Clear the temporary context pool for the current interaction. |
-| `ai-context-management--capture-region-snippet` | Creates a snippet from the active region and adds it to the temporary context pool. |
-| `ai-context-management--capture-user-input` | Prompts for user input and adds it to the temporary context pool. |
-| `ai-context-management--capture-file-context` | Adds the entire content of the current file to the temporary context pool. |
-| `ai-context-management--switch-project-context-mode` | Interactively switch the project context inclusion mode (disabled, full files, or summary index). |
-| `ai-mode-indexing-update-project-files-summary-index` | Generate and update the AI-powered summary index for all project files. |
-| `ai-mode-indexing-switch-indexing-strategy` | Interactively switch the project indexing strategy (parallel-independent or sequential). |
-| `ai-mode-indexing-select-index-version` | Interactively select and load a specific historical project index version. |
-| `ai-mode-indexing-list-index-versions` | List all available project index versions for the current project. |
-| `ai-mode-indexing-delete-old-index-versions` | Delete old project index versions beyond the configured retention depth. |
-| `ai-mode-indexing-toggle-indexing-context` | Toggle inclusion of existing context when indexing new files. |
-| `ai-mode-indexing-reindex-project-with-context` | Reindex the entire project with existing context enabled. |
-| `ai-completions--add-instruction` | Add a temporary, user-provided instruction to the current AI completion query. |
+| `ai-context-add-to-pool` (C-c i k a) | Manually add a data item (e.g., snippet, user input, file context) to the temporary context pool for the current interaction. |
+| `ai-context-add-region` (C-c i k r) | Creates a snippet from the active region and adds it to the temporary context pool. |
+| `ai-context-add-file` (C-c i k f) | Adds the entire content of the current file to the temporary context pool. |
+| `ai-context-clear-pool` (C-c i k c) | Clear the temporary context pool for the current interaction. |
+| `ai-context-remove-from-pool` (C-c i k x) | Remove selected item from context pool via minibuffer selection. |
+| `ai-context-switch-project-mode` (C-c i k s) | Interactively switch the project context inclusion mode (disabled, full files, or summary index). |
+| `ai-context-add-buffer-prompts` (C-c i k b) | Add content (from region or user input) as buffer-specific instructions, affecting only the current buffer. |
+| `ai-context-clear-buffer-prompts` (C-c i k B) | Clear all buffer-specific instructions for the current buffer. |
+| `ai-context-add-to-memory` (C-c i k m) | Add content (from region or user input) to the global memory context, accessible across all buffers. |
+| `ai-context-clear-memory` (C-c i k M) | Clear all entries from the global memory context. |
+| `ai-mode-indexing-update-project-files-summary-index` (C-c i i u) | Generate and update the AI-powered summary index for all project files. |
+| `ai-mode-indexing-switch-indexing-strategy` (C-c i i s) | Interactively switch the project indexing strategy (parallel-independent or sequential). |
+| `ai-mode-indexing-select-index-version` (C-c i i v) | Interactively select and load a specific historical project index version. |
+| `ai-mode-indexing-list-index-versions` (C-c i i l) | List all available project index versions for the current project. |
+| `ai-mode-indexing-delete-old-index-versions` (C-c i i d) | Delete old project index versions beyond the configured retention depth. |
+| `ai-mode-indexing-toggle-indexing-context` (C-c i i t) | Toggle inclusion of existing context when indexing new files. |
+| `ai-mode-indexing-reindex-project-with-context` (C-c i i R) | Reindex the entire project with existing context enabled. |
+| `ai-completions--add-instruction` (C-a during completion) | Add a temporary, user-provided instruction to the current AI completion query. |
+
+### Execution Control
+
+These commands provide fine-grained control over how AI requests are executed and how their results are handled.
+
+| Command | Keybinding (default) | Description |
+|---|---|---|
+| `ai-execution-toggle-caching` | `C-c i e c` | Toggle prompt caching for AI requests. When enabled, AI providers that support it may cache prompts to reduce token usage and improve response times for repetitive queries. |
+| `ai-execution-toggle-patch-mode` | `C-c i e p` | Toggle unified patch mode for `replace` actions. When enabled, AI models generate a standard `diff -u` patch, which is then applied to the buffer. When disabled, the AI's response directly replaces the selected content. |
+| `ai-request-audit-toggle` (M-x) | `M-x ai-request-audit-toggle` | Toggle the comprehensive request auditing system on/off. When enabled, detailed request/response data is saved to disk for debugging and review. |
+| `ai-request-audit-cleanup-project` (M-x) | `M-x ai-request-audit-cleanup-project` | Delete all audit records for the current project. |
+| `ai-telemetry-toggle` (M-x) | `M-x ai-telemetry-toggle` | Toggle general telemetry collection (usage statistics, performance metrics) on/off. |
+| `ai-telemetry-toggle-log-buffer` (M-x) | `M-x ai-telemetry-toggle-log-buffer` | Toggle logging of AI requests and responses to the `*AI-request-log*` buffer. |
+| `ai-telemetry-toggle-prompt-buffer` (M-x) | `M-x ai-telemetry-toggle-prompt-buffer` | Toggle writing the full prompt sent to the AI to the `*AI prompt*` buffer (useful for debugging prompt composition). |
+| `ai-usage-toggle` (M-x) | `M-x ai-usage-toggle` | Toggle token usage statistics collection on/off. |
 
 ### Extending AI Mode with Custom Commands
 
@@ -356,17 +373,17 @@ You can also create a dedicated instruction file for this command in your `.ai/c
 
 | Command | Description |
 |---|---|
-| `ai-command-management-edit-command-instructions` | Interactively edit instruction files for commands. Prompts to select an existing command or enter a new one, then selects a location (global or local project) to edit/create the instruction file. |
-| `ai-command-management-describe-command-modifiers` | Interactively describe the modifiers applied to a selected file-based command, explaining their effect on command behavior and context. |
-| `ai-command-management-create-modified-command` | Interactively create a new file-based command name by composing a base name with various action, behavior, and context modifiers. Offers to create an instruction file. |
+| `ai-command-management-edit-command-instructions` (C-c i m e) | Interactively edit instruction files for commands. Prompts to select an existing command or enter a new one, then selects a location (global or local project) to edit/create the instruction file. |
+| `ai-command-management-describe-command-modifiers` (C-c i m d) | Interactively describe the modifiers applied to a selected file-based command, explaining their effect on command behavior and context. |
+| `ai-command-management-create-modified-command` (C-c i m c) | Interactively create a new file-based command name by composing a base name with various action, behavior, and context modifiers. Offers to create an instruction file. |
 
 ### Other Commands
 
-| Command | Description |
-|---|---|
-| `ai-chat` | Start an interactive chat session with the AI. |
-| `ai-change-model` | Interactively select and switch the active AI model/backend for current requests. |
-| `ai--switch-file-instructions-enabled` | Toggle the loading of project-specific AI instruction files (from `.ai/` directories). |
+| Command | Keybinding (default) | Description |
+|---|---|---|
+| `ai-chat` | `C-c i c c` | Start an interactive chat session with the AI. |
+| `ai-change-model` | `C-c i c m` | Interactively select and switch the active AI model/backend for current requests. |
+| `ai-core-show-audit` | `M-x ai-core-show-audit` | Show a list of all historical AI requests for the current project, including their status, command, and execution time. |
 
 ## Debugging & Introspection
 
@@ -442,9 +459,9 @@ AI Mode provides several important customizable variables to tailor its behavior
 | `ai-command-management-commands-config-map` | An association list mapping AI commands to their configurations. | (See definition in `ai-command-management.el`) |
 | `ai-execution--prompt-caching-enabled` | Enable prompt caching for AI requests. | `nil` |
 | `ai-execution--replace-action-use-patch` | Use unified patch format for replace actions instead of direct replacement. | `nil` |
-| `ai-common-ignore-file-name` | Name of the AI ignore file, typically in the project root. | `".ai-ignore"` |
-| `ai-common-global-ignore-patterns` | Global hardcoded ignore patterns that are always applied. | (See definition in `ai-common.el`) |
-| `ai-common-global-ignore-files` | List of global ignore files to be processed (e.g., `~/.global-gitignore`). | (See definition in `ai-common.el`) |
+| `ai-project-ignore-file-name` | Name of the AI ignore file, typically in the project root. | `".ai-ignore"` |
+| `ai-project-global-ignore-patterns` | Global hardcoded ignore patterns that are always applied. | (See definition in `ai-project.el`) |
+| `ai-project-global-ignore-files` | List of global ignore files to be processed (e.g., `~/.global-gitignore`). | (See definition in `ai-project.el`) |
 | **Project Context & Indexing Settings** | | |
 | `ai-context-management--project-context-mode` | Project context inclusion mode: `disabled`, `full-project` (all filtered files), or `project-ai-summary` (AI-generated summaries). | `disabled` |
 | `ai-mode-indexing--include-existing-context` | Include context from already indexed files when indexing new files. | `t` |
@@ -469,7 +486,7 @@ AI Mode provides several important customizable variables to tailor its behavior
 | **Logging & Debugging Settings** | | |
 | `ai-telemetry-enabled` | Enable telemetry collection for AI mode. | `t` |
 | `ai-telemetry-write-log-buffer` | If non-nil, enables logging of AI requests and responses to `*AI-request-log*` buffer. | `nil` |
-| `ai-telemetry-verbose-log` | If non-nil, enables verbose logging for AI utilities. | `nil` |
+| `ai-logging-verbose-log` | If non-nil, enables verbose logging for AI utilities. | `nil` |
 | `ai-telemetry-write-to-prompt-buffer` | If non-nil, writes the full prompt sent to the AI to `*AI prompt*` buffer. | `nil` |
 | `ai-network--default-request-timeout` | Default timeout for HTTP requests in seconds. | `60` |
 | `ai-debug-truncate-content` | Whether to truncate long content in debug buffers for performance. | `t` |
@@ -478,6 +495,43 @@ AI Mode provides several important customizable variables to tailor its behavior
 | `ai-debug-max-list-items` | Maximum number of list items to display in debug buffers. | `100` |
 | `ai-debug-max-plist-lines` | Maximum number of property list lines to display in debug buffers. | `40` |
 | `ai-usage-enabled` | Enable usage statistics collection for AI mode. | `t` |
+| `ai-request-audit-enabled` | Enable structured request auditing for AI mode. | `t` |
+| `ai-request-audit-max-records` | Maximum number of audit records to keep per project. | `100` |
+| `ai-request-audit-cleanup-old-records` | Automatically cleanup old audit records when `max-records` is exceeded. | `t` |
+
+## File Structure Overview
+
+The `ai-mode` package is composed of several `.el` files, each responsible for a specific set of functionalities. This modular design enhances maintainability and allows for independent development and testing of features.
+
+| File | Description |
+|---|---|
+| `Eask` | Manages package metadata, dependencies, and source files for `ai-mode` building and installation. |
+| `ai.el` | The core package file. It defines the main `ai` group and provides the foundational namespace for the entire AI mode system. |
+| `ai-chat.el` | Implements the interactive AI chat interface using `comint-mode`, handling dialogues, session history, and AI response display. |
+| `ai-command-management.el` | Defines, parses, loads, and dispatches AI commands. Manages instruction file loading, caching, and modifier parsing. |
+| `ai-common.el` | Contains core AI primitives and general data structures like `typed-struct`. Provides basic operations on these structures, such as creation and update. |
+| `ai-completions.el` | Implements AI-powered code completion, managing suggestion requests, session management, and applying completions. |
+| `ai-context-management.el` | Centralizes the collection, structuring, and storage of context for AI requests, including buffer-specific context, region snippets, and assembly of full execution contexts. |
+| `ai-core.el` | Serves as the central orchestrator and primary location for fundamental AI-mode logic, coordinating calls between different modules. |
+| `ai-debug.el` | Provides visual tools for debugging and introspecting AI states, including prompt composition, execution context, and model configuration. |
+| `ai-execution.el` | Manages AI request execution and asynchronous interaction with AI backends, handling success and failure callbacks. |
+| `ai-logging.el` | Provides logging utilities for AI mode, including message logging, verbose control, and request/response logging. |
+| `ai-mode-adapter-api.el` | Provides a standardized, type-safe API for `ai-mode` to interact with external AI backends, handling message preparation and content extraction. |
+| `ai-mode-indexing.el` | Manages the project indexing system for AI, encompassing file summary generation, persistence, and versioning. |
+| `ai-mode-line.el` | Provides mode line utilities and indicators for AI mode, including progress tracking, status displays, and integration with doom-modeline. |
+| `ai-mode.el` | Defines the `ai-mode` minor mode, manages the overall UI interaction flow, feature integration, and top-level settings. |
+| `ai-model-management.el` | Responsible for configuring, selecting, and managing available AI models and their providers. |
+| `ai-network.el` | Manages network communication and connectivity for AI mode, including HTTP request handling, connection pooling, retry logic, timeout management, and network-related error handling for AI service interactions. |
+| `ai-progress.el` | Manages progress tracking business logic for long-running AI operations, including progress state management, cancellation support, and data structures for tracking AI request progress. |
+| `ai-project.el` | Contains project management utilities for AI mode, including project root detection, file filtering by ignore patterns, and creating project-related data structures. |
+| `ai-prompt-management.el` | Manages the creation, assembly, rendering, and caching of prompts and instructions for AI models. |
+| `ai-request-audit.el` | Provides a structured request auditing system for AI mode, including structured storage of request/response data, unique request identification and tracking, and project-based audit organization. |
+| `ai-response-processors.el` | Contains functions for processing and handling responses from AI models, including text extraction, formatting, display, and callback creation for various response insertion and replacement strategies. |
+| `ai-structs.el` | Contains formal definitions of all common data structures (e.g., `typed-struct` and its derived types) used throughout AI-mode. This file is primarily for data structure definitions. |
+| `ai-telemetry.el` | Handles the collection and reporting of telemetry data for usage statistics and performance monitoring. |
+| `ai-usage.el` | Handles usage statistics and token counting for AI mode, including token usage tracking and reporting, and session statistics management. |
+| `ai-user-input.el` | Provides user input utilities for AI mode, including various methods for collecting multiline input from users. |
+| `ai-utils.el` | Contains general-purpose utility functions that do not fit into other specific categories, such as logging, HTTP request handling, basic buffer manipulation, and string templating. |
 
 ## Related Projects
 
