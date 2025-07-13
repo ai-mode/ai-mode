@@ -256,6 +256,20 @@
 (defvar-local ai-chat--progress-start-time nil
   "Start time of the current AI request.")
 
+;; Context providers registry
+(defvar ai-chat--providers nil
+  "List of context provider functions with priorities for AI chat.
+Each element is a cons cell (PRIORITY . PROVIDER-FUNCTION).
+PRIORITY is a number (lower numbers have higher priority).
+PROVIDER-FUNCTION should accept the following parameters:
+- request-id: Unique request identifier
+- buffer: Current buffer
+- config: Command configuration
+- model: Model being used
+- context-data: Additional context data
+
+Functions should return a list of typed structs or nil if no context to provide.")
+
 ;;; Hook variables
 
 (defvar ai-chat-change-model-hook nil
@@ -413,6 +427,61 @@
                  (or total-tokens "?")
                  (if input-tokens-write-cache (format ", Cache Write=%s" input-tokens-write-cache) "")
                  (if input-tokens-read-cache (format ", Cache Read=%s" input-tokens-read-cache) ""))))))
+
+;;; Context providers registry
+
+(defun ai-chat--register-provider (provider-function priority)
+  "Register a context PROVIDER-FUNCTION with given PRIORITY.
+PRIORITY is a number - lower numbers have higher priority.
+The function will be called during context assembly to contribute context elements."
+  (unless (functionp provider-function)
+    (error "Provider must be a function: %s" provider-function))
+  (unless (numberp priority)
+    (error "Priority must be a number: %s" priority))
+  ;; Remove existing registration of the same provider
+  (setq ai-chat--providers
+        (cl-remove provider-function ai-chat--providers :key #'cdr :test #'eq))
+  ;; Add new registration
+  (push (cons priority provider-function) ai-chat--providers)
+  ;; Sort by priority (lower numbers first)
+  (setq ai-chat--providers
+        (sort ai-chat--providers (lambda (a b) (< (car a) (car b))))))
+
+(defun ai-chat--unregister-provider (provider-function)
+  "Unregister a context PROVIDER-FUNCTION."
+  (setq ai-chat--providers
+        (cl-remove provider-function ai-chat--providers :key #'cdr :test #'eq)))
+
+(defun ai-chat--call-providers (request-id buffer config model context-data)
+  "Call all registered context providers with the given parameters.
+Returns a flattened list of all context elements provided by registered providers."
+  (let ((results '()))
+    (dolist (provider-entry ai-chat--providers)
+      (let ((provider (cdr provider-entry)))
+        (condition-case-unless-debug err
+            (let ((provider-result (funcall provider request-id buffer config model context-data)))
+              (when provider-result
+                ;; Normalize result into a list
+                (let ((normalized-result
+                       (cond
+                        ;; If it's already a list of non-empty elements
+                        ((and (listp provider-result)
+                              (not (keywordp (car provider-result)))
+                              (> (length provider-result) 0))
+                         provider-result)
+                        ;; If it's a single element
+                        ((not (null provider-result))
+                         (list provider-result))
+                        ;; Otherwise empty list
+                        (t '()))))
+                  ;; Add all non-empty elements
+                  (dolist (item normalized-result)
+                    (when (and item (not (null item)))
+                      (push item results))))))
+          (error
+           (ai-utils--log "Error calling AI chat context provider %s: %s" provider err)))))
+    ;; Return results in correct order
+    (reverse results)))
 
 ;;; Telemetry and logging functions
 
@@ -641,38 +710,23 @@ SIZE is the number of historical messages to include. If SIZE is less than or eq
 
 (cl-defun ai-chat--get-execution-context ()
   "Construct the execution context for the current chat interaction."
-  (let* ((messages-history (ai-chat--get-buffer-history-context))
-         (full-context '())
-         ;; Use fallback if prompt management is not available
-         (basic-prompt-content (if (fboundp 'ai-prompt-management--render-system-prompt)
-                                   (ai-prompt-management--render-system-prompt "chat-basic" full-context)
-                                 (ai-chat--get-rendered-action-prompt "chat-basic" full-context)))
-         (basic-file-prompt (ai-chat--make-typed-struct basic-prompt-content 'agent-instructions))
-         (global-system-prompts (ai-chat--get-global-system-prompts))
-         (global-memory (ai-chat--get-global-memory))
-         (buffer-bound-prompts (ai-chat--get-buffer-bound-prompts))
-
-         (additional-context
-          (let ((context-pool-content (ai-chat--render-struct-to-string (ai-chat--get-context-pool))))
-            (when context-pool-content
-              (ai-chat--make-typed-struct context-pool-content 'additional-context))))
-
-         (messages
-          (cl-remove-if #'null
-                        (append
-                         (when (boundp 'ai-context-management--extended-instructions-enabled)
-                           (list basic-file-prompt
-                                 global-system-prompts
-                                 global-memory
-                                 buffer-bound-prompts
-                                 additional-context))
-                         messages-history)))
-
-         (filtered-messages (cl-remove-if #'ai-chat--is-empty-message messages))
+  (let* ((config '(:command "chat" :action "chat-basic"))
+         (model (ai-chat--get-current-model))
          (request-id (ai-common--generate-request-id))
+         (full-context '())
+
+         ;; Create context data as alist
+         (context-data `((full-context . ,full-context)
+                         (config . ,config)
+                         (model . ,model)))
+
+         ;; Get contexts from providers
+         (provider-contexts (ai-chat--call-providers request-id (current-buffer) config model context-data))
+
+         (filtered-messages (cl-remove-if #'ai-chat--is-empty-message provider-contexts))
          (full-context `((:messages . ,filtered-messages)
                          (:request-id . ,request-id)
-                         (:command-config . (:command "chat" :action "chat-basic")))))
+                         (:command-config . ,config))))
 
     ;; Log context to telemetry systems if enabled
     (when ai-telemetry-enabled
@@ -689,6 +743,52 @@ MESSAGE-TYPE specifies the type of message and is optional."
                    input
                  (ai-chat--make-typed-struct (ai-chat--clear-text-properties input) message-type))))
     (setq-local ai-chat-buffer-history (append ai-chat-buffer-history `(,entry)))))
+
+;;; Context providers
+
+(defun ai-chat--provider-basic-instructions (request-id buffer config model context-data)
+  "Provider for basic agent instructions."
+  (let ((full-context (alist-get 'full-context context-data)))
+    (when-let ((content (if (fboundp 'ai-prompt-management--render-system-prompt)
+                            (ai-prompt-management--render-system-prompt "chat-basic" full-context)
+                          (ai-chat--get-rendered-action-prompt "chat-basic" full-context))))
+      (ai-chat--make-typed-struct content 'agent-instructions))))
+
+(defun ai-chat--provider-global-system-prompts (request-id buffer config model context-data)
+  "Provider for global system prompts."
+  (when-let ((global-system-prompts (ai-chat--get-global-system-prompts)))
+    (when global-system-prompts
+      global-system-prompts)))
+
+(defun ai-chat--provider-global-memory (request-id buffer config model context-data)
+  "Provider for global memory context."
+  (when-let ((global-memory (ai-chat--get-global-memory)))
+    (when global-memory
+      global-memory)))
+
+(defun ai-chat--provider-buffer-bound-prompts (request-id buffer config model context-data)
+  "Provider for buffer-bound prompts."
+  (when-let ((buffer-bound-prompts (ai-chat--get-buffer-bound-prompts)))
+    (when buffer-bound-prompts
+      buffer-bound-prompts)))
+
+(defun ai-chat--provider-additional-context (request-id buffer config model context-data)
+  "Provider for additional context from context pool."
+  (let ((context-pool-content (ai-chat--render-struct-to-string (ai-chat--get-context-pool))))
+    (when context-pool-content
+      (ai-chat--make-typed-struct context-pool-content 'additional-context))))
+
+(defun ai-chat--provider-message-history (request-id buffer config model context-data)
+  "Provider for message history context."
+  (ai-chat--get-buffer-history-context))
+
+;; Register all default providers with priorities
+(ai-chat--register-provider #'ai-chat--provider-basic-instructions 100)
+(ai-chat--register-provider #'ai-chat--provider-global-system-prompts 200)
+(ai-chat--register-provider #'ai-chat--provider-global-memory 300)
+(ai-chat--register-provider #'ai-chat--provider-buffer-bound-prompts 400)
+(ai-chat--register-provider #'ai-chat--provider-additional-context 500)
+(ai-chat--register-provider #'ai-chat--provider-message-history 600)
 
 ;;; Session management
 

@@ -85,6 +85,73 @@ Should be a function symbol that returns a string or nil."
   :type 'integer
   :group 'ai-context-management)
 
+;; Context providers registry
+(defvar ai-context-management--providers nil
+  "List of context provider functions with priorities.
+Each element is a cons cell (PRIORITY . PROVIDER-FUNCTION).
+PRIORITY is a number (lower numbers have higher priority).
+PROVIDER-FUNCTION should accept the following parameters:
+- request-id: Unique request identifier
+- buffer: Current buffer
+- config: Command configuration
+- model: Model being used
+- context-data: Additional context data
+
+Functions should return a list of typed structs or nil if no context to provide.")
+
+(defun ai-context-management--register-provider (provider-function priority)
+  "Register a context PROVIDER-FUNCTION with given PRIORITY.
+PRIORITY is a number - lower numbers have higher priority.
+The function will be called during context assembly to contribute context elements."
+  (unless (functionp provider-function)
+    (error "Provider must be a function: %s" provider-function))
+  (unless (numberp priority)
+    (error "Priority must be a number: %s" priority))
+  ;; Remove existing registration of the same provider
+  (setq ai-context-management--providers
+        (cl-remove provider-function ai-context-management--providers :key #'cdr :test #'eq))
+  ;; Add new registration
+  (push (cons priority provider-function) ai-context-management--providers)
+  ;; Sort by priority (lower numbers first)
+  (setq ai-context-management--providers
+        (sort ai-context-management--providers (lambda (a b) (< (car a) (car b))))))
+
+(defun ai-context-management--unregister-provider (provider-function)
+  "Unregister a context PROVIDER-FUNCTION."
+  (setq ai-context-management--providers
+        (cl-remove provider-function ai-context-management--providers :key #'cdr :test #'eq)))
+
+(defun ai-context-management--call-providers (request-id buffer config model context-data)
+  "Call all registered context providers with the given parameters.
+Returns a flattened list of all context elements provided by registered providers."
+  (let ((results '()))
+    (dolist (provider-entry ai-context-management--providers)
+      (let ((provider (cdr provider-entry)))
+        (condition-case-unless-debug err
+            (let ((provider-result (funcall provider request-id buffer config model context-data)))
+              (when provider-result
+                ;; Normalize result into a list
+                (let ((normalized-result
+                       (cond
+                        ;; If it's already a list of non-empty elements
+                        ((and (listp provider-result)
+                              (not (keywordp (car provider-result)))
+                              (> (length provider-result) 0))
+                         provider-result)
+                        ;; If it's a single element
+                        ((not (null provider-result))
+                         (list provider-result))
+                        ;; Otherwise empty list
+                        (t '()))))
+                  ;; Add all non-empty elements
+                  (dolist (item normalized-result)
+                    (when (and item (not (null item)))
+                      (push item results))))))
+          (error
+           (ai-utils--log "Error calling context provider %s: %s" provider err)))))
+    ;; Return results in correct order
+    (reverse results)))
+
 ;; Language detection (moved from ai-utils)
 (defvar ai-context-management--language-alist
   '((nil . "text")
@@ -637,10 +704,9 @@ Returns the container name or nil if no specific container is needed."
   (when ai-context-management--current-buffer-additional-context
     (ai-common--make-file-context-from-buffer)))
 
-(defun ai-context-management--should-include-current-buffer-content-context-p (config command full-context)
+(defun ai-context-management--should-include-current-buffer-content-context-p (config full-context)
   "Determine if current-buffer-content-context should be included.
-CONFIG is the command configuration, COMMAND is the command being executed,
-and FULL-CONTEXT contains the complete context information.
+CONFIG is the command configuration, and FULL-CONTEXT contains the complete context information.
 Returns t if context should be included, nil otherwise."
   (let* ((result-action (map-elt config :result-action))
          (needs-buffer-context (map-elt config :needs-buffer-context))
@@ -792,13 +858,13 @@ Allows user to select between different project context inclusion modes."
              (cdr (assoc selected-mode mode-descriptions)))))
 
 
-(cl-defun ai-context-management--get-execution-context (buffer config command &key
+(cl-defun ai-context-management--get-execution-context (buffer config &key
                                                                (preceding-context-size ai-context-management--current-precending-context-size)
                                                                (following-context-size ai-context-management--current-forwarding-context-size)
                                                                model
                                                                (external-contexts nil))
   "Get full execution context for BUFFER.
-CONFIG specifies configuration, COMMAND indicates the command, and options for context sizes are PRECEDING-CONTEXT-SIZE and FOLLOWING-CONTEXT-SIZE.
+CONFIG specifies configuration, and options for context sizes are PRECEDING-CONTEXT-SIZE and FOLLOWING-CONTEXT-SIZE.
 EXTERNAL-CONTEXTS is an optional list of additional context structs to include.
 Each context should be a plist with :type, :content, and other metadata."
   (with-current-buffer buffer
@@ -813,122 +879,20 @@ Each context should be a plist with :type, :content, and other metadata."
            (full-context (append completion-context buffer-context model-context))
            (request-id (ai-common--generate-request-id))
 
-           (basic-instructions (when-let ((content (ai-prompt-management--render-system-prompt "basic" full-context)))
-                                 (ai-common--make-typed-struct content 'agent-instructions 'basic-prompt :group 'basic)))
+           ;; Create context data as alist
+           (context-data `((completion-context . ,completion-context)
+                           (buffer-context . ,buffer-context)
+                           (full-context . ,full-context)
+                           (needs-buffer-context . ,needs-buffer-context)
+                           (actual-preceding-size . ,actual-preceding-size)
+                           (actual-following-size . ,actual-following-size)
+                           (external-contexts . ,external-contexts)))
 
-           (file-metadata-context (when-let ((content (ai-prompt-management--render-system-prompt "file_metadata" full-context)))
-                                    (ai-common--make-typed-struct content 'file-metadata 'file-metadata)))
+           ;; Get contexts from providers
+           (provider-contexts (when ai-context-management--extended-instructions-enabled
+                                (ai-context-management--call-providers request-id buffer config model context-data)))
 
-           (command-instructions (when-let ((content (ai-command-management--get-rendered-command-instructions command full-context)))
-                                   (ai-common--make-typed-struct content 'agent-instructions 'command-specific-instructions :group 'command)))
-
-           (command-examples-instructions (when-let ((content (ai-command-management--get-rendered-command-examples command full-context)))
-                                            (ai-common--make-typed-struct content 'agent-instructions 'command-examples :group 'command)))
-
-           (action-type-object-instructions (when-let ((content (ai-command-management--get-action-type-object-instructions (ai-context-management--get-action-type-for-config config) full-context)))
-                                              (ai-common--make-typed-struct content 'agent-instructions 'action-object-rules :group 'command)))
-
-           (result-action-instructions (let ((result-action (map-elt config :result-action)))
-                                         (when result-action
-                                           (when-let ((content (ai-context-management--get-result-action-prompt result-action full-context)))
-                                             (ai-common--make-typed-struct content 'agent-instructions 'result-action-format :group 'command)))))
-
-           (config-instructions (when-let ((instructions (map-elt config :instructions)))
-                                  (ai-common--make-typed-struct instructions 'agent-instructions 'config-instructions)))
-
-           (additional-context
-            (when-let ((context-pool (ai-context-management--get-context-pool)))
-              (when context-pool
-                (ai-common--make-typed-struct context-pool 'additional-context 'context-pool))))
-
-           (external-contexts-structs
-            (when external-contexts
-              (let ((processed-contexts (mapcar #'ai-context-management--process-external-context-item external-contexts)))
-                (ai-common--make-typed-struct processed-contexts 'additional-context 'external-context))))
-
-           (project-context
-            (ai-context-management--get-project-context))
-
-           (memory-context
-            (ai-context-management--get-memory-context))
-
-           (current-buffer-content-context
-            (when (ai-context-management--should-include-current-buffer-content-context-p config command full-context)
-              (when-let ((context (ai-context-management--get-current-buffer-context)))
-                (ai-common--make-typed-struct context 'additional-context 'current-buffer-content))))
-
-           (user-input (when (map-elt config :user-input)
-                         (let ((input-text (ai-context-management--get-user-input)))
-                           ;; If user input is cancelled (ai-context-management--get-user-input returns nil),
-                           ;; then stop the execution of the command immediately.
-                           (unless input-text
-                             (user-error "User input cancelled."))
-                           (let ((user-input-struct
-                                  (ai-common--make-typed-struct
-                                   (ai-prompt-management--render-template input-text full-context)
-                                   'user-input
-                                   'user-input
-                                   :render-ignore-fields '(:source))))
-                             user-input-struct))))
-
-           (command-struct (when-let ((command-text (map-elt config :command)))
-                             (ai-common--make-typed-struct
-                              (ai-prompt-management--render-template command-text full-context)
-                              'user-input
-                              'config-command)))
-
-           (rendered-action-context (ai-common--make-typed-struct
-                                     (ai-context-management--get-contextual-action-object
-                                      config
-                                      :preceding-context-size actual-preceding-size
-                                      :following-context-size actual-following-size)
-                                     'action-context
-                                     'contextual-action))
-
-           (global-system-prompts-context
-            (when-let ((global-system-prompts (ai-context-management--get-global-system-prompts)))
-              (when global-system-prompts
-                (ai-common--make-typed-struct global-system-prompts 'agent-instructions 'global-system-prompts))))
-
-           (global-memory-context
-            (when-let ((global-memory (ai-context-management--get-global-memory)))
-              (when global-memory
-                (ai-common--make-typed-struct global-memory 'additional-context 'global-memory))))
-
-           (buffer-bound-prompts-context
-            (when-let ((buffer-bound-prompts (ai-context-management--get-buffer-bound-prompts)))
-              (when buffer-bound-prompts
-                (ai-common--make-typed-struct buffer-bound-prompts 'agent-instructions 'buffer-bound-prompts))))
-
-           (messages
-            (append
-             '()
-             (when ai-context-management--extended-instructions-enabled
-               (cl-remove-if
-                #'null
-                (append
-                 (list basic-instructions
-                       global-system-prompts-context
-
-                       command-instructions
-                       config-instructions
-                       action-type-object-instructions
-                       result-action-instructions
-                       command-examples-instructions
-
-                       memory-context
-                       project-context
-                       file-metadata-context
-                       current-buffer-content-context
-                       global-memory-context
-                       additional-context
-                       external-contexts-structs
-                       buffer-bound-prompts-context
-                       rendered-action-context
-                       user-input
-                       command-struct))))))
-
-           (messages (ai-context-management--filter-non-empty-content messages))
+           (messages (ai-context-management--filter-non-empty-content provider-contexts))
 
            (_ (ai-telemetry-write-context-to-prompt-buffer messages))
 
@@ -939,7 +903,7 @@ Each context should be a plist with :type, :content, and other metadata."
   "Get execution context for COMMAND with optional MODEL, DEFAULT-RESULT-ACTION, and EXTERNAL-CONTEXTS.
 EXTERNAL-CONTEXTS is a list of additional context structs to include in the execution context."
   (let* ((config (ai-command-management--get-command-config-by-type command default-result-action))
-         (execution-context (ai-context-management--get-execution-context (current-buffer) config command :model model :external-contexts external-contexts)))
+         (execution-context (ai-context-management--get-execution-context (current-buffer) config :model model :external-contexts external-contexts)))
     execution-context))
 
 (defun ai-context-management--empty-message-p (message)
@@ -952,6 +916,157 @@ Handles cases where :content might not be a string."
 (defun ai-context-management--filter-non-empty-content (messages)
   "Filter out messages with empty content from MESSAGES."
   (cl-remove-if #'ai-context-management--empty-message-p messages))
+
+;; ============================================================================
+;; Context Providers
+;; ============================================================================
+
+(defun ai-context-management--provider-basic-instructions (request-id buffer config model context-data)
+  "Provider for basic agent instructions."
+  (let ((full-context (alist-get 'full-context context-data)))
+    (when-let ((content (ai-prompt-management--render-system-prompt "basic" full-context)))
+      (ai-common--make-typed-struct content 'agent-instructions 'basic-prompt :group 'basic))))
+
+(defun ai-context-management--provider-file-metadata (request-id buffer config model context-data)
+  "Provider for file metadata context."
+  (let ((full-context (alist-get 'full-context context-data)))
+    (when-let ((content (ai-prompt-management--render-system-prompt "file_metadata" full-context)))
+      (ai-common--make-typed-struct content 'file-metadata 'file-metadata))))
+
+(defun ai-context-management--provider-command-instructions (request-id buffer config model context-data)
+  "Provider for command-specific instructions."
+  (let ((full-context (alist-get 'full-context context-data))
+        (command (map-elt config :command)))
+    (when-let ((content (ai-command-management--get-rendered-command-instructions command full-context)))
+      (ai-common--make-typed-struct content 'agent-instructions 'command-specific-instructions :group 'command))))
+
+(defun ai-context-management--provider-command-examples (request-id buffer config model context-data)
+  "Provider for command examples."
+  (let ((full-context (alist-get 'full-context context-data))
+        (command (map-elt config :command)))
+    (when-let ((content (ai-command-management--get-rendered-command-examples command full-context)))
+      (ai-common--make-typed-struct content 'agent-instructions 'command-examples :group 'command))))
+
+(defun ai-context-management--provider-action-type-object-instructions (request-id buffer config model context-data)
+  "Provider for action type object instructions."
+  (let ((full-context (alist-get 'full-context context-data)))
+    (when-let ((content (ai-command-management--get-action-type-object-instructions (ai-context-management--get-action-type-for-config config) full-context)))
+      (ai-common--make-typed-struct content 'agent-instructions 'action-object-rules :group 'command))))
+
+(defun ai-context-management--provider-result-action-instructions (request-id buffer config model context-data)
+  "Provider for result action instructions."
+  (let ((result-action (map-elt config :result-action))
+        (full-context (alist-get 'full-context context-data)))
+    (when result-action
+      (when-let ((content (ai-context-management--get-result-action-prompt result-action full-context)))
+        (ai-common--make-typed-struct content 'agent-instructions 'result-action-format :group 'command)))))
+
+(defun ai-context-management--provider-config-instructions (request-id buffer config model context-data)
+  "Provider for config-specific instructions."
+  (when-let ((instructions (map-elt config :instructions)))
+    (ai-common--make-typed-struct instructions 'agent-instructions 'config-instructions)))
+
+(defun ai-context-management--provider-context-pool (request-id buffer config model context-data)
+  "Provider for context pool items."
+  (when-let ((context-pool (ai-context-management--get-context-pool)))
+    (when context-pool
+      (ai-common--make-typed-struct context-pool 'additional-context 'context-pool))))
+
+(defun ai-context-management--provider-external-contexts (request-id buffer config model context-data)
+  "Provider for external contexts."
+  (let ((external-contexts (alist-get 'external-contexts context-data)))
+    (when external-contexts
+      (let ((processed-contexts (mapcar #'ai-context-management--process-external-context-item external-contexts)))
+        (ai-common--make-typed-struct processed-contexts 'additional-context 'external-context)))))
+
+(defun ai-context-management--provider-project-context (request-id buffer config model context-data)
+  "Provider for project context."
+  (ai-context-management--get-project-context))
+
+(defun ai-context-management--provider-memory-context (request-id buffer config model context-data)
+  "Provider for memory context."
+  (ai-context-management--get-memory-context))
+
+(defun ai-context-management--provider-current-buffer-content (request-id buffer config model context-data)
+  "Provider for current buffer content context."
+  (let ((full-context (alist-get 'full-context context-data)))
+    (when (ai-context-management--should-include-current-buffer-content-context-p config full-context)
+      (when-let ((context (ai-context-management--get-current-buffer-context)))
+        (ai-common--make-typed-struct context 'additional-context 'current-buffer-content)))))
+
+(defun ai-context-management--provider-user-input (request-id buffer config model context-data)
+  "Provider for user input."
+  (when (map-elt config :user-input)
+    (let ((input-text (ai-context-management--get-user-input))
+          (full-context (alist-get 'full-context context-data)))
+      ;; If user input is cancelled, stop execution
+      (unless input-text
+        (user-error "User input cancelled."))
+      (ai-common--make-typed-struct
+       (ai-prompt-management--render-template input-text full-context)
+       'user-input
+       'user-input
+       :render-ignore-fields '(:source)))))
+
+(defun ai-context-management--provider-command-struct (request-id buffer config model context-data)
+  "Provider for command struct."
+  (when-let ((command-text (map-elt config :command)))
+    (let ((full-context (alist-get 'full-context context-data)))
+      (ai-common--make-typed-struct
+       (ai-prompt-management--render-template command-text full-context)
+       'user-input
+       'config-command))))
+
+(defun ai-context-management--provider-action-context (request-id buffer config model context-data)
+  "Provider for action context."
+  (let ((actual-preceding-size (alist-get 'actual-preceding-size context-data))
+        (actual-following-size (alist-get 'actual-following-size context-data)))
+    (ai-common--make-typed-struct
+     (ai-context-management--get-contextual-action-object
+      config
+      :preceding-context-size actual-preceding-size
+      :following-context-size actual-following-size)
+     'action-context
+     'contextual-action)))
+
+(defun ai-context-management--provider-global-system-prompts (request-id buffer config model context-data)
+  "Provider for global system prompts."
+  (when-let ((global-system-prompts (ai-context-management--get-global-system-prompts)))
+    (when global-system-prompts
+      (ai-common--make-typed-struct global-system-prompts 'agent-instructions 'global-system-prompts))))
+
+(defun ai-context-management--provider-global-memory (request-id buffer config model context-data)
+  "Provider for global memory context."
+  (when-let ((global-memory (ai-context-management--get-global-memory)))
+    (when global-memory
+      (ai-common--make-typed-struct global-memory 'additional-context 'global-memory))))
+
+(defun ai-context-management--provider-buffer-bound-prompts (request-id buffer config model context-data)
+  "Provider for buffer-bound prompts."
+  (when-let ((buffer-bound-prompts (ai-context-management--get-buffer-bound-prompts)))
+    (when buffer-bound-prompts
+      (ai-common--make-typed-struct buffer-bound-prompts 'agent-instructions 'buffer-bound-prompts))))
+
+;; Register all default providers with priorities
+(ai-context-management--register-provider #'ai-context-management--provider-basic-instructions 100)
+(ai-context-management--register-provider #'ai-context-management--provider-file-metadata 150)
+(ai-context-management--register-provider #'ai-context-management--provider-global-system-prompts 200)
+(ai-context-management--register-provider #'ai-context-management--provider-command-instructions 250)
+(ai-context-management--register-provider #'ai-context-management--provider-config-instructions 300)
+(ai-context-management--register-provider #'ai-context-management--provider-action-type-object-instructions 350)
+(ai-context-management--register-provider #'ai-context-management--provider-result-action-instructions 400)
+(ai-context-management--register-provider #'ai-context-management--provider-command-examples 450)
+(ai-context-management--register-provider #'ai-context-management--provider-memory-context 500)
+(ai-context-management--register-provider #'ai-context-management--provider-global-memory 550)
+(ai-context-management--register-provider #'ai-context-management--provider-buffer-bound-prompts 600)
+(ai-context-management--register-provider #'ai-context-management--provider-project-context 650)
+(ai-context-management--register-provider #'ai-context-management--provider-current-buffer-content 700)
+(ai-context-management--register-provider #'ai-context-management--provider-context-pool 750)
+(ai-context-management--register-provider #'ai-context-management--provider-external-contexts 800)
+(ai-context-management--register-provider #'ai-context-management--provider-user-input 850)
+(ai-context-management--register-provider #'ai-context-management--provider-command-struct 900)
+(ai-context-management--register-provider #'ai-context-management--provider-action-context 950)
+
 
 (provide 'ai-context-management)
 

@@ -307,7 +307,7 @@ STRATEGY may alter the completion behavior."
          (candidates-context (ai-completions--create-candidates-context))
          (external-contexts (when candidates-context (list candidates-context)))
          (execution-context
-          (ai-context-management--get-execution-context (ai-completions--get-current-buffer-clone) config action-type
+          (ai-context-management--get-execution-context (ai-completions--get-current-buffer-clone) config
                                      :preceding-context-size ai-completions--current-precending-context-size
                                      :following-context-size ai-completions--current-forwarding-context-size
                                      :model execution-model
