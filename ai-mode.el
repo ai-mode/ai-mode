@@ -112,7 +112,10 @@
 ;;
 ;; Context Management (prefix C-c i k):
 ;; - C-c i k a - Add to context pool
+;; - C-c i k r - Add region to context pool
+;; - C-c i k f - Add file to context pool
 ;; - C-c i k c - Clear context pool
+;; - C-c i k x - Remove from context pool
 ;; - C-c i k s - Switch project context mode
 ;; - C-c i k b - Add buffer-bound prompts
 ;; - C-c i k B - Clear buffer-bound prompts
@@ -199,7 +202,10 @@
 
     ;; Context management (prefix: k)
     (define-key keymap (kbd "k a") 'ai-context-add-to-pool)
+    (define-key keymap (kbd "k r") 'ai-context-add-region)
+    (define-key keymap (kbd "k f") 'ai-context-add-file)
     (define-key keymap (kbd "k c") 'ai-context-clear-pool)
+    (define-key keymap (kbd "k x") 'ai-context-remove-from-pool)
     (define-key keymap (kbd "k s") 'ai-context-switch-project-mode)
     (define-key keymap (kbd "k b") 'ai-context-add-buffer-prompts)
     (define-key keymap (kbd "k B") 'ai-context-clear-buffer-prompts)
@@ -357,10 +363,25 @@ Otherwise, prompt the user to select from available models."
   (interactive)
   (ai-context-management--capture-user-input))
 
+(defun ai-context-add-region ()
+  "Capture region snippet and add it to the context pool."
+  (interactive)
+  (ai-context-management--capture-region-snippet))
+
+(defun ai-context-add-file ()
+  "Capture entire file content and add it to the context pool."
+  (interactive)
+  (ai-context-management--capture-file-context))
+
 (defun ai-context-clear-pool ()
   "Clear the temporary context pool."
   (interactive)
   (ai-context-management--clear-context-pool))
+
+(defun ai-context-remove-from-pool ()
+  "Remove selected item from context pool."
+  (interactive)
+  (ai-context-management--remove-from-context-pool))
 
 (defun ai-context-switch-project-mode ()
   "Interactively switch the project context mode."
