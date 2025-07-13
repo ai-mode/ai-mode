@@ -245,7 +245,8 @@ should be omitted."
 
 ;; Network request aliases
 (cl-defun ai-mode-adapter-api-async-request (api-url method body headers callback
-                                                     &key (timeout ai-network--default-request-timeout))
+                                                     &key (timeout ai-network--default-request-timeout)
+                                                     (request-id (ai-common--generate-request-id)))
   "Send an asynchronous HTTP request to API-URL.
 This is an alias for `ai-network--async-request` to provide a stable public API.
 
@@ -253,8 +254,9 @@ METHOD specifies the HTTP method.
 BODY is the request body.
 HEADERS is a list of request headers.
 CALLBACK is a function called with the response.
-TIMEOUT specifies the request timeout."
-  (ai-network--async-request api-url method body headers callback :timeout timeout))
+TIMEOUT specifies the request timeout.
+REQUEST-ID is an optional unique identifier for the request."
+  (ai-network--async-request api-url method body headers callback :timeout timeout :request-id request-id))
 
 (defalias 'ai-mode-adapter-api-request-async 'ai-mode-adapter-api-async-request
   "Alternative alias for `ai-mode-adapter-api-async-request`.")

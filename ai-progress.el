@@ -119,7 +119,7 @@ TARGET-BUFFER is the buffer where progress should be displayed."
 
     ;; Call registered start callbacks
     (dolist (callback ai-progress--start-callbacks)
-      (condition-case err
+      (condition-case-unless-debug err
           (funcall callback message buffer nil 0 'single-request)
         (error (message "Error in progress start callback: %s" (error-message-string err)))))
 
@@ -144,7 +144,7 @@ TOTAL-COUNT is the total number of items to be processed."
 
     ;; Call registered start callbacks
     (dolist (callback ai-progress--start-callbacks)
-      (condition-case err
+      (condition-case-unless-debug err
           (funcall callback message buffer total-count 0 'batch-operation)
         (error (message "Error in progress start callback: %s" (error-message-string err)))))
 
@@ -161,7 +161,7 @@ TARGET-BUFFER is the buffer where progress should be updated."
 
       ;; Call registered increment callbacks
       (dolist (callback ai-progress--increment-callbacks)
-        (condition-case err
+        (condition-case-unless-debug err
             (funcall callback buffer ai-progress--current-count ai-progress--total-count 'batch-operation)
           (error (message "Error in progress increment callback: %s" (error-message-string err)))))
 
@@ -177,7 +177,7 @@ TARGET-BUFFER is the buffer where progress should be stopped."
 
         ;; Call registered stop callbacks before clearing state
         (dolist (callback ai-progress--stop-callbacks)
-          (condition-case err
+          (condition-case-unless-debug err
               (funcall callback buffer 0 nil 'single-request)
             (error (message "Error in progress stop callback: %s" (error-message-string err)))))
 
@@ -216,7 +216,7 @@ TARGET-BUFFER is the buffer where progress should be stopped."
 
           ;; Call registered stop callbacks before clearing state
           (dolist (callback ai-progress--stop-callbacks)
-            (condition-case err
+            (condition-case-unless-debug err
                 (funcall callback buffer final-processed final-total 'batch-operation)
               (error (message "Error in progress stop callback: %s" (error-message-string err)))))
 

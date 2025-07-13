@@ -35,6 +35,7 @@
 ;; - Dynamic model selection and parameter adjustment
 ;; - Syntax highlighting and language support in chat
 ;; - Extensive customization options for prompts and context handling
+;; - Integrated telemetry, logging, and request auditing
 
 ;;; Code:
 
@@ -49,6 +50,9 @@
 (require 'ai-context-management)
 (require 'ai-common)
 (require 'ai-usage)
+(require 'ai-telemetry)
+(require 'ai-logging)
+(require 'ai-request-audit)
 
 ;;; Group definition
 
@@ -276,6 +280,9 @@
     (define-key map (kbd "C-c C-s") 'ai-chat-save-session)
     (define-key map (kbd "C-c C-l") 'ai-chat-load-session)
     (define-key map (kbd "C-c C-a") 'ai-chat-toggle-auto-save)
+    (define-key map (kbd "C-c C-t") 'ai-chat-toggle-telemetry)
+    (define-key map (kbd "C-c C-r") 'ai-chat-show-audit-requests)
+    (define-key map (kbd "C-c C-u") 'ai-chat-show-session-stats)
     map)
   "Keymap for AI Chat mode.")
 
@@ -406,6 +413,29 @@
                  (or total-tokens "?")
                  (if input-tokens-write-cache (format ", Cache Write=%s" input-tokens-write-cache) "")
                  (if input-tokens-read-cache (format ", Cache Read=%s" input-tokens-read-cache) ""))))))
+
+;;; Telemetry and logging functions
+
+(defun ai-chat--log-chat-interaction (input-string model-name)
+  "Log chat interaction with INPUT-STRING and MODEL-NAME."
+  (when ai-telemetry-enabled
+    (ai-logging--verbose-message "AI Chat: User input to %s: %s" model-name (substring input-string 0 (min 100 (length input-string))))
+    (when (fboundp 'ai-telemetry-write-context-to-prompt-buffer)
+      (let ((context-messages (list (ai-chat--make-typed-struct input-string 'user-input))))
+        (ai-telemetry-write-context-to-prompt-buffer context-messages)))))
+
+(defun ai-chat--log-chat-response (messages model-name)
+  "Log chat response MESSAGES from MODEL-NAME."
+  (when ai-telemetry-enabled
+    (dolist (message messages)
+      (let ((content (ai-chat--get-text-content-from-struct message)))
+        (ai-logging--verbose-message "AI Chat: Response from %s: %s" model-name (substring content 0 (min 100 (length content))))))))
+
+(defun ai-chat--log-chat-error (error-message model-name)
+  "Log chat error ERROR-MESSAGE from MODEL-NAME."
+  (when ai-telemetry-enabled
+    (let ((content (ai-chat--get-text-content-from-struct error-message)))
+      (ai-logging--verbose-message "AI Chat: Error from %s: %s" model-name content))))
 
 ;;; Progress indicator functions
 
@@ -639,7 +669,15 @@ SIZE is the number of historical messages to include. If SIZE is less than or eq
                          messages-history)))
 
          (filtered-messages (cl-remove-if #'ai-chat--is-empty-message messages))
-         (full-context `((:messages . ,filtered-messages))))
+         (request-id (ai-common--generate-request-id))
+         (full-context `((:messages . ,filtered-messages)
+                         (:request-id . ,request-id)
+                         (:command-config . (:command "chat" :action "chat-basic")))))
+
+    ;; Log context to telemetry systems if enabled
+    (when ai-telemetry-enabled
+      (ai-telemetry-write-context-to-prompt-buffer-debug filtered-messages))
+
     full-context))
 
 (defun ai-chat--add-entry-to-history (input &optional message-type)
@@ -672,7 +710,10 @@ MESSAGE-TYPE specifies the type of message and is optional."
   "Start a new chat session with timestamp and unique ID."
   (setq ai-chat-current-session-start-time (current-time))
   (setq ai-chat-current-session-id (ai-chat--generate-session-id))
-  (ai-chat--clear-buffer-history))
+  (ai-chat--clear-buffer-history)
+  ;; Log session start
+  (when ai-telemetry-enabled
+    (ai-logging--verbose-message "AI Chat: Started new session %s" ai-chat-current-session-id)))
 
 (defun ai-chat--initialize-session ()
   "Initialize a new chat session if none exists."
@@ -720,7 +761,10 @@ MESSAGE-TYPE specifies the type of message and is optional."
         (insert "\n    :execution-model ")
         (prin1 execution-model (current-buffer))
         (insert "))\n")))
-    (message "Chat session saved to: %s" filename)))
+    (message "Chat session saved to: %s" filename)
+    ;; Log session save
+    (when ai-telemetry-enabled
+      (ai-logging--verbose-message "AI Chat: Session %s saved to %s" ai-chat-current-session-id filename))))
 
 (defun ai-chat--auto-save-session ()
   "Automatically save session context after each interaction if auto-save is enabled."
@@ -784,7 +828,10 @@ MESSAGE-TYPE specifies the type of message and is optional."
                 (setq ai-chat-execution-model (plist-get session-data :execution-model)))
 
               (ai-chat--restore-chat-display)
-              (message "Chat session loaded from: %s" filename))
+              (message "Chat session loaded from: %s" filename)
+              ;; Log session load
+              (when ai-telemetry-enabled
+                (ai-logging--verbose-message "AI Chat: Session loaded from %s" filename)))
           (error (message "Error loading session: %s" (error-message-string err))))))))
 
 (defun ai-chat--restore-chat-display ()
@@ -842,9 +889,12 @@ MESSAGE-TYPE specifies the type of message and is optional."
   "Handle request failures and display ERROR-MESSAGE.
 
 REQUEST-DATA is the data sent with the failed request."
-  (let ((content (ai-chat--get-text-content-from-struct error-message)))
-    (ai-chat--write-reply (or content "Request failed. Please, check your connection or try again later.")))
-  (setq ai-chat--busy nil))
+  (let ((content (ai-chat--get-text-content-from-struct error-message))
+        (model (ai-chat--get-current-model)))
+    (ai-chat--write-reply (or content "Request failed. Please, check your connection or try again later."))
+    ;; Log the error
+    (ai-chat--log-chat-error error-message (map-elt model :name))
+    (setq ai-chat--busy nil)))
 
 (defun ai-chat--request-success-callback (messages)
   "Handle successful requests by processing MESSAGES.
@@ -853,10 +903,13 @@ MESSAGES is a list of messages returned from the backend."
   (condition-case-unless-debug processing-error
       (progn
         (setq ai-chat--busy nil)
-        (with-current-buffer (ai-chat--buffer)
-          (dolist (entry messages)
-            (ai-chat--add-entry-to-history entry)
-            (ai-chat--write-reply (ai-chat--get-text-content-from-struct entry)))))
+        (let ((model (ai-chat--get-current-model)))
+          ;; Log the response
+          (ai-chat--log-chat-response messages (map-elt model :name))
+          (with-current-buffer (ai-chat--buffer)
+            (dolist (entry messages)
+              (ai-chat--add-entry-to-history entry)
+              (ai-chat--write-reply (ai-chat--get-text-content-from-struct entry))))))
     (error  (progn
               (setq ai-chat--busy nil)
               (ai-chat--write-reply "EMACS: Invalid request. Please, try again.")
@@ -903,11 +956,16 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
                            (when ai-chat--progress-start-time
                              (format "%s" (if (string-empty-p progress-indicator) "" (format "%s" progress-indicator))))
                          (format "%d" (ai-chat-get-context-size))))
+         (telemetry-indicator (if ai-telemetry-enabled "T" ""))
+         (audit-indicator (if ai-request-audit-enabled "A" ""))
          (ai-chat-mode-line-section
-          (format "AI-CHAT[%s|%s%s]"
+          (format "AI-CHAT[%s|%s%s%s%s%s]"
                   (map-elt model :name)
                   context-info
-                  (if ai-chat-auto-save-enabled "|AS" ""))))
+                  (if ai-chat-auto-save-enabled "|AS" "")
+                  (if (string-empty-p telemetry-indicator) "" (format "|%s" telemetry-indicator))
+                  (if (string-empty-p audit-indicator) "" (format "|%s" audit-indicator))
+                  (if (and ai-telemetry-enabled ai-logging-verbose-log) "|V" ""))))
     ai-chat-mode-line-section))
 
 (defun ai-chat-get-context-size ()
@@ -963,8 +1021,32 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
                      (execution-backend (map-elt execution-model :execution-backend))
                      (context (ai-chat--get-execution-context))
                      (current-buffer (current-buffer))
-                     (wrapped-success-callback (ai-chat--progress-wrap-callback 'ai-chat--request-success-callback current-buffer))
-                     (wrapped-fail-callback (ai-chat--progress-wrap-callback 'ai-chat--request-fail-callback current-buffer)))
+                     (request-id (cdr (assoc :request-id context)))
+                     (command-config (cdr (assoc :command-config context)))
+                     (command-from-config (or (plist-get command-config :command)
+                                             (plist-get command-config :action)
+                                             "chat"))
+
+                     ;; Start audit if enabled
+                     (audit-request-id (ai-request-audit-start-request
+                                        request-id
+                                        command-from-config
+                                        execution-model
+                                        context))
+
+                     (wrapped-success-callback (ai-chat--progress-wrap-callback
+                                               (lambda (messages)
+                                                 (ai-request-audit-complete-request audit-request-id messages)
+                                                 (ai-chat--request-success-callback messages))
+                                               current-buffer))
+                     (wrapped-fail-callback (ai-chat--progress-wrap-callback
+                                            (lambda (request-data error-message)
+                                              (ai-request-audit-fail-request audit-request-id error-message)
+                                              (ai-chat--request-fail-callback request-data error-message))
+                                            current-buffer)))
+
+                ;; Log the interaction
+                (ai-chat--log-chat-interaction input-string (map-elt execution-model :name))
 
                 ;; Start progress indicator
                 (ai-chat--progress-start (format "Chatting with %s" (map-elt execution-model :name)) current-buffer)
@@ -972,9 +1054,11 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
                 (funcall execution-backend
                          context
                          execution-model
+                         :request-id audit-request-id
                          :success-callback wrapped-success-callback
                          :fail-callback wrapped-fail-callback
-                         :update-usage-callback (ai-chat--create-usage-statistics-callback)))
+                         :update-usage-callback (ai-chat--create-usage-statistics-callback)
+                         :enable-caching ai-execution--prompt-caching-enabled))
 
             (error (error  "Evaluation input error: %s" (error-message-string processing-error) ))))))
     (error "AI busy")))
@@ -1043,7 +1127,10 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
          (value (or model-name (completing-read ai-chat-change-backend-prompt (mapcar #'car names))))
          (model (ai-model-management--find-model-config-by-name value (ai-chat--get-models))))
     (ai-chat--set-execution-model model)
-    (message (format "AI chat query async backend is changed to \"%s\"" value))))
+    (message (format "AI chat query async backend is changed to \"%s\"" value))
+    ;; Log model change
+    (when ai-telemetry-enabled
+      (ai-logging--verbose-message "AI Chat: Model changed to %s" value))))
 
 (defun ai-chat-toggle-auto-save ()
   "Toggle automatic saving of chat sessions."
@@ -1055,6 +1142,26 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
         (message "Auto-save enabled. Sessions will be automatically saved."))
     (message "Auto-save disabled. Sessions will not be automatically saved."))
   (ai-chat-mode-update-mode-line-info))
+
+(defun ai-chat-toggle-telemetry ()
+  "Toggle telemetry collection for AI chat."
+  (interactive)
+  (ai-telemetry-toggle))
+
+(defun ai-chat-toggle-audit ()
+  "Toggle request auditing for AI chat."
+  (interactive)
+  (ai-telemetry-toggle-audit))
+
+(defun ai-chat-show-audit-requests ()
+  "Show list of audit requests for AI chat."
+  (interactive)
+  (ai-telemetry-show-audit-requests))
+
+(defun ai-chat-show-session-stats ()
+  "Show session statistics for AI chat."
+  (interactive)
+  (ai-telemetry-show-session-stats))
 
 (defun ai-chat-load-session ()
   "Load a chat session from history files."

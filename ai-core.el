@@ -28,6 +28,7 @@
 ;; - ai-core-perform: Execute AI commands with automatic result handling
 ;; - ai-core-perform-coordinator: Smart completion and continuation logic
 ;; - ai-core-debug: Debug and introspection utilities
+;; - ai-core-show-audit: Show request audit for current project
 ;;
 ;; The module coordinates between command management, context management,
 ;; execution, and response processing to provide a seamless AI experience.
@@ -98,6 +99,11 @@
 (defun ai-core-debug ()
   "Debug AI mode by printing region status and execution context."
   (ai-utils--show-context-debug (ai-context-management--get-executions-context-for-command (ai-command-management--get-command-unrestricted) :model (ai-model-management-get-current))))
+
+(defun ai-core-show-audit ()
+  "Show request audit for the current project."
+  (interactive)
+  (ai-request-audit-show-requests-buffer))
 
 (provide 'ai-core)
 

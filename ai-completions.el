@@ -48,6 +48,9 @@
 (require 'ai-command-management)
 (require 'ai-usage)
 (require 'ai-progress)
+(require 'ai-telemetry)
+(require 'ai-logging)
+(require 'ai-request-audit)
 
 (defgroup ai-completions nil
   "AI code completion tool for Emacs."
@@ -194,11 +197,12 @@ ACTION-TYPE specifies what kind of action to perform.
 STRATEGY may be specified to alter completion behavior."
   (condition-case-unless-debug err
       (progn
+        (ai-logging--verbose-message "AI completion: Starting coordinator for action-type: %s, strategy: %s" action-type strategy)
         (if (or (ai-completions--is-new-completion-required)
                 (not (ai-completions--should-continue this-command)))
             (ai-completions--begin :action-type action-type :strategy strategy)
           (ai-completions--continue)))
-    (error (message "AI completion: An error occurred in ai-completions--coordinator => %s" (error-message-string err))
+    (error (ai-logging--verbose-message "AI completion: An error occurred in ai-completions--coordinator => %s" (error-message-string err))
            (ai-completions--cancel))))
 
 (cl-defun ai-completions--begin (&key (action-type nil) (strategy nil))
@@ -207,6 +211,7 @@ ACTION-TYPE specifies the action to be completed.
 STRATEGY may alter the completion behavior."
 
   (ai-completions--cancel)
+  (ai-logging--verbose-message "AI completion: Beginning new completion session with action-type: %s" action-type)
   (setq-local ai-completions--complete-at-point (ai-completions--get-completion-point strategy)
               ai-completions--preview-at-point (ai-completions--get-preview-point strategy)
               ai-completions--active t
@@ -218,7 +223,7 @@ STRATEGY may alter the completion behavior."
   (condition-case-unless-debug err
       (progn (ai-completions-mode 1)
              (ai-completions--update-candidates (current-buffer)))
-    (error (message "AI completion: An error occurred in ai-completions--begin => %s" (error-message-string err))
+    (error (ai-logging--verbose-message "AI completion: An error occurred in ai-completions--begin => %s" (error-message-string err))
            (ai-completions--cancel))))
 
 (defun ai-completions--get-completion-point (strategy)
@@ -247,12 +252,16 @@ STRATEGY may alter the completion behavior."
   "Continue an ongoing completion session."
   (condition-case-unless-debug err
       (progn
+        (ai-logging--verbose-message "AI completion: Continuing completion session")
         (ai-completions--select-next-or-abort))
-    (error (message "AI completion: An error occurred in ai-completions--continue => %s" (error-message-string err))
+    (error (ai-logging--verbose-message "AI completion: An error occurred in ai-completions--continue => %s" (error-message-string err))
            (ai-completions--cancel))))
 
 (defun ai-completions--show-candidate ()
   "Display the current candidate for completion."
+  (ai-logging--verbose-message "AI completion: Showing candidate %d of %d"
+                              (1+ ai-completions--current-candidate)
+                              (length ai-completions--candidates))
   (ai-completions--update-preview)
   (ai-completions--prepare-keymap)
   (ai-completions--activate-keymap))
@@ -304,21 +313,40 @@ STRATEGY may alter the completion behavior."
                                      :model execution-model
                                      :external-contexts external-contexts))
          (execution-backend (map-elt execution-model :execution-backend))
+         (request-id (plist-get execution-context :request-id))
+
+         ;; Start audit if enabled
+         (audit-request-id (ai-request-audit-start-request
+                            request-id
+                            action-type
+                            execution-model
+                            execution-context))
+
          (success-callback (lambda (candidates)
                              (with-current-buffer buffer
+                               (ai-logging--verbose-message "AI completion: Received %d candidates" (length candidates))
+                               (ai-request-audit-complete-request audit-request-id candidates)
                                (ai-completions--add-candidates candidates)
                                (ai-completions--show-candidate))))
          (fail-callback (lambda (request-data response-error)
                           (with-current-buffer buffer
-                            (when ai-utils--verbose-log
-                              (message "Error struct: %s" (pp-to-string response-error)))
-                            (error (format "Response error: %s" (ai-common--get-text-content-from-struct response-error)))))))
+                            (ai-logging--verbose-message "AI completion: Request failed: %s"
+                                                        (ai-common--get-text-content-from-struct response-error))
+                            (ai-request-audit-fail-request audit-request-id response-error)
+                            ;; Use ai-telemetry--log-and-error for structured error logging
+                            (ai-telemetry--log-and-error (format "AI completion: Response error: %s"
+                                                                (ai-common--get-text-content-from-struct response-error)))))))
 
     (when (not execution-backend)
       (error (message "Model execution backend not defined"))
       (ai-completions--abort))
 
+    (ai-logging--verbose-message "AI completion: Executing backend for action \"%s\" with model \"%s\""
+                                action-type (map-elt execution-model :name))
     (message (format "Attempting to execute backend for action \"%s\"" (ai-utils-escape-format-specifiers action-type)))
+
+    ;; Write context to prompt buffer for debugging/auditing
+    (ai-telemetry-write-context-to-prompt-buffer (plist-get execution-context :messages))
 
     ;; Start progress indicator
     (ai-progress-start-single-request (format "Completing with %s" (map-elt execution-model :name)) buffer)
@@ -326,6 +354,7 @@ STRATEGY may alter the completion behavior."
     (funcall execution-backend
              execution-context
              execution-model
+             :request-id audit-request-id
              :success-callback (ai-execution--progress-wrap-callback success-callback buffer)
              :fail-callback (ai-execution--progress-wrap-callback fail-callback buffer)
              :update-usage-callback (ai-usage-create-usage-statistics-callback)
@@ -349,6 +378,8 @@ STRATEGY may alter the completion behavior."
 
 (defun ai-completions--add-candidates (candidates)
   "Append CANDIDATES to the list of current candidates."
+  (ai-logging--verbose-message "AI completion: Adding %d candidates to existing %d candidates"
+                              (length candidates) (length ai-completions--candidates))
   (setq ai-completions--candidates (append ai-completions--candidates candidates)
         ai-completions--current-candidate (- (length ai-completions--candidates) (length candidates))))
 
@@ -360,6 +391,7 @@ STRATEGY may alter the completion behavior."
 
 (defun ai-completions--reset-variables-to-defaults ()
   "Reset variables to their default values when completion process is interrupted or canceled."
+  (ai-logging--verbose-message "AI completion: Resetting variables to defaults")
   (setq-local ai-completions--current-candidate 0
               ai-completions--candidates '()
               ai-completions--complete-at-point nil
@@ -374,12 +406,14 @@ STRATEGY may alter the completion behavior."
 (defun ai-completions--abort ()
   "Abort the completion process."
   (interactive)
+  (ai-logging--verbose-message "AI completion: Aborting completion session")
   (ai-progress-stop-single-request)
   (ai-completions--reset-variables-to-defaults)
   (ai-completions--cancel))
 
 (defun ai-completions-finish (candidate)
   "Complete the completion process with the given CANDIDATE."
+  (ai-logging--verbose-message "AI completion: Finishing completion with candidate")
   (ai-completions--preview-hide)
   (ai-completions--insert-candidate candidate)
   (ai-completions--reset-variables-to-defaults)
@@ -387,6 +421,7 @@ STRATEGY may alter the completion behavior."
 
 (defun ai-completions--cancel ()
   "Cancel the ongoing completion process, resetting the state."
+  (ai-logging--verbose-message "AI completion: Canceling completion session")
   (ai-progress-stop-single-request)
   (ai-completions--preview-hide)
   (ai-completions--clear-buffer-clone)
@@ -407,6 +442,7 @@ STRATEGY may alter the completion behavior."
   "Insert the selected CANDIDATE into the buffer."
   (when (> (length candidate) 0)
     (let* ((completion-text (substring-no-properties (ai-common--get-text-content-from-struct candidate))))
+      (ai-logging--verbose-message "AI completion: Inserting candidate with %d characters" (length completion-text))
       (when (and (equal ai-completions--strategy 'replace)
                  (region-active-p))
         (delete-region (region-beginning) (region-end)))
@@ -416,6 +452,7 @@ STRATEGY may alter the completion behavior."
   "Insert the currently selected candidate."
   (interactive)
   (let* ((candidate (nth ai-completions--current-candidate ai-completions--candidates)))
+    (ai-logging--verbose-message "AI completion: Selecting current candidate %d" ai-completions--current-candidate)
     (ai-completions-finish candidate)))
 
 (defun ai-completions--select-next-or-abort ()
@@ -424,8 +461,10 @@ STRATEGY may alter the completion behavior."
   (let ((next-candidate-index (+ ai-completions--current-candidate 1)))
     (cond
      ((>= next-candidate-index (length ai-completions--candidates))
+      (ai-logging--verbose-message "AI completion: No more candidates available, requesting more")
       (ai-completions--update-candidates (ai-completions--get-current-buffer-clone)))
      (t (setq ai-completions--current-candidate next-candidate-index)
+        (ai-logging--verbose-message "AI completion: Moving to next candidate %d" next-candidate-index)
         (ai-completions--show-candidate)))))
 
 (defun ai-completions--select-prev-or-abort ()
@@ -436,13 +475,18 @@ STRATEGY may alter the completion behavior."
      ((>= prev-candidate-index 0)
       (let ((result (nth prev-candidate-index ai-completions--candidates)))
         (setq ai-completions--current-candidate prev-candidate-index)
+        (ai-logging--verbose-message "AI completion: Moving to previous candidate %d" prev-candidate-index)
         (ai-completions--show-candidate)))
-     (t (message "No previous candidate available")))))
+     (t (ai-logging--verbose-message "AI completion: No previous candidate available")
+        (message "No previous candidate available")))))
 
 (defun ai-completions--increase-current-context ()
   "Increase the context size for the current completion."
   (interactive)
   (setq ai-completions--current-precending-context-size (+ ai-completions--current-precending-context-size ai-completions--context-size-step))
+  (ai-logging--verbose-message "AI completion: Increased context size to %d-%d"
+                              ai-completions--current-precending-context-size
+                              ai-completions--current-forwarding-context-size)
   (ai-completions--show-candidate)
   (message (format "Current completion context size: %d - %d"
                    ai-completions--current-precending-context-size
@@ -452,7 +496,8 @@ STRATEGY may alter the completion behavior."
   "Maximize the context window for completion."
   (interactive)
   (setq ai-completions--current-precending-context-size -1)
-  (setq ai-completions--current-forwarding-context-size -1)
+  (setq ai-compqletions--current-forwarding-context-size -1)
+  (ai-logging--verbose-message "AI completion: Maximized context size to full buffer")
   (ai-completions--show-candidate)
   (message (format "Current completion context size: %d - %d"
                    ai-completions--current-precending-context-size
@@ -461,12 +506,13 @@ STRATEGY may alter the completion behavior."
 (defun ai-completions--add-instruction (input)
   "Add an instruction INPUT to the current query."
   (interactive (list (read-string "Enter query instruction: ")))
+  (ai-logging--verbose-message "AI completion: Adding user instruction: %s" input)
   (ai-common--add-to-context-pool (ai-common--make-typed-struct input 'user-instruction 'user-input))
   (when ai-completions--active
     (condition-case-unless-debug err
         (progn (ai-completions-mode 1)
                (ai-completions--update-candidates (current-buffer)))
-      (error (message "AI completion: An error occurred in ai-completions--add-instruction => %s" (error-message-string err))
+      (error (ai-logging--verbose-message "AI completion: An error occurred in ai-completions--add-instruction => %s" (error-message-string err))
              (ai-completions--cancel)))))
 
 (define-minor-mode ai-completions-mode
@@ -474,15 +520,19 @@ STRATEGY may alter the completion behavior."
   :after-hook (force-mode-line-update t)
   (if ai-completions-mode
       (progn
+        (ai-logging--verbose-message "AI completion: Enabling completion mode")
         (add-hook 'pre-command-hook 'ai-completions-mode-pre-command)
         (add-hook 'post-command-hook 'ai-completions-mode-post-command))
+    (ai-logging--verbose-message "AI completion: Disabling completion mode")
     (remove-hook 'pre-command-hook 'ai-completions-mode-pre-command)
     (remove-hook 'post-command-hook 'ai-completions-mode-post-command)))
 
 (defun ai-completions-mode-pre-command ()
   "Hook function called before executing a command in AI completions mode."
   (if (not (ai-completions--should-continue this-command))
-      (ai-completions--abort)
+      (progn
+        (ai-logging--verbose-message "AI completion: Command %s should abort completion" this-command)
+        (ai-completions--abort))
     (ai-completions--deactivate-keymap)))
 
 (defun ai-completions-mode-post-command ()
@@ -571,6 +621,7 @@ STRATEGY may alter the completion behavior."
   "Add INPUT as system instructions to the list."
   (interactive (list (read-string "Enter system instruction: ")))
   (with-current-buffer (current-buffer)
+    (ai-logging--verbose-message "AI completion: Adding system instruction: %s" input)
     (setq-local ai-completions--global-system-instructions
                 (append ai-completions--global-system-instructions
                         `((("role" . "system") ("content" . ,input)))))))
@@ -579,6 +630,7 @@ STRATEGY may alter the completion behavior."
   "Clear all system instructions."
   (interactive)
   (with-current-buffer (current-buffer)
+    (ai-logging--verbose-message "AI completion: Clearing system instructions")
     (setq-local ai-completions--global-system-instructions '())))
 
 (provide 'ai-completions)

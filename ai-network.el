@@ -34,6 +34,7 @@
 (require 'json)
 (require 'cl-lib)
 (require 'ai-utils)
+(require 'ai-common)
 (require 'ai-telemetry)
 
 (defvar url-http-end-of-headers)
@@ -44,16 +45,17 @@
   :group 'ai-mode)
 
 (cl-defun ai-network--async-request (api-url method body headers callback
-                                             &key (timeout ai-network--default-request-timeout))
+                                             &key (timeout ai-network--default-request-timeout)
+                                             (request-id (ai-common--generate-request-id)))
   "Send an asynchronous HTTP request to API-URL.
 
 METHOD specifies the HTTP method.
 BODY is the request body.
 HEADERS is a list of request headers.
 CALLBACK is a function called with the response.
-TIMEOUT specifies the request timeout."
-  (let ((request-id (ai-utils--get-random-uuid))
-        (url-request-method method)
+TIMEOUT specifies the request timeout.
+REQUEST-ID is an optional unique identifier for the request."
+  (let ((url-request-method method)
         (url-request-extra-headers headers)
         (url-request-data body))
     (ai-telemetry--log-request request-id url-request-method api-url headers body)
@@ -72,15 +74,16 @@ TIMEOUT specifies the request timeout."
                   nil nil timeout)))
 
 (cl-defun ai-network--sync-request (api-url method body headers
-                                            &key (timeout ai-network--default-request-timeout))
+                                            &key (timeout ai-network--default-request-timeout)
+                                            (request-id (ai-common--generate-request-id)))
   "Send a synchronous HTTP request to API-URL and return the response content.
 
 METHOD specifies the HTTP method.
 BODY is the request body.
 HEADERS is a list of request headers.
-TIMEOUT specifies the request timeout."
-  (let ((request-id (ai-utils--get-random-uuid))
-        (url-request-method method)
+TIMEOUT specifies the request timeout.
+REQUEST-ID is an optional unique identifier for the request."
+  (let ((url-request-method method)
         (url-request-extra-headers headers)
         (url-request-data body)
         (buffer (url-retrieve-synchronously api-url 'silent nil timeout)))

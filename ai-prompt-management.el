@@ -29,7 +29,7 @@
 
 (require 'cl-lib)
 (require 'ai-project) ; For ai-project--get-project-root
-(require 'ai-telemetry) ; For ai-telemetry--verbose-message
+(require 'ai-logging) ; For ai-logging--verbose-message
 
 (defcustom ai-prompt-management--instruction-file-extension ".md"
   "File extension used for instruction and system prompt files."
@@ -219,7 +219,7 @@ If IS-SYSTEM-PROMPT-DIR, uses system prompt normalization."
                    content cache-table))))
     ;; Update modification time
     (puthash cache-key (ai-prompt-management--get-directory-modification-time directory) ai-prompt-management--instruction-directory-mtimes)
-    (ai-telemetry--verbose-message "Updated cache for %s (%d entries)" cache-key (hash-table-count cache-table))))
+    (ai-logging--verbose-message "Updated cache for %s (%d entries)" cache-key (hash-table-count cache-table))))
 
 (defun ai-prompt-management--ensure-cache-updated (directory cache-table cache-key &optional is-system-prompt-dir)
   "Ensure CACHE-TABLE is up to date for DIRECTORY identified by CACHE-KEY."
@@ -329,6 +329,6 @@ This is a specialized system prompt."
     (ai-prompt-management--ensure-cache-updated directory ai-prompt-management--local-system-prompts-cache "local-system" t))
 
   (message "AI mode prompt caches updated!")
-  (ai-telemetry--verbose-message "Prompt caches updated successfully."))
+  (ai-logging--verbose-message "Prompt caches updated successfully."))
 
 (provide 'ai-prompt-management)

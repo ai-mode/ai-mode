@@ -791,6 +791,7 @@ Allows user to select between different project context inclusion modes."
              selected-name
              (cdr (assoc selected-mode mode-descriptions)))))
 
+
 (cl-defun ai-context-management--get-execution-context (buffer config command &key
                                                                (preceding-context-size ai-context-management--current-precending-context-size)
                                                                (following-context-size ai-context-management--current-forwarding-context-size)
@@ -810,6 +811,7 @@ Each context should be a plist with :type, :content, and other metadata."
            (buffer-context (ai-context-management--get-buffer-context (current-buffer)))
            (model-context (ai-context-management--get-model-context model))
            (full-context (append completion-context buffer-context model-context))
+           (request-id (ai-common--generate-request-id))
 
            (basic-instructions (when-let ((content (ai-prompt-management--render-system-prompt "basic" full-context)))
                                  (ai-common--make-typed-struct content 'agent-instructions 'basic-prompt :group 'basic)))
@@ -930,7 +932,7 @@ Each context should be a plist with :type, :content, and other metadata."
 
            (_ (ai-telemetry-write-context-to-prompt-buffer messages))
 
-           (result `(:messages ,messages :model-context ,model)))
+           (result `(:messages ,messages :model-context ,model :request-id ,request-id :command-config ,config)))
       result)))
 
 (cl-defun ai-context-management--get-executions-context-for-command (command &key (model nil) (default-result-action nil) (external-contexts nil))
