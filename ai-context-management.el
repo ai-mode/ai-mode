@@ -986,9 +986,48 @@ Handles cases where :content might not be a string."
     (when buffer-bound-prompts
       (ai-common--make-typed-struct buffer-bound-prompts 'agent-instructions 'buffer-bound-prompts))))
 
+(defun ai-context-management--provider-session-context (request-id buffer config model context-data)
+  "Provider for session context information including timing and environment."
+  (let* ((current-time (format-time-string "%Y-%m-%d %H:%M:%S UTC" (current-time) t))
+         (system-info (format " Emacs: %s" emacs-version))
+         (timezone-info (format "Timezone: %s" (format-time-string "%Z" (current-time))))
+         (encoding-info (format "Encoding: %s" (symbol-name buffer-file-coding-system)))
+         (session-content (format "Current time: %s\n%s\n%s\n%s"
+                                  current-time
+                                  system-info
+                                  timezone-info
+                                  encoding-info)))
+    (ai-common--make-typed-struct session-content 'session-context 'session-info)))
+
+(defun ai-context-management--provider-buffer-statistics (request-id buffer config model context-data)
+  "Provider for buffer statistics and metrics."
+  (with-current-buffer buffer
+    (let* ((line-count (count-lines (point-min) (point-max)))
+           (char-count (- (point-max) (point-min)))
+           (word-count (count-words (point-min) (point-max)))
+           (file-size (when (buffer-file-name)
+                        (file-attribute-size (file-attributes (buffer-file-name)))))
+           (last-modified (when (buffer-file-name)
+                            (format-time-string "%Y-%m-%d %H:%M:%S"
+                                                (file-attribute-modification-time
+                                                 (file-attributes (buffer-file-name))))))
+           (cursor-position (format "Line %d, Column %d" (line-number-at-pos) (current-column)))
+           (selection-info (when (use-region-p)
+                             (format "Selection: %d chars, %d lines"
+                                     (- (region-end) (region-beginning))
+                                     (count-lines (region-beginning) (region-end)))))
+           (stats-content (format "Buffer statistics:\n- Lines: %d\n- Characters: %d\n- Words: %d\n- Cursor: %s%s%s%s"
+                                  line-count
+                                  char-count
+                                  word-count
+                                  cursor-position
+                                  (if file-size (format "\n- File size: %d bytes" file-size) "")
+                                  (if last-modified (format "\n- Last modified: %s" last-modified) "")
+                                  (if selection-info (format "\n- %s" selection-info) ""))))
+      (ai-common--make-typed-struct stats-content 'buffer-statistics 'buffer-metrics))))
+
 ;; Register all default providers with priorities
 (ai-context-management--register-provider #'ai-context-management--provider-basic-instructions 100)
-(ai-context-management--register-provider #'ai-context-management--provider-file-metadata 150)
 (ai-context-management--register-provider #'ai-context-management--provider-global-system-prompts 200)
 (ai-context-management--register-provider #'ai-context-management--provider-command-instructions 250)
 (ai-context-management--register-provider #'ai-context-management--provider-config-instructions 300)
@@ -1004,7 +1043,10 @@ Handles cases where :content might not be a string."
 (ai-context-management--register-provider #'ai-context-management--provider-external-contexts 800)
 (ai-context-management--register-provider #'ai-context-management--provider-user-input 850)
 (ai-context-management--register-provider #'ai-context-management--provider-command-struct 900)
-(ai-context-management--register-provider #'ai-context-management--provider-action-context 950)
+(ai-context-management--register-provider #'ai-context-management--provider-file-metadata 950)
+(ai-context-management--register-provider #'ai-context-management--provider-session-context 955)
+;; (ai-context-management--register-provider #'ai-context-management--provider-buffer-statistics 975)
+(ai-context-management--register-provider #'ai-context-management--provider-action-context 1000)
 
 
 (provide 'ai-context-management)
