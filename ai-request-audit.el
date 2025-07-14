@@ -356,8 +356,38 @@ REQUEST-ID should be a unique identifier for the request."
   (ai-logging--verbose-message "Loading audit index from metadata files for %s" project-root)
   (ai-request-audit--load-metadata-from-directories project-root))
 
-(defun ai-request-audit--format-request-for-display (request-metadata)
-  "Format REQUEST-METADATA for display in requests list."
+(defun ai-request-audit--load-usage-stats-for-request (project-root request-id)
+  "Load usage statistics for REQUEST-ID from PROJECT-ROOT."
+  (let* ((request-dir (ai-request-audit--get-request-directory project-root request-id))
+         (stats-file (expand-file-name "usage_stats.json" request-dir)))
+    (when (file-exists-p stats-file)
+      (condition-case err
+          (json-read-file stats-file)
+        (error
+         (ai-logging--verbose-message "Error loading usage stats from %s: %s"
+                                      stats-file (error-message-string err))
+         nil)))))
+
+(defun ai-request-audit--format-usage-stats (usage-stats)
+  "Format USAGE-STATS for display in the table.
+Returns a string in format: input-tokens/output-tokens/thoughts-tokens/total-tokens"
+  (if usage-stats
+      (let* ((input-tokens (or (alist-get 'input-tokens usage-stats)
+                               (alist-get 'input_tokens usage-stats) 0))
+             (output-tokens (or (alist-get 'output-tokens usage-stats)
+                                (alist-get 'output_tokens usage-stats) 0))
+             (thoughts-tokens (or (alist-get 'thoughts-tokens usage-stats)
+                                  (alist-get 'thoughts_tokens usage-stats) 0))
+             (total-tokens (or (alist-get 'total-tokens usage-stats)
+                               (alist-get 'total_tokens usage-stats)
+                               (+ input-tokens output-tokens thoughts-tokens))))
+        (format "%7d + %7d + %7d = %7d" input-tokens output-tokens thoughts-tokens total-tokens)
+
+        )
+    "N/A"))
+
+(defun ai-request-audit--format-request-for-display (request-metadata project-root)
+  "Format REQUEST-METADATA for display in requests list with PROJECT-ROOT for loading usage stats."
   (let* ((timestamp (alist-get 'timestamp request-metadata))
          (request-id (alist-get 'request-id request-metadata))
          (command (alist-get 'command request-metadata))
@@ -370,13 +400,16 @@ REQUEST-ID should be a unique identifier for the request."
                            ((string= status "success") "✓")
                            ((string= status "error") "✗")
                            ((string= status "in-progress") "⟲")
-                           (t "?"))))
-    (format "%-19s %s %-12s %-20s %8s %s"
+                           (t "?")))
+         (usage-stats (ai-request-audit--load-usage-stats-for-request project-root request-id))
+         (usage-str (ai-request-audit--format-usage-stats usage-stats)))
+    (format "%-19s %s %-12s %-18s %8s %-38s %s"
             timestamp
             status-indicator
             status
-            (truncate-string-to-width command 20)
+            (truncate-string-to-width command 18)
             time-str
+            usage-str
             request-id)))
 
 (defun ai-request-audit--get-request-id-at-line ()
@@ -423,13 +456,13 @@ REQUEST-ID should be a unique identifier for the request."
           (erase-buffer)
           (insert (format "AI Request Audit - Project: %s\n\n" project-root))
           (insert "Press RET or SPC to show details, 'd' for details, 'r' to refresh, 'q' to quit\n\n")
-          (insert (format "%-19s %s %-12s %-20s %8s %s\n"
-                          "Timestamp" "S" "Status" "Command" "Time" "Request ID"))
-          (insert (make-string 80 ?-) "\n")
+          (insert (format "%-19s %s %-12s %-18s %8s %-38s %s\n"
+                          "Timestamp" "S" "Status" "Command" "Time" "Usage Stats" "Request ID"))
+          (insert (make-string 140 ?-) "\n")
 
           (if index
               (dolist (request index)
-                (insert (ai-request-audit--format-request-for-display request) "\n"))
+                (insert (ai-request-audit--format-request-for-display request project-root) "\n"))
             (insert "No audit records found.\n"))
 
           (setq buffer-read-only t)
@@ -484,7 +517,7 @@ REQUEST-ID should be a unique identifier for the request."
 (defun ai-request-audit--insert-metadata-section (metadata)
   "Insert metadata section for request details."
   (magit-insert-section (metadata)
-    (magit-insert-heading "Metadata")
+    (magit-insert-heading "METADATA")
     (dolist (item metadata)
       (insert (format "  %s: %s\n" (car item) (cdr item))))
     (insert "\n")))
@@ -492,7 +525,7 @@ REQUEST-ID should be a unique identifier for the request."
 (defun ai-request-audit--insert-usage-stats-section (usage-stats)
   "Insert usage statistics section for request details."
   (magit-insert-section (usage-stats)
-    (magit-insert-heading "Usage Statistics")
+    (magit-insert-heading "USAGE STATISTICS")
     (dolist (item usage-stats)
       (insert (format "  %s: %s\n" (car item) (cdr item))))
     (insert "\n")))
