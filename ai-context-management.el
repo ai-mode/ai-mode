@@ -273,11 +273,6 @@ across all interactions and buffers."
   :type 'string
   :group 'ai)
 
-;; Project files summary index
-(defvar ai-context-management--project-files-summary-index (make-hash-table :test 'equal)
-  "Cached index of project files summary structures.
-Maps project root paths to lists of file summary structs.")
-
 ;; Context-related functions moved from ai-utils
 
 (defun ai-context-management--get-buffer-type-or-language (buffer)
@@ -769,63 +764,6 @@ Returns a typed struct containing the project files context, or nil if no projec
                              :root project-root)))
         project-struct))))
 
-(defun ai-context-management--get-project-ai-summary-context ()
-  "Get project context using project AI summary mode with cached index.
-Returns a typed struct containing the project files summary from cached index,
-or nil if no project is detected or index is empty."
-  (when-let* ((project-root (ai-project--get-project-root))
-              (files-list (ai-project--get-filtered-project-files t))
-              (summaries-for-current-project (gethash project-root ai-context-management--project-files-summary-index)))
-    (let* ((files-list-content (mapconcat (lambda (file-path)
-                                            (format "- %s" file-path))
-                                          files-list "\n"))
-           (files-list-struct (ai-common--make-typed-struct
-                              files-list-content
-                              'files-list
-                              'project-scan
-                              :root project-root
-                              :count (length files-list)))
-           (files-struct (ai-common--make-typed-struct
-                         (or summaries-for-current-project '())
-                         'files
-                         'project-summary-index))
-           (project-struct (ai-common--make-typed-struct
-                           (list files-list-struct files-struct)
-                           'project-ai-summary
-                           'project-ai-indexer
-                           :root project-root)))
-      project-struct)))
-
-(defun ai-context-management--get-enhanced-project-ai-summary-context ()
-  "Get enhanced project context using project AI summary mode with dependency awareness."
-  (when-let* ((project-root (ai-project--get-project-root))
-              (files-list (ai-project--get-filtered-project-files t))
-              (summaries-for-current-project (gethash project-root ai-context-management--project-files-summary-index)))
-    (let* ((files-count (length files-list))
-           (indexed-count (length summaries-for-current-project))
-           (files-list-content (mapconcat (lambda (file-path)
-                                            (format "- %s" file-path))
-                                          files-list "\n"))
-           (files-list-struct (ai-common--make-typed-struct
-                              files-list-content
-                              'files-list
-                              'project-scan
-                              :root project-root
-                              :count files-count
-                              :indexed-count indexed-count))
-           (files-struct (ai-common--make-typed-struct
-                         (or summaries-for-current-project '())
-                         'files
-                         'project-summary-index
-                         :has-context (> indexed-count 0)))
-           (project-struct (ai-common--make-typed-struct
-                           (list files-list-struct files-struct)
-                           'project-ai-summary
-                           'project-ai-indexer
-                           :root project-root
-                           :indexing-mode "enhanced")))
-      project-struct)))
-
 (defun ai-context-management--get-project-context ()
   "Get project context based on `ai-context-management--project-context-mode` setting.
 Returns a typed struct containing the appropriate project context, or nil if disabled."
@@ -833,7 +771,9 @@ Returns a typed struct containing the appropriate project context, or nil if dis
    ((eq ai-context-management--project-context-mode 'full-project)
     (ai-context-management--get-full-project-context))
    ((eq ai-context-management--project-context-mode 'project-ai-summary)
-    (ai-context-management--get-project-ai-summary-context))
+    ;; Use the function from ai-mode-indexing.el
+    (when (require 'ai-mode-indexing nil t)
+      (ai-mode-indexing-get-project-ai-summary-context)))
    (t nil)))
 
 (defun ai-context-management--switch-project-context-mode ()
@@ -856,7 +796,6 @@ Allows user to select between different project context inclusion modes."
     (message "Project context mode changed to: %s (%s)"
              selected-name
              (cdr (assoc selected-mode mode-descriptions)))))
-
 
 (cl-defun ai-context-management--get-execution-context (buffer config &key
                                                                (preceding-context-size ai-context-management--current-precending-context-size)
