@@ -60,7 +60,7 @@
 
 If TRIM is non-nil, trims the content passed to CALLBACK."
   (let ((buffer (current-buffer)))
-    (lambda (messages)
+    (lambda (messages &optional usage-stats) ;; Added &optional usage-stats
       (let ((content (ai-response-processors--extract-content-from-messages messages)))
         (with-current-buffer buffer
           (funcall callback (if trim (string-trim-left content) content)))))))
@@ -81,7 +81,7 @@ If TRIM is non-nil, trims the content passed to the function."
          (end (cond (region-active (region-end))
                    (insert-mode nil)
                    (t (point-max)))))
-    (lambda (messages)
+    (lambda (messages &optional usage-stats) ;; Added &optional usage-stats
       (let* ((raw-content (ai-response-processors--extract-content-from-messages messages))
             (content (if trim (string-trim-left raw-content) raw-content)))
         (when (string-empty-p content)
@@ -100,7 +100,7 @@ If TRIM is non-nil, trims the content passed to the function."
 
 (defun ai-response-processors--create-insert-at-point-callback (target-buffer cursor-position)
   "Create a callback that inserts AI response at CURSOR-POSITION in TARGET-BUFFER."
-  (lambda (messages)
+  (lambda (messages &optional usage-stats) ;; Added &optional usage-stats
     (when (buffer-live-p target-buffer)
       (let ((content (ai-response-processors--extract-content-from-messages messages)))
         (when (and content (not (string-empty-p content)))
@@ -115,7 +115,7 @@ If TRIM is non-nil, trims the content passed to the function."
 TAG is a marker for placing content passed to the CALLBACK function.
 If TRIM is non-nil, trims content passed to the CALLBACK."
   (let ((buffer (current-buffer)))
-    (lambda (messages)
+    (lambda (messages &optional usage-stats) ;; Added &optional usage-stats
       (let ((content (ai-response-processors--extract-content-from-messages messages)))
         (with-current-buffer buffer
           (funcall callback tag (if trim (string-trim-left content) content)))))))
@@ -128,7 +128,7 @@ If TRIM is non-nil, trims content passed to the CALLBACK."
       (princ text)
       (switch-to-buffer (ai-response-processors--get-explaination-help-buffer)))))
 
-(defun ai-response-processors--show-response-buffer (messages)
+(defun ai-response-processors--show-response-buffer (messages &optional usage-stats) ;; Added &optional usage-stats
   "Display MESSAGES content in the response buffer."
   (let ((content (ai-response-processors--extract-content-from-messages messages))
         (buffer (ai-response-processors--get-response-buffer)))
@@ -140,7 +140,7 @@ If TRIM is non-nil, trims content passed to the CALLBACK."
           (when (fboundp 'markdown-mode)
             (markdown-mode)))))))
 
-(defun ai-response-processors--show-and-eval-response (messages)
+(defun ai-response-processors--show-and-eval-response (messages &optional usage-stats) ;; Added &optional usage-stats
   "Show MESSAGES in a buffer and ask user for permission to evaluate the Emacs Lisp code."
   (let* ((content (ai-response-processors--extract-content-from-messages messages))
          (buffer-name "*AI Generated Code*")
@@ -216,7 +216,7 @@ If TRIM is non-nil, trims content passed to the CALLBACK."
 
 (defun ai-response-processors--create-patch-apply-callback (original-buffer)
   "Create a callback that applies patch content to ORIGINAL-BUFFER."
-  (lambda (messages)
+  (lambda (messages &optional usage-stats) ;; Added &optional usage-stats
     (let ((response-content (ai-response-processors--extract-content-from-messages messages)))
       (if response-content
           (with-current-buffer original-buffer
@@ -224,7 +224,7 @@ If TRIM is non-nil, trims content passed to the CALLBACK."
                 (ai-response-processors--apply-patch-to-buffer response-content)
               (error
                (message "Failed to apply patch: %s" (error-message-string err))
-               (ai-response-processors--show-response-buffer messages))))
+               (ai-response-processors--show-response-buffer messages usage-stats)))) ;; Pass usage-stats here too
         (message "No patch content received from AI")))))
 
 

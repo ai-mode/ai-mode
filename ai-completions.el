@@ -322,10 +322,10 @@ STRATEGY may alter the completion behavior."
                             execution-model
                             execution-context))
 
-         (success-callback (lambda (candidates)
+         (success-callback (lambda (candidates &optional usage-stats)
                              (with-current-buffer buffer
                                (ai-logging--verbose-message "AI completion: Received %d candidates" (length candidates))
-                               (ai-request-audit-complete-request audit-request-id candidates)
+                               (ai-request-audit-complete-request audit-request-id candidates usage-stats)
                                (ai-completions--add-candidates candidates)
                                (ai-completions--show-candidate))))
          (fail-callback (lambda (request-data response-error)

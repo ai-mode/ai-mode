@@ -996,16 +996,18 @@ REQUEST-DATA is the data sent with the failed request."
     (ai-chat--log-chat-error error-message (map-elt model :name))
     (setq ai-chat--busy nil)))
 
-(defun ai-chat--request-success-callback (messages)
-  "Handle successful requests by processing MESSAGES.
+(defun ai-chat--request-success-callback (messages &optional usage-stats)
+  "Handle successful requests by processing MESSAGES with optional USAGE-STATS.
 
-MESSAGES is a list of messages returned from the backend."
+MESSAGES is a list of messages returned from the backend.
+USAGE-STATS is optional usage statistics provided by the backend."
   (condition-case-unless-debug processing-error
       (progn
         (setq ai-chat--busy nil)
         (let ((model (ai-chat--get-current-model)))
           ;; Log the response
           (ai-chat--log-chat-response messages (map-elt model :name))
+
           (with-current-buffer (ai-chat--buffer)
             (dolist (entry messages)
               (ai-chat--add-entry-to-history entry)
@@ -1135,9 +1137,9 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
                                         context))
 
                      (wrapped-success-callback (ai-chat--progress-wrap-callback
-                                               (lambda (messages)
-                                                 (ai-request-audit-complete-request audit-request-id messages)
-                                                 (ai-chat--request-success-callback messages))
+                                               (lambda (messages &optional usage-stats)
+                                                 (ai-request-audit-complete-request audit-request-id messages usage-stats)
+                                                 (ai-chat--request-success-callback messages usage-stats))
                                                current-buffer))
                      (wrapped-fail-callback (ai-chat--progress-wrap-callback
                                             (lambda (request-data error-message)

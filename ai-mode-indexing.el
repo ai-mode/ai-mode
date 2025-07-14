@@ -456,9 +456,11 @@ AUDIT-TYPE should be 'success' or 'fail'."
   (lambda (&rest args)
     (cond
      ((eq audit-type 'success)
-      (ai-request-audit-complete-request request-id (car args)))
+      (let ((response (car args))
+            (usage-stats (cadr args)))
+        (ai-request-audit-complete-request request-id response usage-stats)))
      ((eq audit-type 'fail)
-      (ai-request-audit-fail-request request-id (cdr args))))
+      (ai-request-audit-fail-request request-id (car args))))
     (when (functionp callback)
       (apply callback args))))
 
@@ -470,7 +472,7 @@ TARGET-BUFFER is the buffer where indexing was initiated.
 ORIGINAL-FILE-STRUCT is the original file struct passed for summarization.
 PROJECT-ROOT is the root path of the project.
 START-TIME is when the indexing process began."
-  (lambda (messages)
+  (lambda (messages &optional usage-stats)
     (let* ((relative-path (plist-get original-file-struct :relative-path))
            (summary-struct (ai-response-processors--get-message messages)))
       (ai-logging--verbose-message "Processing successful indexing response for file %s" relative-path)
@@ -649,7 +651,7 @@ START-TIME is when the indexing process began."
 (defun ai-mode-indexing--create-sequential-success-callback (remaining-files current-model pending-count-ref accumulated-summaries-ht target-buffer original-file-struct project-root start-time)
   "Create success callback for sequential file processing.
 START-TIME is when the indexing process began."
-  (lambda (messages)
+  (lambda (messages &optional usage-stats)
     (let* ((relative-path (plist-get original-file-struct :relative-path))
            (summary-struct (ai-response-processors--get-message messages)))
       (ai-logging--verbose-message "Sequential success callback for file %s" relative-path)

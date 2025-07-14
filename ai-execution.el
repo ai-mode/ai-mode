@@ -78,9 +78,11 @@ AUDIT-TYPE should be 'success' or 'fail'."
   (lambda (&rest args)
     (cond
      ((eq audit-type 'success)
-      (ai-request-audit-complete-request request-id (car args)))
+      (let ((response (car args))
+            (usage-stats (cadr args)))
+        (ai-request-audit-complete-request request-id response usage-stats)))
      ((eq audit-type 'fail)
-      (ai-request-audit-fail-request request-id (cdr args))))
+      (ai-request-audit-fail-request request-id (car args))))
     (when (functionp callback)
       (apply callback args))))
 
