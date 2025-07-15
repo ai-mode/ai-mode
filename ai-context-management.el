@@ -997,7 +997,7 @@ Handles cases where :content might not be a string."
                                   system-info
                                   timezone-info
                                   encoding-info)))
-    (ai-common--make-typed-struct session-content 'session-context 'session-info)))
+    (ai-common--make-typed-struct session-content 'additional-context 'session-info)))
 
 (defun ai-context-management--provider-buffer-statistics (request-id buffer config model context-data)
   "Provider for buffer statistics and metrics."
@@ -1024,7 +1024,7 @@ Handles cases where :content might not be a string."
                                   (if file-size (format "\n- File size: %d bytes" file-size) "")
                                   (if last-modified (format "\n- Last modified: %s" last-modified) "")
                                   (if selection-info (format "\n- %s" selection-info) ""))))
-      (ai-common--make-typed-struct stats-content 'buffer-statistics 'buffer-metrics))))
+      (ai-common--make-typed-struct stats-content 'additional-context 'buffer-metrics))))
 
 ;; Register all default providers with priorities
 (ai-context-management--register-provider #'ai-context-management--provider-basic-instructions 100)
