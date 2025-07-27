@@ -109,6 +109,8 @@
 ;; - C-c i m e - Edit command instructions
 ;; - C-c i m d - Describe command modifiers
 ;; - C-c i m c - Create command with modifiers
+;; - C-c i m r - Refresh command registry
+;; - C-c i m s - Show command registry status
 ;;
 ;; Context Management (prefix C-c i k):
 ;; - C-c i k a - Add to context pool
@@ -199,6 +201,8 @@
     (define-key keymap (kbd "m e") 'ai-command-edit-instructions)
     (define-key keymap (kbd "m d") 'ai-command-describe-modifiers)
     (define-key keymap (kbd "m c") 'ai-command-create-modified)
+    (define-key keymap (kbd "m r") 'ai-command-registry-refresh)
+    (define-key keymap (kbd "m s") 'ai-command-registry-status)
 
     ;; Context management (prefix: k)
     (define-key keymap (kbd "k a") 'ai-context-add-to-pool)
@@ -303,8 +307,10 @@ See the package commentary for detailed usage instructions."
 (add-hook 'global-ai-mode-hook 'ai-mode-global-init-hook)
 
 (defun ai-mode--initialize-system ()
-  "Initialize prompt caches."
-  (ai-prompt-management--update-caches))
+  "Initialize prompt caches and command registry."
+  (ai-prompt-management--update-caches)
+  ;; Refresh command registry to ensure it's up to date
+  (ai-command-management--refresh-command-registry))
 
 ;; Core command aliases
 (defun ai-change-model (&optional model-name)
@@ -317,18 +323,24 @@ Otherwise, prompt the user to select from available models."
   (ai-model-management-change model-name))
 
 (defun ai-show ()
-  "Execute command and show the response in a special buffer, filtering by show-compatible commands."
+  "Execute command and show the response in a special buffer.
+Uses the new unified command system with proper filtering."
   (interactive)
+  ;; Use new command system with filtering for show-compatible commands
   (ai-core-show))
 
 (defun ai-execute ()
-  "Execute command and show the response for evaluation, filtering by eval-compatible commands."
+  "Execute command and show the response for evaluation.
+Uses the new unified command system with proper filtering."
   (interactive)
+  ;; Use new command system with filtering for eval-compatible commands
   (ai-core-execute))
 
 (defun ai-perform ()
-  "Execute request and apply the result based on command's specified result action or default to replace."
+  "Execute request and apply the result based on command's specified result action.
+Uses the new unified command system for enhanced command selection."
   (interactive)
+  ;; Use new command system for enhanced command handling
   (ai-core-perform))
 
 (defun ai-perform-coordinator ()
@@ -356,6 +368,22 @@ Otherwise, prompt the user to select from available models."
   "Interactively create a new file-based command with modifiers."
   (interactive)
   (ai-command-management-create-modified-command))
+
+(defun ai-command-registry-refresh ()
+  "Manually refresh command registry.
+Forces an update of all command providers and rebuilds the command registry."
+  (interactive)
+  (ai-command-management--refresh-command-registry)
+  (message "Command registry refreshed"))
+
+(defun ai-command-registry-status ()
+  "Show status of command registry.
+Displays the current number of commands and registry statistics."
+  (interactive)
+  (ai-command-management--ensure-registry-updated)
+  (let ((count (hash-table-count ai-command-management--command-registry))
+        (providers (length ai-command-management--command-providers)))
+    (message "Command registry contains %d commands from %d providers" count providers)))
 
 ;; Context management aliases (prefix: ai-context-)
 (defun ai-context-add-to-pool ()

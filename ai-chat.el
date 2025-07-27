@@ -479,7 +479,7 @@ Returns a flattened list of all context elements provided by registered provider
                     (when (and item (not (null item)))
                       (push item results))))))
           (error
-           (ai-utils--log "Error calling AI chat context provider %s: %s" provider err)))))
+           (messge "Error calling AI chat context provider %s: %s" provider err)))))
     ;; Return results in correct order
     (reverse results)))
 

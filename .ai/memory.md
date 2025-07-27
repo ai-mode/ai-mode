@@ -23,3 +23,19 @@
 *   **`ai-telemetry.el`**: Handles the collection and reporting of telemetry data for usage statistics and performance monitoring.
 *   **`ai-network.el`**: Manages network communication and connectivity for AI mode, including HTTP request handling, connection pooling, retry logic, timeout management, and network-related error handling for AI service interactions.
 *   **`ai-progress.el`**: Manages progress tracking business logic for long-running AI operations, including progress state management, cancellation support, and data structures for tracking AI request progress.
+
+## Development Guidelines
+
+### Module Encapsulation and Data Access
+
+* **Respect module boundaries**: External functions should not directly access internal data structures of other modules. Each module should provide clearly defined public API functions for data access and manipulation.
+
+* **Use designated accessor functions**: When a module maintains internal state (caches, configuration, data structures), access should occur through dedicated public functions rather than direct variable access. This ensures proper initialization, validation, and consistency.
+
+* **Avoid direct hash table access**: Never directly use `gethash`, `puthash`, or `clrhash` on internal data structures from other modules. Use the module's public API functions instead.
+
+* **Follow naming conventions**: Internal variables and functions should use double-dash (`--`) naming to indicate they are private to the module. External code should only call functions with single-dash (`-`) naming.
+
+* **Maintain abstraction layers**: Each module should hide its implementation details and provide a clean interface. This allows for internal refactoring without breaking dependent code.
+
+* **Document public APIs**: Clearly document which functions are intended for external use and which are internal implementation details.

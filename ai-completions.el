@@ -42,6 +42,7 @@
 ;;; Code:
 
 (require 'ai-common)
+(require 'ai-structs)
 (require 'ai-model-management)
 (require 'ai-execution)
 (require 'ai-context-management)
@@ -56,25 +57,22 @@
   "AI code completion tool for Emacs."
   :group 'ai-mode)
 
-(defcustom ai-completions--current-precending-context-size 20
-  "Current number of lines used as context for code completion."
-  :type 'integer
-  :group 'ai-completions)
-
-(defcustom ai-completions--current-forwarding-context-size 20
-  "Size of the context following the cursor for completion."
-  :type 'integer
-  :group 'ai-completions)
-
 (defcustom ai-completions--context-size-step 10
-  "Step size to increase the context size."
+  "Step size for increasing context during completion."
   :type 'integer
   :group 'ai-completions)
 
-(defcustom ai-completions--current-action-type nil
-  "Current action type for the completion process."
-  :type 'string
-  :group 'ai-completions)
+(defvar-local ai-completions--current-command-struct nil
+  "Current command struct for the completion process.")
+
+(defvar-local ai-completions--current-precending-context-size nil
+  "Current preceding context size for completion.")
+
+(defvar-local ai-completions--current-forwarding-context-size nil
+  "Current following context size for completion.")
+
+(defvar-local ai-completions--use-full-context nil
+  "Flag indicating whether to use full context for current completion.")
 
 (defvar ai-completions--global-system-instructions '()
   "Global system instructions for AI completion.")
@@ -148,6 +146,9 @@
 (defvar-local ai-completions--preview-at-point nil
   "Point at which the completion preview should be displayed.")
 
+(defvar-local ai-completions--strategy nil
+  "Current completion strategy.")
+
 (defvar ai-completions--mode-keymap
   (let ((keymap (make-sparse-keymap)))
     ;; Define keys for managing candidates
@@ -187,8 +188,7 @@ uses the active region if available, otherwise restricts the context around the 
 (defun ai-completions--complete-at-point-with-full-context ()
   "Perform autocompletion with full file context."
   (interactive)
-  (let* ((ai-completions--current-precending-context-size nil)
-         (ai-completions--current-forwarding-context-size nil))
+  (let* ((ai-completions--use-full-context t))
     (ai-completions--coordinator :action-type "complete")))
 
 (cl-defun ai-completions--coordinator (&key (action-type nil) (strategy nil))
@@ -205,26 +205,66 @@ STRATEGY may be specified to alter completion behavior."
     (error (ai-logging--verbose-message "AI completion: An error occurred in ai-completions--coordinator => %s" (error-message-string err))
            (ai-completions--cancel))))
 
+(defun ai-completions--get-or-create-completion-command (action-type)
+  "Get or create completion command struct for ACTION-TYPE."
+  (ai-completions--create-default-completion-command action-type))
+
+(defun ai-completions--create-default-completion-command (action-type)
+  "Create default completion command struct for ACTION-TYPE."
+
+  (let* ((use-buffer-context ai-completions--use-full-context)
+         (preceding-size (unless use-buffer-context
+                           ai-context-management--current-precending-context-size))
+         (following-size (unless use-buffer-context
+                           ai-context-management--current-forwarding-context-size))
+         (behavior (make-ai-command-behavior
+                    :user-input nil
+                    :action-type "complete"
+                    :result-action 'complete
+                    :needs-buffer-context use-buffer-context
+                    :needs-project-context nil
+                    :needs-global-context nil
+                    :preceding-context-size preceding-size
+                    :following-context-size following-size))
+         (priority 100))
+    (make-ai-command
+     :name action-type
+     :canonical-name action-type
+     :base-name action-type
+     :instructions nil
+     :behavior behavior
+     :source :completion
+     :location :dynamic
+     :file-path nil
+     :priority priority)))
+
 (cl-defun ai-completions--begin (&key (action-type nil) (strategy nil))
   "Initiate a new completion session.
 ACTION-TYPE specifies the action to be completed.
 STRATEGY may alter the completion behavior."
 
+  (ai-logging--verbose-message "AI completion before ai-completions--cancel: Beginning new completion session with action-type=%s ai-completions--use-full-context=%s" action-type ai-completions--use-full-context)
+
   (ai-completions--cancel)
-  (ai-logging--verbose-message "AI completion: Beginning new completion session with action-type: %s" action-type)
-  (setq-local ai-completions--complete-at-point (ai-completions--get-completion-point strategy)
-              ai-completions--preview-at-point (ai-completions--get-preview-point strategy)
-              ai-completions--active t
+  (ai-logging--verbose-message "AI completion: Beginning new completion session with action-type=%s ai-completions--use-full-context=" action-type ai-completions--use-full-context)
 
-              ai-completions--current-action-type action-type
-              ai-completions--current-buffer-clone (ai-utils--clone-buffer (current-buffer))
-              ai-completions--strategy strategy)
+  ;; Get or create command struct for completion
+  (let ((command-struct (ai-completions--get-or-create-completion-command action-type)))
+    (setq-local ai-completions--complete-at-point (ai-completions--get-completion-point strategy)
+                ai-completions--preview-at-point (ai-completions--get-preview-point strategy)
+                ai-completions--active t
+                ai-completions--current-command-struct command-struct
+                ai-completions--current-buffer-clone (ai-utils--clone-buffer (current-buffer))
+                ai-completions--strategy strategy
+                ;; Initialize context sizes from ai-context-management defaults, not from command
+                ai-completions--current-precending-context-size ai-context-management--current-precending-context-size
+                ai-completions--current-forwarding-context-size ai-context-management--current-forwarding-context-size)
 
-  (condition-case-unless-debug err
-      (progn (ai-completions-mode 1)
-             (ai-completions--update-candidates (current-buffer)))
-    (error (ai-logging--verbose-message "AI completion: An error occurred in ai-completions--begin => %s" (error-message-string err))
-           (ai-completions--cancel))))
+    (condition-case-unless-debug err
+        (progn (ai-completions-mode 1)
+               (ai-completions--update-candidates (current-buffer)))
+      (error (ai-logging--verbose-message "AI completion: An error occurred in ai-completions--begin => %s" (error-message-string err))
+             (ai-completions--cancel)))))
 
 (defun ai-completions--get-completion-point (strategy)
   "Get the position where completion should begin based on STRATEGY."
@@ -300,25 +340,38 @@ STRATEGY may alter the completion behavior."
        'completion-session))))
 
 (cl-defun ai-completions--update-candidates (buffer)
-  "Update the list of candidates for BUFFER."
-  (let* ((action-type ai-completions--current-action-type)
-         (config (ai-command-management--get-command-config-by-type action-type))
+  "Update the list of candidates for BUFFER using unified command system."
+  (let* ((command-struct ai-completions--current-command-struct)
          (execution-model (ai-completions--get-current-model))
          (candidates-context (ai-completions--create-candidates-context))
          (external-contexts (when candidates-context (list candidates-context)))
+
+         ;; Create a temporary command struct with current context sizes
+         (updated-command-struct
+          (let ((behavior (copy-ai-command-behavior (ai-structs--get-command-behavior command-struct))))
+            (setf (ai-command-behavior-preceding-context-size behavior)
+                  ai-completions--current-precending-context-size)
+            (setf (ai-command-behavior-following-context-size behavior)
+                  ai-completions--current-forwarding-context-size)
+            (let ((updated-command (copy-ai-command command-struct)))
+              (setf (ai-command-behavior updated-command) behavior)
+              updated-command)))
+
+         ;; Get execution context using the unified system
          (execution-context
-          (ai-context-management--get-execution-context (ai-completions--get-current-buffer-clone) config
-                                     :preceding-context-size ai-completions--current-precending-context-size
-                                     :following-context-size ai-completions--current-forwarding-context-size
-                                     :model execution-model
-                                     :external-contexts external-contexts))
+          (ai-context-management--get-executions-context-for-command
+           updated-command-struct
+           :model execution-model
+           :external-contexts external-contexts))
+
          (execution-backend (map-elt execution-model :execution-backend))
          (request-id (plist-get execution-context :request-id))
+         (command-name (ai-structs--get-command-canonical-name command-struct))
 
          ;; Start audit if enabled
          (audit-request-id (ai-request-audit-start-request
                             request-id
-                            action-type
+                            command-name
                             execution-model
                             execution-context))
 
@@ -341,9 +394,9 @@ STRATEGY may alter the completion behavior."
       (error (message "Model execution backend not defined"))
       (ai-completions--abort))
 
-    (ai-logging--verbose-message "AI completion: Executing backend for action \"%s\" with model \"%s\""
-                                action-type (map-elt execution-model :name))
-    (message (format "Attempting to execute backend for action \"%s\"" (ai-utils-escape-format-specifiers action-type)))
+    (ai-logging--verbose-message "AI completion: Executing backend for command \"%s\" with model \"%s\""
+                                command-name (map-elt execution-model :name))
+    (message (format "Attempting to execute backend for command \"%s\"" (ai-utils-escape-format-specifiers command-name)))
 
     ;; Write context to prompt buffer for debugging/auditing
     (ai-telemetry-write-context-to-prompt-buffer (plist-get execution-context :messages))
@@ -397,11 +450,12 @@ STRATEGY may alter the completion behavior."
               ai-completions--complete-at-point nil
               ai-completions--preview-at-point nil
               ai-completions--active nil
-              ai-completions--current-action-type nil
-              ai-completions--current-precending-context-size ai-context-management--default-preceding-context-size
-              ai-completions--current-forwarding-context-size ai-context-management--default-following-context-size
+              ai-completions--current-command-struct nil
+              ai-completions--current-precending-context-size nil
+              ai-completions--current-forwarding-context-size nil
               ai-completions--current-buffer-clone nil
-              ai-completions--strategy nil))
+              ai-completions--strategy nil
+              ai-completions--use-full-context nil))
 
 (defun ai-completions--abort ()
   "Abort the completion process."
@@ -430,8 +484,9 @@ STRATEGY may alter the completion behavior."
         ai-completions--complete-at-point nil
         ai-completions--preview-at-point nil
         ai-completions--active nil
-        ai-completions--current-action-type nil
-
+        ai-completions--current-command-struct nil
+        ai-completions--current-precending-context-size nil
+        ai-completions--current-forwarding-context-size nil
         ai-completions--current-buffer-clone nil
         ai-completions--strategy nil)
   (ai-completions--destroy-keymap)
@@ -483,7 +538,12 @@ STRATEGY may alter the completion behavior."
 (defun ai-completions--increase-current-context ()
   "Increase the context size for the current completion."
   (interactive)
-  (setq ai-completions--current-precending-context-size (+ ai-completions--current-precending-context-size ai-completions--context-size-step))
+  (setq ai-completions--current-precending-context-size (+ (or ai-completions--current-precending-context-size
+                                                               ai-context-management--current-precending-context-size)
+                                                           ai-completions--context-size-step)
+        ai-completions--current-forwarding-context-size (+ (or ai-completions--current-forwarding-context-size
+                                                               ai-context-management--current-forwarding-context-size)
+                                                           ai-completions--context-size-step))
   (ai-logging--verbose-message "AI completion: Increased context size to %d-%d"
                               ai-completions--current-precending-context-size
                               ai-completions--current-forwarding-context-size)
@@ -493,21 +553,30 @@ STRATEGY may alter the completion behavior."
                    ai-completions--current-forwarding-context-size)))
 
 (defun ai-completions--maximize-current-context ()
-  "Maximize the context window for completion."
+  "Maximize the context window for completion by setting needs-buffer-context = t."
   (interactive)
-  (setq ai-completions--current-precending-context-size -1)
-  (setq ai-compqletions--current-forwarding-context-size -1)
-  (ai-logging--verbose-message "AI completion: Maximized context size to full buffer")
+  (when ai-completions--current-command-struct
+    ;; Update the command struct to use buffer context
+    (let* ((behavior (copy-ai-command-behavior (ai-structs--get-command-behavior ai-completions--current-command-struct)))
+           (updated-command (copy-ai-command ai-completions--current-command-struct)))
+      (setf (ai-command-behavior-needs-buffer-context behavior) t)
+      (setf (ai-command-behavior-preceding-context-size behavior) nil)
+      (setf (ai-command-behavior-following-context-size behavior) nil)
+      (setf (ai-command-behavior updated-command) behavior)
+      (setq ai-completions--current-command-struct updated-command)
+      ;; Reset local context variables since we're using buffer context now
+      (setq ai-completions--current-precending-context-size nil
+            ai-completions--current-forwarding-context-size nil)))
+  (ai-logging--verbose-message "AI completion: Maximized context to use full buffer context")
   (ai-completions--show-candidate)
-  (message (format "Current completion context size: %d - %d"
-                   ai-completions--current-precending-context-size
-                   ai-completions--current-forwarding-context-size)))
+  (message "Current completion context: full buffer"))
 
 (defun ai-completions--add-instruction (input)
-  "Add an instruction INPUT to the current query."
+  "Add an instruction INPUT to the current query using the centralized context pool."
   (interactive (list (read-string "Enter query instruction: ")))
   (ai-logging--verbose-message "AI completion: Adding user instruction: %s" input)
-  (ai-common--add-to-context-pool (ai-common--make-typed-struct input 'user-instruction 'user-input))
+  (ai-context-management--add-to-context-pool
+   (ai-common--make-typed-struct input 'user-instruction 'user-input))
   (when ai-completions--active
     (condition-case-unless-debug err
         (progn (ai-completions-mode 1)

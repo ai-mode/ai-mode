@@ -229,6 +229,19 @@ If TRIM is non-nil, trims content passed to the CALLBACK."
 
 
 
+(defun ai-response-processors--create-smart-replace-callback (target-buffer)
+  "Create a callback for smart replacement based on `ai-execution--replace-action-use-patch`.
+Returns a callback that takes MESSAGES and USAGE-STATS and applies the content
+to TARGET-BUFFER, either by patching or by direct replacement/insertion."
+  (if (bound-and-true-p ai-execution--replace-action-use-patch)
+      (ai-response-processors--create-patch-apply-callback target-buffer)
+    (lambda (messages &optional usage-stats)
+      (with-current-buffer target-buffer
+        (funcall (ai-response-processors--replace-region-or-insert-in-current-buffer)
+                 messages
+                 usage-stats)))))
+
+
 (provide 'ai-response-processors)
 
 ;;; ai-response-processors.el ends here

@@ -38,6 +38,7 @@
 (require 'ai-common)
 (require 'ai-project)
 (require 'ai-logging)
+(require 'ai-structs)
 
 (defcustom ai-request-audit-enabled t
   "Enable request auditing for AI mode.
@@ -57,6 +58,101 @@ When exceeded, oldest records will be automatically deleted if cleanup is enable
 When enabled, oldest records are deleted to maintain the specified limit."
   :type 'boolean
   :group 'ai-mode)
+
+(defun ai-request-audit--serialize-data-for-json (data)
+  "Convert DATA to JSON-serializable format, handling ai-command structs and other complex data."
+  (cond
+   ;; Handle ai-command struct
+   ((ai-command-p data)
+    `((name . ,(ai-structs--get-command-name data))
+      (canonical-name . ,(ai-structs--get-command-canonical-name data))
+      (base-name . ,(ai-structs--get-command-base-name data))
+      (instructions . ,(ai-structs--get-command-instructions data))
+      (behavior . ,(ai-request-audit--serialize-data-for-json (ai-structs--get-command-behavior data)))
+      (source . ,(ai-structs--get-command-source data))
+      (location . ,(ai-structs--get-command-location data))
+      (file-path . ,(ai-structs--get-command-file-path data))
+      (priority . ,(ai-structs--get-command-priority data))))
+   ;; Handle ai-command-behavior struct
+   ((ai-command-behavior-p data)
+    `((user-input . ,(ai-command-behavior-user-input data))
+      (action-type . ,(ai-command-behavior-action-type data))
+      (result-action . ,(ai-command-behavior-result-action data))
+      (needs-buffer-context . ,(ai-command-behavior-needs-buffer-context data))
+      (needs-project-context . ,(ai-command-behavior-needs-project-context data))
+      (needs-global-context . ,(ai-command-behavior-needs-global-context data))
+      (preceding-context-size . ,(ai-command-behavior-preceding-context-size data))
+      (following-context-size . ,(ai-command-behavior-following-context-size data))))
+   ;; Handle ai-modifier struct
+   ((ai-modifier-p data)
+    `((name . ,(ai-modifier-name data))
+      (type . ,(ai-modifier-type data))
+      (config . ,(ai-request-audit--serialize-data-for-json (ai-modifier-config data)))
+      (display-char . ,(ai-modifier-display-char data))
+      (description . ,(ai-modifier-description data))
+      (conflicts . ,(ai-modifier-conflicts data))))
+   ;; Handle ai-buffer-state struct
+   ((ai-buffer-state-p data)
+    `((buf-name . ,(ai-buffer-state-buf-name data))
+      (buf-filename . ,(ai-buffer-state-buf-filename data))
+      (cur-point . ,(ai-buffer-state-cur-point data))
+      (cur-line . ,(ai-buffer-state-cur-line data))
+      (cur-column . ,(ai-buffer-state-cur-column data))
+      (reg-active . ,(ai-buffer-state-reg-active data))
+      (reg-beginning . ,(ai-buffer-state-reg-beginning data))
+      (reg-end . ,(ai-buffer-state-reg-end data))
+      (reg-content . ,(ai-buffer-state-reg-content data))
+      (buf-point-min . ,(ai-buffer-state-buf-point-min data))
+      (buf-point-max . ,(ai-buffer-state-buf-point-max data))
+      (buf-major-mode . ,(ai-buffer-state-buf-major-mode data))))
+   ;; Handle plists (check for actual keywords, not symbols)
+   ((and (listp data)
+         (> (length data) 0)
+         (keywordp (car data))
+         (not (null (cdr data))))
+    (let ((result '()))
+      (while data
+        (when (and (keywordp (car data)) (cdr data)) ; Ensure we have a keyword and value
+          (let ((key (substring (symbol-name (car data)) 1)) ; Remove : from keyword
+                (value (cadr data)))
+            (push (cons key (ai-request-audit--serialize-data-for-json value)) result)))
+        (setq data (cddr data)))
+      (reverse result)))
+   ;; Handle alists (cons cells)
+   ;; This branch handles both (SYMBOL . VALUE) and (STRING . VALUE) pairs.
+   ;; It checks if data is a list where all elements are cons cells.
+   ((and (listp data)
+         (cl-every #'consp data))
+    (mapcar (lambda (pair)
+              (let ((key (car pair))
+                    (value (cdr pair)))
+                ;; Convert key to string (symbol-name for symbols, format for other types like strings)
+                (cons (if (symbolp key) (symbol-name key) (format "%s" key))
+                      ;; Recursively serialize the value
+                      (ai-request-audit--serialize-data-for-json value))))
+            data))
+   ;; Handle regular lists
+   ((listp data)
+    (mapcar #'ai-request-audit--serialize-data-for-json data))
+   ;; Handle hash tables
+   ((hash-table-p data)
+    (let ((result '()))
+      (maphash (lambda (key value)
+                 (push (cons (format "%s" key)
+                            (ai-request-audit--serialize-data-for-json value)) result))
+               data)
+      result))
+   ;; Handle buffers (convert to buffer name)
+   ((bufferp data)
+    (buffer-name data))
+   ;; Handle functions (convert to symbol name)
+   ((functionp data)
+    (format "%s" data))
+   ;; Handle symbols
+   ((symbolp data)
+    (symbol-name data))
+   ;; Return other data as-is (strings, numbers, nil, t)
+   (t data)))
 
 (defun ai-request-audit--get-audit-directory (project-root)
   "Get the audit directory path for PROJECT-ROOT."
@@ -124,14 +220,16 @@ DATA should be in alist format for consistent JSON encoding."
   (ai-logging--verbose-message "Saving JSON data to %s" file-path)
   (let* ((json-encoding-pretty-print t)
          (json-encoding-default-indentation "  ")
-         (dir (file-name-directory file-path)))
+         (dir (file-name-directory file-path))
+         ;; Serialize data to make it JSON-safe
+         (serialized-data (ai-request-audit--serialize-data-for-json data)))
     ;; Ensure directory exists before writing
     (unless (file-directory-p dir)
       (ai-logging--verbose-message "Creating directory for JSON file: %s" dir)
       (make-directory dir t))
 
     (with-temp-file file-path
-      (insert (json-encode data)))
+      (insert (json-encode serialized-data)))
     (ai-logging--verbose-message "JSON data saved successfully to %s" file-path)))
 
 (defun ai-request-audit--save-text-file (file-path data)
