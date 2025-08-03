@@ -169,7 +169,7 @@ When enabled, oldest records are deleted to maintain the specified limit."
   "Ensure audit directory exists for PROJECT-ROOT."
   (let ((audit-dir (ai-request-audit--get-audit-directory project-root)))
     (unless (file-directory-p audit-dir)
-      (ai-logging--verbose-message "Creating audit directory: %s" audit-dir)
+      (ai-logging--message 'debug "request-audit" "Creating audit directory: %s" audit-dir)
       (make-directory audit-dir t))
     audit-dir))
 
@@ -177,13 +177,13 @@ When enabled, oldest records are deleted to maintain the specified limit."
   "Ensure request directory exists for REQUEST-ID in PROJECT-ROOT."
   (let ((request-dir (ai-request-audit--get-request-directory project-root request-id)))
     (unless (file-directory-p request-dir)
-      (ai-logging--verbose-message "Creating request directory: %s" request-dir)
+      (ai-logging--message 'debug "request-audit" "Creating request directory: %s" request-dir)
       (make-directory request-dir t))
     request-dir))
 
 (defun ai-request-audit--create-request-metadata (request-id command model)
   "Create metadata structure for REQUEST-ID with COMMAND and MODEL."
-  (ai-logging--verbose-message "Creating request metadata for %s" request-id)
+  (ai-logging--message 'debug "request-audit" "Creating request metadata for %s" request-id)
   `((request-id . ,request-id)
     (timestamp . ,(format-time-string "%Y-%m-%dT%H:%M:%S"))
     (command . ,(format "%s" command))
@@ -199,9 +199,9 @@ When enabled, oldest records are deleted to maintain the specified limit."
   "Update the status of REQUEST-ID in PROJECT-ROOT to STATUS with optional ERROR-MESSAGE."
   (let* ((request-dir (ai-request-audit--get-request-directory project-root request-id))
          (metadata-file (expand-file-name "metadata.json" request-dir)))
-    (ai-logging--verbose-message "Updating request status for %s to %s" request-id status)
+    (ai-logging--message 'debug  "request-audit" "Updating request status for %s to %s" request-id status)
     (when (file-exists-p metadata-file)
-      (ai-logging--verbose-message "Loading metadata from %s" metadata-file)
+      (ai-logging--message 'debug  "request-audit" "Loading metadata from %s" metadata-file)
       (let* ((metadata (json-read-file metadata-file))
              (start-time (alist-get 'start-time metadata))
              (end-time (float-time))
@@ -211,13 +211,13 @@ When enabled, oldest records are deleted to maintain the specified limit."
         (setf (alist-get 'execution-time metadata) execution-time)
         (when error-message
           (setf (alist-get 'error-message metadata) error-message))
-        (ai-logging--verbose-message "Saving updated metadata to %s" metadata-file)
+        (ai-logging--message 'debug "request-audit" "Saving updated metadata to %s" metadata-file)
         (ai-request-audit--save-json-file metadata-file metadata)))))
 
 (defun ai-request-audit--save-json-file (file-path data)
   "Save DATA as JSON to FILE-PATH with human-readable formatting.
 DATA should be in alist format for consistent JSON encoding."
-  (ai-logging--verbose-message "Saving JSON data to %s" file-path)
+  (ai-logging--message 'debug "request-audit" "Saving JSON data to %s" file-path)
   (let* ((json-encoding-pretty-print t)
          (json-encoding-default-indentation "  ")
          (dir (file-name-directory file-path))
@@ -225,29 +225,29 @@ DATA should be in alist format for consistent JSON encoding."
          (serialized-data (ai-request-audit--serialize-data-for-json data)))
     ;; Ensure directory exists before writing
     (unless (file-directory-p dir)
-      (ai-logging--verbose-message "Creating directory for JSON file: %s" dir)
+      (ai-logging--message 'debug "request-audit" "Creating directory for JSON file: %s" dir)
       (make-directory dir t))
 
     (with-temp-file file-path
       (insert (json-encode serialized-data)))
-    (ai-logging--verbose-message "JSON data saved successfully to %s" file-path)))
+    (ai-logging--message 'debug "request-audit" "JSON data saved successfully to %s" file-path)))
 
 (defun ai-request-audit--save-text-file (file-path data)
   "Save DATA as plain text to FILE-PATH."
-  (ai-logging--verbose-message "Saving text data to %s" file-path)
+  (ai-logging--message 'debug "request-audit" "Saving text data to %s" file-path)
   (let ((dir (file-name-directory file-path)))
     ;; Ensure directory exists before writing
     (unless (file-directory-p dir)
-      (ai-logging--verbose-message "Creating directory for text file: %s" dir)
+      (ai-logging--message 'debug "request-audit" "Creating directory for text file: %s" dir)
       (make-directory dir t))
     (let ((coding-system-for-write 'utf-8))
       (with-temp-file file-path
         (insert (if (stringp data) data (format "%s" data)))))
-    (ai-logging--verbose-message "Text data saved successfully to %s" file-path)))
+    (ai-logging--message 'debug "request-audit" "Text data saved successfully to %s" file-path)))
 
 (defun ai-request-audit--save-context (project-root request-id context)
   "Save CONTEXT data for REQUEST-ID in PROJECT-ROOT."
-  (ai-logging--verbose-message "Saving context for request %s" request-id)
+  (ai-logging--message 'debug "request-audit" "Saving context for request %s" request-id)
   (ai-request-audit--ensure-request-directory project-root request-id)
   (let* ((request-dir (ai-request-audit--get-request-directory project-root request-id))
          (context-file (expand-file-name "context.json" request-dir)))
@@ -255,7 +255,7 @@ DATA should be in alist format for consistent JSON encoding."
 
 (defun ai-request-audit--save-request (project-root request-id request-data)
   "Save REQUEST-DATA for REQUEST-ID in PROJECT-ROOT as plain text."
-  (ai-logging--verbose-message "Saving request data for request %s" request-id)
+  (ai-logging--message 'debug "request-audit" "Saving request data for request %s" request-id)
   (ai-request-audit--ensure-request-directory project-root request-id)
   (let* ((request-dir (ai-request-audit--get-request-directory project-root request-id))
          (request-file (expand-file-name "request.txt" request-dir)))
@@ -264,7 +264,7 @@ DATA should be in alist format for consistent JSON encoding."
 (defun ai-request-audit--save-response (project-root request-id response-data response-type)
   "Save RESPONSE-DATA for REQUEST-ID in PROJECT-ROOT with RESPONSE-TYPE (raw, processed, or error).
 Raw responses are saved as plain text, processed and error responses as JSON."
-  (ai-logging--verbose-message "Saving %s response for request %s" response-type request-id)
+  (ai-logging--message 'debug "request-audit" "Saving %s response for request %s" response-type request-id)
   (ai-request-audit--ensure-request-directory project-root request-id)
   (let* ((request-dir (ai-request-audit--get-request-directory project-root request-id)))
     (if (string= response-type "raw")
@@ -283,7 +283,7 @@ Raw responses are saved as plain text, processed and error responses as JSON."
 
 (defun ai-request-audit--save-model-config (project-root request-id model-config)
   "Save MODEL-CONFIG for REQUEST-ID in PROJECT-ROOT."
-  (ai-logging--verbose-message "Saving model config for request %s" request-id)
+  (ai-logging--message 'debug "request-audit" "Saving model config for request %s" request-id)
   (ai-request-audit--ensure-request-directory project-root request-id)
   (let* ((request-dir (ai-request-audit--get-request-directory project-root request-id))
          (config-file (expand-file-name "model_config.json" request-dir)))
@@ -291,7 +291,7 @@ Raw responses are saved as plain text, processed and error responses as JSON."
 
 (defun ai-request-audit--save-command-config (project-root request-id command-config)
   "Save COMMAND-CONFIG for REQUEST-ID in PROJECT-ROOT."
-  (ai-logging--verbose-message "Saving command config for request %s" request-id)
+  (ai-logging--message 'debug "request-audit" "Saving command config for request %s" request-id)
   (ai-request-audit--ensure-request-directory project-root request-id)
   (let* ((request-dir (ai-request-audit--get-request-directory project-root request-id))
          (config-file (expand-file-name "command_config.json" request-dir)))
@@ -299,7 +299,7 @@ Raw responses are saved as plain text, processed and error responses as JSON."
 
 (defun ai-request-audit--save-usage-stats (project-root request-id usage-stats)
   "Save USAGE-STATS for REQUEST-ID in PROJECT-ROOT."
-  (ai-logging--verbose-message "Saving usage stats for request %s" request-id)
+  (ai-logging--message 'debug "request-audit" "Saving usage stats for request %s" request-id)
   (ai-request-audit--ensure-request-directory project-root request-id)
   (let* ((request-dir (ai-request-audit--get-request-directory project-root request-id))
          (stats-file (expand-file-name "usage_stats.json" request-dir)))
@@ -323,7 +323,7 @@ Raw responses are saved as plain text, processed and error responses as JSON."
               (let ((metadata (json-read-file metadata-file)))
                 (push metadata metadata-list))
             (error
-             (ai-logging--verbose-message "Error loading metadata from %s: %s"
+             (ai-logging--message 'error "request-audit" "Error loading metadata from %s: %s"
                                           metadata-file (error-message-string err)))))))
     ;; Sort by timestamp (newest first)
     (sort metadata-list (lambda (a b)
@@ -344,13 +344,13 @@ Returns the cleaned up index."
   (if (and ai-request-audit-cleanup-old-records
            (> (length index) ai-request-audit-max-records))
       (progn
-        (ai-logging--verbose-message "Cleaning up old audit records, keeping %d records" ai-request-audit-max-records)
+        (ai-logging--message 'debug  "request-audit" "Cleaning up old audit records, keeping %d records" ai-request-audit-max-records)
         (let ((records-to-remove (nthcdr ai-request-audit-max-records index)))
           (dolist (record records-to-remove)
             (let* ((request-id (alist-get 'request-id record))
                    (request-dir (ai-request-audit--get-request-directory project-root request-id)))
               (when (file-directory-p request-dir)
-                (ai-logging--verbose-message "Removing old audit record directory: %s" request-dir)
+                (ai-logging--message 'debug "request-audit" "Removing old audit record directory: %s" request-dir)
                 (delete-directory request-dir t))))
           ;; Return truncated index
           (cl-subseq index 0 ai-request-audit-max-records)))
@@ -361,12 +361,12 @@ Returns the cleaned up index."
   "Save the updated INDEX for PROJECT-ROOT."
   (let* ((audit-dir (ai-request-audit--get-audit-directory project-root))
          (index-file (expand-file-name "index.json" audit-dir)))
-    (ai-logging--verbose-message "Saving updated index to %s" index-file)
+    (ai-logging--message 'debug "request-audit" "Saving updated index to %s" index-file)
     (ai-request-audit--save-json-file index-file index)))
 
 (defun ai-request-audit--update-index (project-root request-metadata)
   "Update the audit index for PROJECT-ROOT with REQUEST-METADATA."
-  (ai-logging--verbose-message "Updating audit index for project %s" project-root)
+  (ai-logging--message 'debug "request-audit" "Updating audit index for project %s" project-root)
   ;; Ensure audit directory exists
   (ai-request-audit--ensure-audit-directory project-root)
   ;; Load existing index from metadata files
@@ -380,7 +380,7 @@ Returns the cleaned up index."
   "Start auditing a new request with REQUEST-ID, COMMAND, MODEL, and CONTEXT.
 REQUEST-ID should be a unique identifier for the request."
   (when ai-request-audit-enabled
-    (ai-logging--verbose-message "Starting audit for request %s" request-id)
+    (ai-logging--message 'debug "request-audit" "Starting audit for request %s" request-id)
     (when-let ((project-root (ai-project--get-project-root)))
       (ai-request-audit--ensure-audit-directory project-root)
       (let* ((metadata (ai-request-audit--create-request-metadata request-id command model)))
@@ -395,7 +395,7 @@ REQUEST-ID should be a unique identifier for the request."
         ;; Save metadata file
         (let* ((request-dir (ai-request-audit--get-request-directory project-root request-id))
                (metadata-file (expand-file-name "metadata.json" request-dir)))
-          (ai-logging--verbose-message "Saving initial metadata to %s" metadata-file)
+          (ai-logging--message 'debug "request-audit" "Saving initial metadata to %s" metadata-file)
           (ai-request-audit--save-json-file metadata-file metadata))
 
         ;; Update index
@@ -406,21 +406,21 @@ REQUEST-ID should be a unique identifier for the request."
 (defun ai-request-audit-log-request (request-id request-data)
   "Log REQUEST-DATA for REQUEST-ID."
   (when (and ai-request-audit-enabled request-id)
-    (ai-logging--verbose-message "Logging request data for %s" request-id)
+    (ai-logging--message 'debug "request-audit" "Logging request data for %s" request-id)
     (when-let ((project-root (ai-project--get-project-root)))
       (ai-request-audit--save-request project-root request-id request-data))))
 
 (defun ai-request-audit-log-raw-response (request-id response-data)
   "Log raw RESPONSE-DATA for REQUEST-ID."
   (when (and ai-request-audit-enabled request-id)
-    (ai-logging--verbose-message "Logging raw response for %s" request-id)
+    (ai-logging--message 'debug "request-audit" "Logging raw response for %s" request-id)
     (when-let ((project-root (ai-project--get-project-root)))
       (ai-request-audit--save-response project-root request-id response-data "raw"))))
 
 (defun ai-request-audit-log-usage-stats (request-id usage-stats)
   "Log USAGE-STATS for REQUEST-ID."
   (when (and ai-request-audit-enabled request-id)
-    (ai-logging--verbose-message "Logging usage stats for %s" request-id)
+    (ai-logging--message 'debug "request-audit" "Logging usage stats for %s" request-id)
     (when-let ((project-root (ai-project--get-project-root)))
       ;; Convert plist to alist for JSON encoding
       (let ((stats-alist (ai-common--plist-to-alist usage-stats)))
@@ -429,7 +429,7 @@ REQUEST-ID should be a unique identifier for the request."
 (defun ai-request-audit-complete-request (request-id processed-response &optional usage-stats)
   "Complete audit for REQUEST-ID with PROCESSED-RESPONSE and optional USAGE-STATS."
   (when (and ai-request-audit-enabled request-id)
-    (ai-logging--verbose-message "Completing audit for request %s" request-id)
+    (ai-logging--message 'debug "request-audit" "Completing audit for request %s" request-id)
     (when-let ((project-root (ai-project--get-project-root)))
       (ai-request-audit--save-response project-root request-id processed-response "processed")
       (when usage-stats
@@ -439,7 +439,7 @@ REQUEST-ID should be a unique identifier for the request."
 (defun ai-request-audit-fail-request (request-id error-data)
   "Mark REQUEST-ID as failed with ERROR-DATA."
   (when (and ai-request-audit-enabled request-id)
-    (ai-logging--verbose-message "Marking request %s as failed" request-id)
+    (ai-logging--message 'debug "request-audit" "Marking request %s as failed" request-id)
     (when-let ((project-root (ai-project--get-project-root)))
       ;; Save error response data
       (ai-request-audit--save-response project-root request-id error-data "error")
@@ -451,7 +451,7 @@ REQUEST-ID should be a unique identifier for the request."
 
 (defun ai-request-audit--load-index (project-root)
   "Load audit index for PROJECT-ROOT from metadata files."
-  (ai-logging--verbose-message "Loading audit index from metadata files for %s" project-root)
+  (ai-logging--message 'debug "request-audit" "Loading audit index from metadata files for %s" project-root)
   (ai-request-audit--load-metadata-from-directories project-root))
 
 (defun ai-request-audit--load-usage-stats-for-request (project-root request-id)
@@ -462,7 +462,7 @@ REQUEST-ID should be a unique identifier for the request."
       (condition-case err
           (json-read-file stats-file)
         (error
-         (ai-logging--verbose-message "Error loading usage stats from %s: %s"
+         (ai-logging--message 'debug "request-audit" "Error loading usage stats from %s: %s"
                                       stats-file (error-message-string err))
          nil)))))
 
@@ -547,7 +547,7 @@ Returns a string in format: input-tokens/output-tokens/thoughts-tokens/total-tok
       (let* ((index (ai-request-audit--load-index project-root))
              (buffer-name "*AI Request Audit*")
              (buffer (get-buffer-create buffer-name)))
-        (ai-logging--verbose-message "Showing audit requests for project %s" project-root)
+        (ai-logging--message 'debug "request-audit" "Showing audit requests for project %s" project-root)
         (with-current-buffer buffer
           (ai-request-audit-mode)
           (setq buffer-read-only nil)
@@ -695,7 +695,7 @@ Returns a string in format: input-tokens/output-tokens/thoughts-tokens/total-tok
              (metadata-file (expand-file-name "metadata.json" request-dir))
              (buffer (ai-request-audit--create-details-buffer request-id)))
 
-        (ai-logging--verbose-message "Showing details for request %s" request-id)
+        (ai-logging--message 'debug "request-audit" "Showing details for request %s" request-id)
         (unless (file-exists-p metadata-file)
           (user-error "Request %s not found" request-id))
 
@@ -744,7 +744,7 @@ Returns a string in format: input-tokens/output-tokens/thoughts-tokens/total-tok
       (let ((audit-dir (ai-request-audit--get-audit-directory project-root)))
         (when (and (file-directory-p audit-dir)
                    (yes-or-no-p (format "Delete all audit records for project %s? " project-root)))
-          (ai-logging--verbose-message "Cleaning up all audit records for project %s" project-root)
+          (ai-logging--message 'debug "request-audit" "Cleaning up all audit records for project %s" project-root)
           (delete-directory audit-dir t)
           (message "Audit records cleaned up for project: %s" project-root)))
     (message "Not in a project. Cannot cleanup audit records.")))

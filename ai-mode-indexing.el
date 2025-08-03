@@ -144,26 +144,26 @@ Returns a hash-based identifier."
   "Save METADATA for index VERSION-NAME in PROJECT-ROOT."
   (let ((metadata-file (ai-mode-indexing--get-index-metadata-file project-root version-name))
         (version-dir (ai-mode-indexing--get-index-version-directory project-root version-name)))
-    (ai-logging--verbose-message "Saving index metadata for version %s in %s" version-name project-root)
+    (ai-logging--message 'info "indexing" "Saving index metadata for version %s in %s" version-name project-root)
     (unless (file-directory-p version-dir)
-      (ai-logging--verbose-message "Creating index version directory: %s" version-dir)
+      (ai-logging--message 'info  "indexing" "Creating index version directory: %s" version-dir)
       (make-directory version-dir t))
     (with-temp-file metadata-file
       (insert (json-encode metadata)))
-    (ai-logging--verbose-message "Index metadata saved to %s" metadata-file)))
+    (ai-logging--message 'info  "indexing" "Index metadata saved to %s" metadata-file)))
 
 (defun ai-mode-indexing--load-index-metadata (project-root version-name)
   "Load metadata for index VERSION-NAME in PROJECT-ROOT.
 Returns nil if metadata file doesn't exist or is invalid."
   (let ((metadata-file (ai-mode-indexing--get-index-metadata-file project-root version-name)))
-    (ai-logging--verbose-message "Loading index metadata from %s" metadata-file)
+    (ai-logging--message 'info  "indexing" "Loading index metadata from %s" metadata-file)
     (when (file-readable-p metadata-file)
       (condition-case err
           (with-temp-buffer
             (insert-file-contents metadata-file)
             (json-read))
         (error
-         (ai-logging--verbose-message "Error loading index metadata: %s" (error-message-string err))
+         (ai-logging--message 'error  "indexing" "Error loading index metadata: %s" (error-message-string err))
          nil)))))
 
 (defun ai-mode-indexing--save-index-mapping (project-root version-name mapping)
@@ -171,53 +171,53 @@ Returns nil if metadata file doesn't exist or is invalid."
 MAPPING is an alist of (relative-path . file-id) pairs."
   (let ((mapping-file (ai-mode-indexing--get-index-mapping-file project-root version-name))
         (version-dir (ai-mode-indexing--get-index-version-directory project-root version-name)))
-    (ai-logging--verbose-message "Saving index mapping for version %s with %d entries" version-name (length mapping))
+    (ai-logging--message 'info  "indexing" "Saving index mapping for version %s with %d entries" version-name (length mapping))
     (unless (file-directory-p version-dir)
       (make-directory version-dir t))
     (with-temp-file mapping-file
       (insert (json-encode mapping)))
-    (ai-logging--verbose-message "Index mapping saved to %s" mapping-file)))
+    (ai-logging--message 'info  "indexing" "Index mapping saved to %s" mapping-file)))
 
 (defun ai-mode-indexing--load-index-mapping (project-root version-name)
   "Load file mapping for index VERSION-NAME in PROJECT-ROOT.
 Returns nil if mapping file doesn't exist or is invalid."
   (let ((mapping-file (ai-mode-indexing--get-index-mapping-file project-root version-name)))
-    (ai-logging--verbose-message "Loading index mapping from %s" mapping-file)
+    (ai-logging--message 'info  "indexing" "Loading index mapping from %s" mapping-file)
     (when (file-readable-p mapping-file)
       (condition-case err
           (with-temp-buffer
             (insert-file-contents mapping-file)
             (json-read))
         (error
-         (ai-logging--verbose-message "Error loading index mapping: %s" (error-message-string err))
+         (ai-logging--message 'error  "indexing" "Error loading index mapping: %s" (error-message-string err))
          nil)))))
 
 (defun ai-mode-indexing--save-index-file (project-root version-name file-id summary-struct)
   "Save SUMMARY-STRUCT as FILE-ID in VERSION-NAME for PROJECT-ROOT."
   (let ((index-file (ai-mode-indexing--get-index-file-path project-root version-name file-id)))
-    (ai-logging--verbose-message "Saving index file %s for version %s" file-id version-name)
+    (ai-logging--message 'info  "indexing" "Saving index file %s for version %s" file-id version-name)
     (with-temp-file index-file
       (insert (json-encode summary-struct)))
-    (ai-logging--verbose-message "Index file saved to %s" index-file)))
+    (ai-logging--message 'info  "indexing" "Index file saved to %s" index-file)))
 
 (defun ai-mode-indexing--load-index-file (project-root version-name file-id)
   "Load summary struct for FILE-ID in VERSION-NAME for PROJECT-ROOT.
 Returns nil if file doesn't exist or is invalid."
   (let ((index-file (ai-mode-indexing--get-index-file-path project-root version-name file-id)))
-    (ai-logging--verbose-message "Loading index file %s from version %s" file-id version-name)
+    (ai-logging--message 'info  "indexing" "Loading index file %s from version %s" file-id version-name)
     (when (file-readable-p index-file)
       (condition-case err
           (with-temp-buffer
             (insert-file-contents index-file)
             (json-read))
         (error
-         (ai-logging--verbose-message "Error loading index file %s: %s" file-id (error-message-string err))
+         (ai-logging--message 'error "indexing" "Error loading index file %s: %s" file-id (error-message-string err))
          nil)))))
 
 (defun ai-mode-indexing--get-available-index-versions (project-root)
   "Get list of available index versions for PROJECT-ROOT.
 Returns a list of version names sorted by creation time (newest first)."
-  (ai-logging--verbose-message "Getting available index versions for %s" project-root)
+  (ai-logging--message 'info "indexing" "Getting available index versions for %s" project-root)
   (let ((index-dir (ai-mode-indexing--get-project-index-directory project-root)))
     (when (file-directory-p index-dir)
       (let ((versions nil))
@@ -230,7 +230,7 @@ Returns a list of version names sorted by creation time (newest first)."
                                                       (time-b (ai-mode-indexing--parse-index-version-name b)))
                                                   (when (and time-a time-b)
                                                     (time-less-p (cdr time-b) (cdr time-a))))))))
-          (ai-logging--verbose-message "Found %d index versions for %s" (length sorted-versions) project-root)
+          (ai-logging--message 'info "indexing" "Found %d index versions for %s" (length sorted-versions) project-root)
           sorted-versions)))))
 
 (defun ai-mode-indexing--format-index-version-display (version-name)
@@ -258,7 +258,7 @@ START-TIME is when the indexing process began."
                       (file-count . ,(length summaries))
                       (strategy . ,(symbol-name ai-mode-indexing--strategy)))))
 
-      (ai-logging--verbose-message "Saving index version %s to disk with %d files" version-name (length summaries))
+      (ai-logging--message 'info "indexing" "Saving index version %s to disk with %d files" version-name (length summaries))
 
       ;; Create version directory
       (let ((version-dir (ai-mode-indexing--get-index-version-directory project-root version-name)))
@@ -276,13 +276,13 @@ START-TIME is when the indexing process began."
       (ai-mode-indexing--save-index-mapping project-root version-name mapping)
 
       (message "Index version '%s' saved to disk with %d files" version-name (length summaries))
-      (ai-logging--verbose-message "Index version %s successfully saved to disk" version-name)
+      (ai-logging--message 'info "indexing" "Index version %s successfully saved to disk" version-name)
       version-name)))
 
 (defun ai-mode-indexing--load-index-version (project-root version-name)
   "Load index VERSION-NAME from disk for PROJECT-ROOT into memory.
 Returns the loaded summaries list or nil if loading fails."
-  (ai-logging--verbose-message "Loading index version %s for %s" version-name project-root)
+  (ai-logging--message 'info "indexing" "Loading index version %s for %s" version-name project-root)
   (when-let* ((mapping (ai-mode-indexing--load-index-mapping project-root version-name))
               (metadata (ai-mode-indexing--load-index-metadata project-root version-name)))
     (let ((summaries nil)
@@ -300,27 +300,27 @@ Returns the loaded summaries list or nil if loading fails."
         (puthash project-root summaries ai-mode-indexing--project-files-summary-index)
         (message "Loaded index version '%s' with %d/%d files"
                  version-name loaded-count (length mapping))
-        (ai-logging--verbose-message "Index version %s loaded successfully: %d/%d files"
+        (ai-logging--message 'info "indexing" "Index version %s loaded successfully: %d/%d files"
                                    version-name loaded-count (length mapping))
         summaries))))
 
 (defun ai-mode-indexing--delete-index-version (project-root version-name)
   "Delete index VERSION-NAME for PROJECT-ROOT from disk."
   (let ((version-dir (ai-mode-indexing--get-index-version-directory project-root version-name)))
-    (ai-logging--verbose-message "Deleting index version %s at %s" version-name version-dir)
+    (ai-logging--message 'info "indexing" "Deleting index version %s at %s" version-name version-dir)
     (when (file-directory-p version-dir)
       (delete-directory version-dir t)
       (message "Deleted index version: %s" version-name)
-      (ai-logging--verbose-message "Index version %s successfully deleted" version-name))))
+      (ai-logging--message 'info "indexing" "Index version %s successfully deleted" version-name))))
 
 (defun ai-mode-indexing--cleanup-old-index-versions (project-root)
   "Delete old index versions beyond the retention depth for PROJECT-ROOT."
   (let ((versions (ai-mode-indexing--get-available-index-versions project-root)))
-    (ai-logging--verbose-message "Checking for old index versions to cleanup: %d versions found, retention depth: %d"
+    (ai-logging--message 'info "indexing" "Checking for old index versions to cleanup: %d versions found, retention depth: %d"
                                (length versions) ai-mode-indexing--index-retention-depth)
     (when (> (length versions) ai-mode-indexing--index-retention-depth)
       (let ((versions-to-delete (nthcdr ai-mode-indexing--index-retention-depth versions)))
-        (ai-logging--verbose-message "Deleting %d old index versions" (length versions-to-delete))
+        (ai-logging--message 'info "indexing" "Deleting %d old index versions" (length versions-to-delete))
         (dolist (version versions-to-delete)
           (ai-mode-indexing--delete-index-version project-root version))
         (message "Cleaned up %d old index versions" (length versions-to-delete))))))
@@ -354,7 +354,7 @@ Returns a plist suitable for the backend."
          ;; Simple message list for parallel processing
          (messages (list command-instructions file-content-as-user-input)))
 
-    (ai-logging--verbose-message "Creating indexing context for file %s with request ID %s"
+    (ai-logging--message 'info "indexing" "Creating indexing context for file %s with request ID %s"
                                (plist-get file-struct :relative-path) request-id)
 
     ;; Filter out any null messages
@@ -416,7 +416,7 @@ Returns a plist suitable for the backend."
                                       existing-context-struct
                                       file-content-as-user-input))))
 
-    (ai-logging--verbose-message "Creating indexing context with summaries for file %s with request ID %s (existing summaries: %d)"
+    (ai-logging--message 'info "indexing" "Creating indexing context with summaries for file %s with request ID %s (existing summaries: %d)"
                                (plist-get file-struct :relative-path) request-id (length existing-summaries))
 
     ;; Filter out any null messages
@@ -435,7 +435,7 @@ TARGET-BUFFER is the buffer where the indexing was initiated.
 PROJECT-ROOT is the root path of the project.
 START-TIME is when the indexing process began."
   (when (zerop pending-count)
-    (ai-logging--verbose-message "Indexing complete for %s with %d files"
+    (ai-logging--message 'info  "indexing" "Indexing complete for %s with %d files"
                                project-root (hash-table-count accumulated-summaries-ht))
     ;; Stop batch operation progress using ai-progress
     (ai-progress-stop-batch-operation target-buffer)
@@ -475,7 +475,7 @@ START-TIME is when the indexing process began."
   (lambda (messages &optional usage-stats)
     (let* ((relative-path (plist-get original-file-struct :relative-path))
            (summary-struct (ai-response-processors--get-message messages)))
-      (ai-logging--verbose-message "Processing successful indexing response for file %s" relative-path)
+      (ai-logging--message 'info "indexing"  "Processing successful indexing response for file %s" relative-path)
       (when (and summary-struct (listp summary-struct) (plist-get summary-struct :type))
         (let* ((summary-content (plist-get summary-struct :content))
                (file-path (plist-get original-file-struct :file))
@@ -488,7 +488,7 @@ START-TIME is when the indexing process began."
                                       :file-size file-size)))
           ;; Store the summary struct in the local hash table, keyed by its relative path
           (puthash relative-path final-summary-struct accumulated-summaries-ht)
-          (ai-logging--verbose-message "Successfully stored summary for file %s" relative-path))))
+          (ai-logging--message 'info "indexing"  "Successfully stored summary for file %s" relative-path))))
 
     ;; Update batch progress using ai-progress
     (ai-progress-increment-batch-processed target-buffer)
@@ -512,7 +512,7 @@ START-TIME is when the indexing process began."
   (lambda (request-data error-message)
     (let ((relative-path (plist-get original-file-struct :relative-path))
           (error-text (ai-common--get-text-content-from-struct error-message)))
-      (ai-logging--verbose-message "Failed to summarize file %s: %s" relative-path error-text)
+      (ai-logging--message 'error  "indexing" "Failed to summarize file %s: %s" relative-path error-text)
       (when (buffer-live-p target-buffer)
         (with-current-buffer target-buffer
           (message "Failed to summarize file '%s'. Error: %s" relative-path error-text))))
@@ -534,12 +534,12 @@ Each file is processed independently without any existing context.
 START-TIME is when the indexing process began."
   (let ((execution-backend (map-elt current-model :execution-backend)))
 
-    (ai-logging--verbose-message "Parallel independent strategy: processing %d files without context sharing"
+    (ai-logging--message 'info  "indexing" "Parallel independent strategy: processing %d files without context sharing"
                                (length file-structs))
 
     (dolist (file-struct file-structs)
       (let ((relative-path (plist-get file-struct :relative-path)))
-        (ai-logging--verbose-message "Starting parallel indexing for file %s" relative-path)
+        (ai-logging--message 'info  "indexing" "Starting parallel indexing for file %s" relative-path)
         (setcar pending-count-ref (1+ (car pending-count-ref)))
 
         (let* ((indexing-context (ai-mode-indexing--get-indexing-context file-struct current-model))
@@ -571,7 +571,7 @@ START-TIME is when the indexing process began."
 
         ;; Introduce a configurable timeout between indexing calls
         (when (> ai-mode-indexing--call-timeout 0)
-          (ai-logging--verbose-message "Waiting %s seconds before next indexing call" ai-mode-indexing--call-timeout)
+          (ai-logging--message 'info  "indexing" "Waiting %s seconds before next indexing call" ai-mode-indexing--call-timeout)
           (sit-for ai-mode-indexing--call-timeout))))))
 
 (defun ai-mode-indexing--process-files-sequential (file-structs current-model pending-count-ref accumulated-summaries-ht target-buffer project-root start-time)
@@ -580,7 +580,7 @@ Uses only files from current session for context accumulation, no existing index
 START-TIME is when the indexing process began."
   (let ((remaining-files (copy-sequence file-structs)))
 
-    (ai-logging--verbose-message "Sequential strategy: processing %d files with session context accumulation only"
+    (ai-logging--message 'info  "indexing" "Sequential strategy: processing %d files with session context accumulation only"
                                (length file-structs))
 
     (when remaining-files
@@ -595,7 +595,7 @@ START-TIME is when the indexing process began."
   (if (null remaining-files)
       ;; No more files to process
       (progn
-        (ai-logging--verbose-message "Sequential processing complete for %s" project-root)
+        (ai-logging--message 'info  "indexing" "Sequential processing complete for %s" project-root)
         (when (buffer-live-p target-buffer)
           (with-current-buffer target-buffer
             (ai-mode-indexing--index-completion-check (car pending-count-ref)
@@ -612,7 +612,7 @@ START-TIME is when the indexing process began."
            (session-summaries (when ai-mode-indexing--include-existing-context
                                 (hash-table-values accumulated-summaries-ht))))
 
-      (ai-logging--verbose-message "Sequential step: processing file '%s' with %d session summaries for context"
+      (ai-logging--message 'info  "indexing" "Sequential step: processing file '%s' with %d session summaries for context"
                                  relative-path (length (or session-summaries '())))
 
       (setcar pending-count-ref (1+ (car pending-count-ref)))
@@ -654,7 +654,7 @@ START-TIME is when the indexing process began."
   (lambda (messages &optional usage-stats)
     (let* ((relative-path (plist-get original-file-struct :relative-path))
            (summary-struct (ai-response-processors--get-message messages)))
-      (ai-logging--verbose-message "Sequential success callback for file %s" relative-path)
+      (ai-logging--message 'info  "indexing" "Sequential success callback for file %s" relative-path)
       ;; Process the successful response
       (when (and summary-struct (listp summary-struct) (plist-get summary-struct :type))
         (let* ((summary-content (plist-get summary-struct :content))
@@ -668,7 +668,7 @@ START-TIME is when the indexing process began."
                                       :file-size file-size)))
           ;; Store the summary struct in the accumulated hash table
           (puthash relative-path final-summary-struct accumulated-summaries-ht)
-          (ai-logging--verbose-message "Sequential success: added summary for '%s', total session summaries: %d"
+          (ai-logging--message 'info  "indexing" "Sequential success: added summary for '%s', total session summaries: %d"
                                      relative-path
                                      (hash-table-count accumulated-summaries-ht)))))
 
@@ -686,7 +686,7 @@ START-TIME is when the indexing process began."
   (lambda (request-data error-message)
     (let ((relative-path (plist-get original-file-struct :relative-path))
           (error-text (ai-common--get-text-content-from-struct error-message)))
-      (ai-logging--verbose-message "Sequential fail callback for file %s: %s" relative-path error-text)
+      (ai-logging--message 'info  "indexing" "Sequential fail callback for file %s: %s" relative-path error-text)
       ;; Log the error but continue processing
       (when (buffer-live-p target-buffer)
         (with-current-buffer target-buffer
@@ -704,7 +704,7 @@ START-TIME is when the indexing process began."
   "Process FILE-STRUCTS for indexing using the configured strategy.
 Dispatches to either parallel-independent or sequential processing based on ai-mode-indexing--strategy.
 START-TIME is when the indexing process began."
-  (ai-logging--verbose-message "Processing %d files for indexing using %s strategy"
+  (ai-logging--message 'info  "indexing" "Processing %d files for indexing using %s strategy"
                              (length file-structs) (symbol-name ai-mode-indexing--strategy))
   (pcase ai-mode-indexing--strategy
     ('parallel-independent
@@ -715,7 +715,7 @@ START-TIME is when the indexing process began."
                                    accumulated-summaries-ht target-buffer project-root start-time))
     (_
      ;; Fallback to parallel-independent for unknown strategies
-     (ai-logging--verbose-message "Unknown indexing strategy %s, falling back to parallel-independent"
+     (ai-logging--message 'info  "indexing" "Unknown indexing strategy %s, falling back to parallel-independent"
                                 (symbol-name ai-mode-indexing--strategy))
      (ai-mode-indexing--process-files-parallel-independent file-structs current-model pending-count-ref
                                              accumulated-summaries-ht target-buffer project-root start-time))))
@@ -735,14 +735,14 @@ from the current project for use in project AI summary context mode."
              (target-buffer (current-buffer))
              (start-time (current-time)))
 
-        (ai-logging--verbose-message "Starting project indexing for %s with %d files" project-root total-files)
+        (ai-logging--message 'info  "indexing" "Starting project indexing for %s with %d files" project-root total-files)
 
         (unless execution-backend
           (user-error "No AI execution backend defined for current model: %s" (map-elt current-model :name)))
 
         (when (zerop total-files)
           (message "No project files found to index or all are ignored. Clearing index for project '%s'." project-root)
-          (ai-logging--verbose-message "No files to index for project %s, clearing index" project-root)
+          (ai-logging--message 'info  "indexing" "No files to index for project %s, clearing index" project-root)
           (remhash project-root ai-mode-indexing--project-files-summary-index)
           (cl-return-from ai-mode-indexing-update-project-files-summary-index))
 
@@ -781,7 +781,7 @@ from the current project for use in project AI summary context mode."
     (message "Indexing strategy changed to: %s (%s)"
              selected-name
              (cdr (assoc selected-strategy strategy-descriptions)))
-    (ai-logging--verbose-message "Indexing strategy changed to %s" selected-name)))
+    (ai-logging--message 'info  "indexing" "Indexing strategy changed to %s" selected-name)))
 
 (defun ai-mode-indexing-select-index-version ()
   "Interactively select and load an index version for the current project."
@@ -793,7 +793,7 @@ from the current project for use in project AI summary context mode."
                    (selected-display (completing-read "Select index version: " version-displays))
                    (selected-version (cdr (assoc selected-display version-alist))))
               (when selected-version
-                (ai-logging--verbose-message "User selected index version %s" selected-version)
+                (ai-logging--message 'info  "indexing" "User selected index version %s" selected-version)
                 (ai-mode-indexing--load-index-version project-root selected-version)))
           (message "No index versions found for project")))
     (message "Not in a project. Cannot select index version.")))
@@ -821,7 +821,7 @@ from the current project for use in project AI summary context mode."
         (if (> (length versions) ai-mode-indexing--index-retention-depth)
             (let ((versions-to-delete (nthcdr ai-mode-indexing--index-retention-depth versions)))
               (when (yes-or-no-p (format "Delete %d old index versions? " (length versions-to-delete)))
-                (ai-logging--verbose-message "User confirmed deletion of %d old index versions" (length versions-to-delete))
+                (ai-logging--message 'info  "indexing" "User confirmed deletion of %d old index versions" (length versions-to-delete))
                 (ai-mode-indexing--cleanup-old-index-versions project-root)))
           (message "No old index versions to delete (current: %d, retention: %d)"
                    (length versions) ai-mode-indexing--index-retention-depth)))
@@ -834,13 +834,13 @@ from the current project for use in project AI summary context mode."
   (customize-save-variable 'ai-mode-indexing--include-existing-context ai-mode-indexing--include-existing-context)
   (message "Indexing context inclusion: %s"
            (if ai-mode-indexing--include-existing-context "enabled" "disabled"))
-  (ai-logging--verbose-message "Indexing context inclusion toggled to %s"
+  (ai-logging--message 'info  "indexing" "Indexing context inclusion toggled to %s"
                              (if ai-mode-indexing--include-existing-context "enabled" "disabled")))
 
 (defun ai-mode-indexing-reindex-project-with-context ()
   "Reindex the entire project with existing context enabled."
   (let ((ai-mode-indexing--include-existing-context t))
-    (ai-logging--verbose-message "Starting project reindex with context enabled")
+    (ai-logging--message 'info  "indexing" "Starting project reindex with context enabled")
     (ai-mode-indexing-update-project-files-summary-index)))
 
 (defun ai-mode-indexing-get-project-ai-summary-context ()
@@ -868,7 +868,7 @@ or nil if no project is detected or index is empty."
                            'project-ai-summary
                            'project-ai-indexer
                            :root project-root)))
-      (ai-logging--verbose-message "Generated project AI summary context for %s with %d indexed files"
+      (ai-logging--message 'info  "indexing" "Generated project AI summary context for %s with %d indexed files"
                                  project-root (length summaries-for-current-project))
       project-struct)))
 
@@ -900,7 +900,7 @@ or nil if no project is detected or index is empty."
                            'project-ai-indexer
                            :root project-root
                            :indexing-mode "enhanced")))
-      (ai-logging--verbose-message "Generated enhanced project AI summary context for %s: %d/%d files indexed"
+      (ai-logging--message 'info  "indexing" "Generated enhanced project AI summary context for %s: %d/%d files indexed"
                                  project-root indexed-count files-count)
       project-struct)))
 

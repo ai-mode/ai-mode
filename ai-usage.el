@@ -34,6 +34,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'ai-logging)
 
 (defcustom ai-usage-enabled t
   "Enable usage statistics collection for AI mode.
@@ -47,17 +48,22 @@ When enabled, collects usage statistics and performance metrics."
 (defun ai-usage-create-usage-statistics-callback ()
   "Create a callback function for displaying usage statistics."
   (lambda (usage-stats)
-    (let ((input-tokens (plist-get usage-stats :input-tokens))
-          (output-tokens (plist-get usage-stats :output-tokens))
-          (total-tokens (plist-get usage-stats :total-tokens))
-          (input-tokens-write-cache (plist-get usage-stats :input-tokens-write-cache))
-          (input-tokens-read-cache (plist-get usage-stats :input-tokens-read-cache)))
-      (message "AI Usage: Input=%s, Output=%s, Total=%s%s%s"
-               (or input-tokens "?")
-               (or output-tokens "?")
-               (or total-tokens "?")
-               (if input-tokens-write-cache (format ", Cache Write=%s" input-tokens-write-cache) "")
-               (if input-tokens-read-cache (format ", Cache Read=%s" input-tokens-read-cache) ""))
+    (let* ((input-tokens (plist-get usage-stats :input-tokens))
+           (output-tokens (plist-get usage-stats :output-tokens))
+           (total-tokens (plist-get usage-stats :total-tokens))
+           (input-tokens-write-cache (plist-get usage-stats :input-tokens-write-cache))
+           (input-tokens-read-cache (plist-get usage-stats :input-tokens-read-cache))
+           (message-str (format "AI Usage: Input=%s, Output=%s, Total=%s%s%s"
+                                (or input-tokens "?")
+                                (or output-tokens "?")
+                                (or total-tokens "?")
+                                (if input-tokens-write-cache (format ", Cache Write=%s" input-tokens-write-cache) "")
+                                (if input-tokens-read-cache (format ", Cache Read=%s" input-tokens-read-cache) ""))))
+
+      (ai-logging--message 'info "usage" "AI usage" message-str)
+
+
+
       (ai-usage--record-usage-stats usage-stats))))
 
 (defun ai-usage--record-usage-stats (usage-stats)

@@ -203,7 +203,7 @@ Each entry is a pair: `(COMMAND . CONFIG-PLIST)`.
     (unless (equal current-key ai-command-management--buffer-project-key)
       (setq ai-command-management--buffer-project-key current-key)
       (ai-command-management--mark-project-registry-dirty current-key)
-      (ai-logging--verbose-message "Project change detected for buffer, new key: %s" current-key))))
+      (ai-logging--message 'info  "command-management" "Project change detected for buffer, new key: %s" current-key))))
 
 (defun ai-command-management--debounced-refresh-registry (&optional delay project-key)
   "Refresh registry with debouncing to avoid excessive updates.
@@ -233,7 +233,7 @@ This function marks command registries as dirty when instruction caches are upda
     (cond
      ;; Global or default cache updates affect all project registries - use debouncing
      ((or (eq location :global) (eq location :default))
-      (ai-logging--verbose-message "Scheduling debounced registry refresh due to %s instruction cache update" location)
+      (ai-logging--message 'info  "command-management" "Scheduling debounced registry refresh due to %s instruction cache update" location)
       (clrhash ai-command-management--registries-dirty)
       (maphash (lambda (project-key _registry)
                  (puthash project-key t ai-command-management--registries-dirty))
@@ -249,12 +249,12 @@ This function marks command registries as dirty when instruction caches are upda
                               (match-string 1 directory)))))
         (if project-key
             (progn
-              (ai-logging--verbose-message "Scheduling refresh for project registry: %s" project-key)
+              (ai-logging--message 'info "command-management" "Scheduling refresh for project registry: %s" project-key)
               (puthash project-key t ai-command-management--registries-dirty)
               ;; Faster refresh for local changes
               (ai-command-management--debounced-refresh-registry 0.3 project-key))
           ;; Fallback: mark current project registry dirty
-          (ai-logging--verbose-message "Marking current project registry dirty due to local instruction cache update")
+          (ai-logging--message 'info  "command-management" "Marking current project registry dirty due to local instruction cache update")
           (ai-command-management--mark-project-registry-dirty)
           (ai-command-management--debounced-refresh-registry 0.3)))))))
 
@@ -271,7 +271,7 @@ Returns ai-command structure if found, creates one for user input otherwise."
   ;; If registry is empty after update, force refresh
   (let ((registry (ai-command-management--get-project-registry)))
     (when (= (hash-table-count registry) 0)
-      (ai-logging--verbose-message "Registry is empty, forcing immediate refresh")
+      (ai-logging--message 'info "command-management" "Registry is empty, forcing immediate refresh")
       (ai-command-management--refresh-command-registry)))
 
   (let* ((commands (ai-command-management--filter-commands filter-fn))
@@ -373,7 +373,7 @@ Returns (base-name . modifiers-list)."
 
 (defun ai-command-management--create-behavior-from-config (name config)
   "Create ai-command-behavior struct from CONFIG plist."
-  (ai-logging--verbose-message "Creating ai-command-behavior for '%s' from config: %S" name config)
+  (ai-logging--message 'debug "command-management" "Creating ai-command-behavior for '%s' from config: %S" name config)
 
   ;; Ensure config is a proper plist
   (unless (and (listp config) (cl-evenp (length config)))
@@ -389,7 +389,7 @@ Returns (base-name . modifiers-list)."
          (following-context-size (plist-get config :following-context-size)))
 
     ;; Add debug output
-    (ai-logging--verbose-message "Extracted values for command %s: user-input=%S, action-type=%S, result-action=%S, needs-buffer-context=%S"
+    (ai-logging--message 'debug "command-management" "Extracted values for command %s: user-input=%S, action-type=%S, result-action=%S, needs-buffer-context=%S"
                                  name user-input action-type result-action needs-buffer-context)
 
     (make-ai-command-behavior
@@ -452,7 +452,7 @@ Returns (base-name . modifiers-list)."
   (condition-case-unless-debug err
       (funcall (ai-command-provider-loader-fn provider))
     (error
-     (ai-logging--verbose-message "Error loading commands from provider %s: %s"
+     (ai-logging--message 'error  "command-management" "Error loading commands from provider %s: %s"
                                   (ai-command-provider-name provider) err)
      nil)))
 
@@ -496,7 +496,7 @@ Returns (base-name . modifiers-list)."
             (puthash (ai-structs--get-command-canonical-name command) command registry)))))
 
     (remhash key ai-command-management--registries-dirty)
-    (ai-logging--verbose-message "Command registry refreshed for project %s: %d commands loaded"
+    (ai-logging--message 'info "command-management" "Command registry refreshed for project %s: %d commands loaded"
                                  key (hash-table-count registry))))
 
 (defun ai-command-management--get-command-from-registry (name &optional project-key)
@@ -549,7 +549,7 @@ This function includes project change detection and lazy loading."
     (cancel-timer ai-command-management--refresh-timer)
     (setq ai-command-management--refresh-timer nil))
   (ai-command-management--refresh-command-registry)
-  (message "Command registry refreshed"))
+  (ai-logging--message 'info "command-management" "Command registry refreshed"))
 
 (defun ai-command-management-refresh-all-registries ()
   "Manually refresh command registries for all projects."
@@ -562,7 +562,7 @@ This function includes project change detection and lazy loading."
                (ai-command-management--refresh-command-registry project-key)
                (setq count (1+ count)))
              ai-command-management--project-command-registries)
-    (message "Refreshed %d project registries" count)))
+    (ai-logging--message 'info "command-management" "Refreshed %d project registries" count)))
 
 (defun ai-command-management-registry-status ()
   "Show status of command registry for current project."
@@ -572,7 +572,7 @@ This function includes project change detection and lazy loading."
          (count (hash-table-count registry))
          (is-dirty (ai-command-management--is-project-registry-dirty project-key))
          (has-timer (not (null ai-command-management--refresh-timer))))
-    (message "Command registry for project '%s' contains %d commands%s%s"
+    (ai-logging--message 'info "command-management" "Command registry for project '%s' contains %d commands%s%s"
              project-key count
              (if is-dirty " [DIRTY]" " [CLEAN]")
              (if has-timer " [SCHEDULED FOR REFRESH]" ""))))
@@ -589,7 +589,7 @@ This function includes project change detection and lazy loading."
          (default-commands (cl-count-if (lambda (cmd) (eq (ai-structs--get-command-location cmd) :default)) all-commands))
          (user-input-commands (cl-count-if (lambda (cmd) (eq (ai-structs--get-command-source cmd) :user-input)) all-commands))
          (project-key (ai-command-management--get-buffer-project-key)))
-    (message "Registry for '%s': %d total (%d config, %d file, %d user-input | %d local, %d global, %d default)"
+    (ai-logging--message 'info "command-management" "Registry for '%s': %d total (%d config, %d file, %d user-input | %d local, %d global, %d default)"
              project-key (length all-commands) config-commands file-commands user-input-commands
              local-commands global-commands default-commands)))
 
@@ -747,6 +747,8 @@ This function includes project change detection and lazy loading."
 
 (defun ai-command-management--load-config-commands ()
   "Load commands from configuration map with proper ai-command structure and pre-loaded instructions."
+  (ai-logging--message 'info "command-management" "Load config command")
+
   (let ((commands nil)
         (priority 100))
     (dolist (entry ai-command-management-commands-config-map)
@@ -775,11 +777,10 @@ This function includes project change detection and lazy loading."
                        :file-path file-path
                        :priority priority)))
 
-        (ai-command-management--print-command-summary command)
-
         (push command commands)
         (setq priority (1+ priority))))
     commands))
+
 
 (defun ai-command-management--load-file-commands (location)
   "Load commands from files for LOCATION with proper ai-command structure and all fields populated."
@@ -793,6 +794,7 @@ This function includes project change detection and lazy loading."
     ;; Get all instruction names for the specified location
     (let ((cache-type (cond
                        ((eq location :default) 'default)
+
                        ((eq location :global) 'global)
                        ((eq location :local) 'local)
                        (t 'default))))
@@ -1210,7 +1212,7 @@ Returns an alist with categories as keys and modifier lists as values."
   (interactive)
   (let* ((command (ai-command-management--get-command))
          (description (ai-command-management--describe-command-modifiers command)))
-    (message "%s" description)))
+    (ai-logging--message 'info "command-management" "%s" description)))
 
 (defun ai-command-management-create-modified-command ()
   "Interactively create a new file-based command with modifiers."
@@ -1245,15 +1247,15 @@ Returns an alist with categories as keys and modifier lists as values."
     (let ((full-command-name (if (string-empty-p modifier-string)
                                 base-name
                               (format "%s__%s" modifier-string base-name))))
-      (message "Suggested command name: %s" full-command-name)
+      (ai-logging--message 'info "command-management" "Suggested command name: %s" full-command-name)
       (when (y-or-n-p "Create instruction file for this command? ")
         ;; Check if instructions already exist
         (let* ((existing-instructions (ai-command-management-get-instructions full-command-name))
                (file-exists existing-instructions))
           (when file-exists
-            (message "Warning: Instructions for command '%s' already exist" full-command-name))
+            (ai-logging--message 'warn "command-management" "Instructions for command '%s' already exist" full-command-name))
           ;; Create instruction file for the specific command name
-          (message "Creating instruction file for command: %s" full-command-name)
+          (ai-logging--message 'debug "command-management" "Creating instruction file for command: %s" full-command-name)
           (ai-command-management-edit-command-instructions-for-name full-command-name))))))
 
 (defun ai-command-management--get-available-edit-locations (command-name)

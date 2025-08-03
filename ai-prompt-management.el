@@ -147,11 +147,17 @@ HOOK-FUNCTION should accept parameters (location cache-type stats)."
 
 (defun ai-prompt-management--call-cache-update-hooks (location cache-type stats)
   "Call all registered cache update hooks with LOCATION, CACHE-TYPE, and STATS."
+  (ai-logging--message 'debug  "prompt-management" "Calling cache update hooks | location=\"%s\", cache-type=\"%s\", num=\"%d\" hooks registered"
+                      location cache-type (length ai-prompt-management--cache-update-hooks))
   (dolist (hook ai-prompt-management--cache-update-hooks)
+    (ai-logging--message 'debug "prompt-management" "Executing cache update hook | hook=\"%s\"" hook)
     (condition-case-unless-debug err
-        (funcall hook location cache-type stats)
+        (progn
+          (funcall hook location cache-type stats)
+          (ai-logging--message 'debug  "prompt-management""Cache update hook completed successfully | hook=\"%s\"" hook))
       (error
-       (ai-logging--verbose-message "Error in cache update hook %s: %s" hook err)))))
+       (ai-logging--message 'error  "prompt-management""Error in cache update hook | hook=\"%s\" => %s" hook err))))
+  (ai-logging--message 'debug  "prompt-management""All cache update hooks completed"))
 
 (defun ai-prompt-management--render-template (template keyword-list)
   "Replace variables in TEMPLATE with values from KEYWORD-LIST.
@@ -269,7 +275,7 @@ If IS-SYSTEM-PROMPT-DIR, uses system prompt normalization."
                    content cache-table))))
     ;; Update modification time
     (puthash cache-key (ai-prompt-management--get-directory-modification-time directory) ai-prompt-management--instruction-directory-mtimes)
-    (ai-logging--verbose-message "Updated cache for %s (%d entries)" cache-key (hash-table-count cache-table))
+    (ai-logging--message 'info  "prompt-management""Updated cache for %s (%d entries)" cache-key (hash-table-count cache-table))
 
     ;; Call hooks
     (let* ((entry-count (hash-table-count cache-table))
@@ -519,7 +525,7 @@ This is a specialized system prompt."
 
 (defun ai-prompt-management--update-caches ()
   "Update all instruction and system prompt caches for all locations."
-  (message "Updating AI mode prompt caches...")
+  (ai-logging--message 'info  "prompt-management""Updating AI mode prompt caches...")
 
   ;; Update default commands cache
   (let ((directory (ai-prompt-management--get-default-instructions-directory)))
@@ -545,8 +551,8 @@ This is a specialized system prompt."
   (when-let ((directory (ai-prompt-management--get-local-system-prompts-directory)))
     (ai-prompt-management--ensure-cache-updated directory ai-prompt-management--local-system-prompts-cache "local-system" t))
 
-  (message "AI mode prompt caches updated!")
-  (ai-logging--verbose-message "Prompt caches updated successfully."))
+  (ai-logging--message 'info  "prompt-management""AI mode prompt caches updated!")
+  (ai-logging--message 'info  "prompt-management""Prompt caches updated successfully."))
 
 ;; =============================================================================
 ;; Public API for command providers and new unified system
@@ -637,7 +643,7 @@ Forces cache rebuild on next access."
     ;; Remove modification time entries to force rebuild
     (remhash cache-key ai-prompt-management--instruction-directory-mtimes)
     (remhash system-cache-key ai-prompt-management--instruction-directory-mtimes)
-    (ai-logging--verbose-message "Invalidated cache for location: %s" location)
+    (ai-logging--message 'info  "prompt-management""Invalidated cache for location: %s" location)
 
     ;; Call hooks for invalidation
     (ai-prompt-management--call-cache-update-hooks location :instruction `(:entry-count 0 :action invalidate))
@@ -710,7 +716,7 @@ Returns plist with file size, modification time, and other attributes."
   "Force update of all caches regardless of modification times.
 This is useful for debugging or when file system changes are not detected properly."
   (interactive)
-  (message "Force updating all AI mode prompt caches...")
+  (ai-logging--message 'info  "prompt-management""Force updating all AI mode prompt caches...")
 
   ;; Clear all modification time entries to force updates
   (clrhash ai-prompt-management--instruction-directory-mtimes)
@@ -718,7 +724,7 @@ This is useful for debugging or when file system changes are not detected proper
   ;; Update all caches
   (ai-prompt-management--update-caches)
 
-  (message "All AI mode prompt caches force updated!"))
+  (ai-logging--message 'info  "prompt-management""All AI mode prompt caches force updated!"))
 
 (defun ai-prompt-management-list-cache-update-hooks ()
   "List all registered cache update hooks.

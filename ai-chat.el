@@ -416,17 +416,17 @@ Functions should return a list of typed structs or nil if no context to provide.
       (ai-usage-create-usage-statistics-callback)
     ;; Fallback implementation if ai-usage function is not available
     (lambda (usage-stats)
-      (let ((input-tokens (plist-get usage-stats :input-tokens))
-            (output-tokens (plist-get usage-stats :output-tokens))
-            (total-tokens (plist-get usage-stats :total-tokens))
-            (input-tokens-write-cache (plist-get usage-stats :input-tokens-write-cache))
-            (input-tokens-read-cache (plist-get usage-stats :input-tokens-read-cache)))
-        (message "AI Chat Usage: Input=%s, Output=%s, Total=%s%s%s"
-                 (or input-tokens "?")
-                 (or output-tokens "?")
-                 (or total-tokens "?")
-                 (if input-tokens-write-cache (format ", Cache Write=%s" input-tokens-write-cache) "")
-                 (if input-tokens-read-cache (format ", Cache Read=%s" input-tokens-read-cache) ""))))))
+      (let* ((input-tokens (plist-get usage-stats :input-tokens))
+             (output-tokens (plist-get usage-stats :output-tokens))
+             (total-tokens (plist-get usage-stats :total-tokens))
+             (input-tokens-write-cache (plist-get usage-stats :input-tokens-write-cache))
+             (input-tokens-read-cache (plist-get usage-stats :input-tokens-read-cache))
+             (message-str (format "AI Chat Usage: Input=%s, Output=%s, Total=%s%s%s"
+                                  (or input-tokens "?")
+                                  (or output-tokens "?")
+                                  (or total-tokens "?")
+                                  (if input-tokens-write-cache (format ", Cache Write=%s" input-tokens-write-cache) "")
+                                  (if input-tokens-read-cache (format ", Cache Read=%s" input-tokens-read-cache) ""))))))))
 
 ;;; Context providers registry
 
@@ -479,7 +479,7 @@ Returns a flattened list of all context elements provided by registered provider
                     (when (and item (not (null item)))
                       (push item results))))))
           (error
-           (messge "Error calling AI chat context provider %s: %s" provider err)))))
+           (ai-logging--message 'error "chat" "Error calling AI chat context provider %s: %s" provider err)))))
     ;; Return results in correct order
     (reverse results)))
 
@@ -488,7 +488,7 @@ Returns a flattened list of all context elements provided by registered provider
 (defun ai-chat--log-chat-interaction (input-string model-name)
   "Log chat interaction with INPUT-STRING and MODEL-NAME."
   (when ai-telemetry-enabled
-    (ai-logging--verbose-message "AI Chat: User input to %s: %s" model-name (substring input-string 0 (min 100 (length input-string))))
+    (ai-logging--message 'info  "chat" "User input to %s: %s" model-name (substring input-string 0 (min 100 (length input-string))))
     (when (fboundp 'ai-telemetry-write-context-to-prompt-buffer)
       (let ((context-messages (list (ai-chat--make-typed-struct input-string 'user-input))))
         (ai-telemetry-write-context-to-prompt-buffer context-messages)))))
@@ -498,13 +498,13 @@ Returns a flattened list of all context elements provided by registered provider
   (when ai-telemetry-enabled
     (dolist (message messages)
       (let ((content (ai-chat--get-text-content-from-struct message)))
-        (ai-logging--verbose-message "AI Chat: Response from %s: %s" model-name (substring content 0 (min 100 (length content))))))))
+        (ai-logging--message 'info  "chat" "Response from %s: %s" model-name (substring content 0 (min 100 (length content))))))))
 
 (defun ai-chat--log-chat-error (error-message model-name)
   "Log chat error ERROR-MESSAGE from MODEL-NAME."
   (when ai-telemetry-enabled
     (let ((content (ai-chat--get-text-content-from-struct error-message)))
-      (ai-logging--verbose-message "AI Chat: Error from %s: %s" model-name content))))
+      (ai-logging--message 'error  "chat" "Error from %s: %s" model-name content))))
 
 ;;; Progress indicator functions
 
@@ -813,7 +813,7 @@ MESSAGE-TYPE specifies the type of message and is optional."
   (ai-chat--clear-buffer-history)
   ;; Log session start
   (when ai-telemetry-enabled
-    (ai-logging--verbose-message "AI Chat: Started new session %s" ai-chat-current-session-id)))
+    (ai-logging--message 'info  "chat" "Started new session %s" ai-chat-current-session-id)))
 
 (defun ai-chat--initialize-session ()
   "Initialize a new chat session if none exists."
@@ -864,7 +864,7 @@ MESSAGE-TYPE specifies the type of message and is optional."
     (message "Chat session saved to: %s" filename)
     ;; Log session save
     (when ai-telemetry-enabled
-      (ai-logging--verbose-message "AI Chat: Session %s saved to %s" ai-chat-current-session-id filename))))
+      (ai-logging--message 'info  "chat" "Session %s saved to %s" ai-chat-current-session-id filename))))
 
 (defun ai-chat--auto-save-session ()
   "Automatically save session context after each interaction if auto-save is enabled."
@@ -931,7 +931,7 @@ MESSAGE-TYPE specifies the type of message and is optional."
               (message "Chat session loaded from: %s" filename)
               ;; Log session load
               (when ai-telemetry-enabled
-                (ai-logging--verbose-message "AI Chat: Session loaded from %s" filename)))
+                (ai-logging--message 'info  "chat" "Session loaded from %s" filename)))
           (error (message "Error loading session: %s" (error-message-string err))))))))
 
 (defun ai-chat--restore-chat-display ()
@@ -1060,6 +1060,8 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
                          (format "%d" (ai-chat-get-context-size))))
          (telemetry-indicator (if ai-telemetry-enabled "T" ""))
          (audit-indicator (if ai-request-audit-enabled "A" ""))
+         (logging-indicator (when (and ai-telemetry-enabled (not (eq ai-logging-verbose-level 'silent)))
+                              (format "L:%s" (upcase (substring (symbol-name ai-logging-verbose-level) 0 1)))))
          (ai-chat-mode-line-section
           (format "AI-CHAT[%s|%s%s%s%s%s]"
                   (map-elt model :name)
@@ -1067,7 +1069,7 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
                   (if ai-chat-auto-save-enabled "|AS" "")
                   (if (string-empty-p telemetry-indicator) "" (format "|%s" telemetry-indicator))
                   (if (string-empty-p audit-indicator) "" (format "|%s" audit-indicator))
-                  (if (and ai-telemetry-enabled ai-logging-verbose-log) "|V" ""))))
+                  (if logging-indicator (format "|%s" logging-indicator) ""))))
     ai-chat-mode-line-section))
 
 (defun ai-chat-get-context-size ()
@@ -1232,7 +1234,7 @@ If FAILED is non-nil, marks reply as invisible to indicate failure."
     (message (format "AI chat query async backend is changed to \"%s\"" value))
     ;; Log model change
     (when ai-telemetry-enabled
-      (ai-logging--verbose-message "AI Chat: Model changed to %s" value))))
+      (ai-logging--message 'info  "chat" "Model changed to %s" value))))
 
 (defun ai-chat-toggle-auto-save ()
   "Toggle automatic saving of chat sessions."

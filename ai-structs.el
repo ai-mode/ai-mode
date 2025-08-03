@@ -304,7 +304,6 @@ Returns a plist with current position data or nil if state is invalid."
       (set-marker marker nil))))
 
 
-
 (provide 'ai-structs)
 
 ;;; ai-structs.el ends here

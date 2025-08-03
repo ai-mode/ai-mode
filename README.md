@@ -486,7 +486,7 @@ AI Mode provides several important customizable variables to tailor its behavior
 | **Logging & Debugging Settings** | | |
 | `ai-telemetry-enabled` | Enable telemetry collection for AI mode. | `t` |
 | `ai-telemetry-write-log-buffer` | If non-nil, enables logging of AI requests and responses to `*AI-request-log*` buffer. | `nil` |
-| `ai-logging-verbose-log` | If non-nil, enables verbose logging for AI utilities. | `nil` |
+| `ai-logging-verbose-level` | Logging level for AI mode. Possible values: `silent`, `error`, `warn`, `info`, `debug`, `trace`. | `info` |
 | `ai-telemetry-write-to-prompt-buffer` | If non-nil, writes the full prompt sent to the AI to `*AI prompt*` buffer. | `nil` |
 | `ai-network--default-request-timeout` | Default timeout for HTTP requests in seconds. | `60` |
 | `ai-debug-truncate-content` | Whether to truncate long content in debug buffers for performance. | `t` |
@@ -515,7 +515,7 @@ The `ai-mode` package is composed of several `.el` files, each responsible for a
 | `ai-core.el` | Serves as the central orchestrator and primary location for fundamental AI-mode logic, coordinating calls between different modules. |
 | `ai-debug.el` | Provides visual tools for debugging and introspecting AI states, including prompt composition, execution context, and model configuration. |
 | `ai-execution.el` | Manages AI request execution and asynchronous interaction with AI backends, handling success and failure callbacks. |
-| `ai-logging.el` | Provides logging utilities for AI mode, including message logging, verbose control, and request/response logging. |
+| `ai-logging.el` | Provides logging utilities for AI mode, including message logging, multi-level verbose control, and structured request/response logging. |
 | `ai-mode-adapter-api.el` | Provides a standardized, type-safe API for `ai-mode` to interact with external AI backends, handling message preparation and content extraction. |
 | `ai-mode-indexing.el` | Manages the project indexing system for AI, encompassing file summary generation, persistence, and versioning. |
 | `ai-mode-line.el` | Provides mode line utilities and indicators for AI mode, including progress tracking, status displays, and integration with doom-modeline. |
