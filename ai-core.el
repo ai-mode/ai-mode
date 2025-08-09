@@ -49,6 +49,7 @@
 (require 'ai-utils)
 (require 'ai-structs)
 (require 'ai-request-audit)
+(require 'ai-logging)
 
 ;; ============================================================================
 ;; Core execution functions (using ai-command-management functions)
@@ -92,17 +93,17 @@ Uses new command system with ai-command structures when available."
     (cond
      ((eq result-action 'show)
       ;; If the selected command is meant to be shown, delegate
-      (message "Command '%s' is informational. Displaying in a new buffer." command-name)
+      (ai-logging--message 'info "core" "Command '%s' is informational. Displaying in a new buffer." command-name)
       (ai-execution--execute-context context 'ai-response-processors--show-response-buffer))
 
      ((eq result-action 'eval)
       ;; Show response and ask for permission to evaluate
-      (message "Command '%s' will generate code for evaluation." command-name)
+      (ai-logging--message 'info "core" "Command '%s' will generate code for evaluation." command-name)
       (ai-execution--execute-context context 'ai-response-processors--show-and-eval-response))
 
      ((eq result-action 'insert-at-point)
       ;; Insert at the cursor position captured when the command was invoked
-      (message "Command '%s' will insert response at cursor position." command-name)
+      (ai-logging--message 'info "core" "Command '%s' will insert response at cursor position." command-name)
       (ai-execution--execute-context context (ai-response-processors--create-insert-at-point-callback current-buffer cursor-position)))
 
      ((eq result-action 'replace)
@@ -111,7 +112,7 @@ Uses new command system with ai-command structures when available."
 
      (t
       ;; Fallback for unconfigured or new actions
-      (message "Unknown or unspecified result action for command '%s'. Defaulting to show." command-name)
+      (ai-logging--message 'warn "core" "Unknown or unspecified result action for command '%s'. Defaulting to show." command-name)
       (ai-execution--execute-context context 'ai-response-processors--show-response-buffer)))))
 
 (defun ai-core-perform-coordinator ()
