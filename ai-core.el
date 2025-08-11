@@ -29,6 +29,7 @@
 ;; - ai-core-perform-coordinator: Smart completion and continuation logic
 ;; - ai-core-debug: Debug and introspection utilities
 ;; - ai-core-show-audit: Show request audit for current project
+;; - ai-core-open-extended-chat: Open chat with enriched context from all sources
 ;;
 ;; The module coordinates between command management, context management,
 ;; execution, and response processing to provide a seamless AI experience.
@@ -135,6 +136,44 @@ Uses new command system when possible."
   "Show request audit for the current project."
   (interactive)
   (ai-request-audit-show-requests-buffer))
+
+(defun ai-core-open-extended-chat ()
+  "Open chat for current buffer with extended context including all available context sources.
+This function creates a new chat session and enriches it with comprehensive context from:
+- Project context (files, summaries)
+- Memory files (global, local, team)
+- Buffer-specific context
+- Context pool items
+- Global system prompts and buffer-bound prompts
+
+The extended context is automatically added to the chat history to provide
+rich background information for the conversation."
+  (interactive)
+  (if (require 'ai-chat nil t)
+      (progn
+        (ai-logging--message 'info "core" "Opening extended chat with enriched context for buffer: %s" (buffer-name))
+
+        ;; Open basic chat for current buffer
+        (ai-chat-open-for-current-buffer)
+
+        ;; Add extended context after creating chat
+        (when (fboundp 'ai-context-management--get-all-extended-context)
+          (let ((extended-contexts (ai-context-management--get-all-extended-context)))
+            (when extended-contexts
+              (ai-logging--message 'info "core" "Adding %d extended context items to chat" (length extended-contexts))
+              (condition-case-unless-debug err
+                  (with-current-buffer (ai-chat--buffer)
+                    (dolist (context extended-contexts)
+                      (ai-chat--add-entry-to-history context))
+                    (ai-chat--restore-chat-display)
+                    (ai-logging--message 'info "core" "Extended context successfully added to chat"))
+                (error
+                 (ai-logging--message 'error "core" "Error adding extended context to chat: %s" err)
+                 (message "Extended chat opened, but some context could not be added: %s" err))))))
+
+        (message "Extended chat opened with enriched context"))
+    (ai-logging--message 'warn "core" "ai-chat module not available for extended chat")
+    (message "ai-chat module not available")))
 
 (provide 'ai-core)
 

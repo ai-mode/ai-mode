@@ -20,7 +20,7 @@
 ;; GNU General Public License for more details.
 
 ;; For a full copy of the GNU General Public License
-;; see <https://www.gnu.org/licenses/>.
+;; see https://www.gnu.org/licenses/.
 
 ;;; Commentary:
 ;;
@@ -50,7 +50,7 @@
 ;; - File-based instruction system with hot-reloading
 ;; - Flexible memory and context pool management
 ;; - Configurable user input methods with preview support
-
+;;
 ;; File-based Command Modifiers:
 ;; Commands defined in instruction files can use modifiers in their names
 ;; to control behavior without code changes. Modifiers are separated by '__':
@@ -103,6 +103,10 @@
 ;; - C-c i x   - Execute and evaluate AI-generated code
 ;; - C-c i c c - Start AI chat session
 ;; - C-c i c m - Change AI model (alias)
+;; - C-c i c b - Open chat bound to current buffer (with configurable startup context)
+;; - C-c i c s - Send selection/region to the bound chat as context
+;; - C-c i c f - Send entire buffer to the bound chat as context
+;; - C-c i c o - Choose and open a chat session bound to the current buffer
 ;; - C-c i p c - Execute AI coordinator (smart completion)
 ;;
 ;; Command Management (prefix C-c i m):
@@ -192,6 +196,10 @@
     ;; Main commands
     (define-key keymap (kbd "c c") 'ai-chat)
     (define-key keymap (kbd "c m") 'ai-change-model)
+    (define-key keymap (kbd "c b") 'ai-chat-for-buffer)
+    (define-key keymap (kbd "c s") 'ai-chat-send-selection-to-chat)
+    (define-key keymap (kbd "c f") 'ai-chat-send-file-to-chat)
+    (define-key keymap (kbd "c o") 'ai-chat-choose-session)
     (define-key keymap (kbd "p c") 'ai-perform-coordinator)
     (define-key keymap (kbd "r") 'ai-perform)
     (define-key keymap (kbd "s") 'ai-show)
@@ -352,6 +360,41 @@ Uses the new unified command system for enhanced command selection."
   "Debug AI mode by printing region status and execution context."
   (interactive)
   (ai-core-debug))
+
+;; Chat aliases (per-buffer chat helpers)
+;;;###autoload
+(defun ai-chat-for-buffer (&optional force-new)
+  "Open or create a chat bound to the current buffer.
+
+With prefix argument FORCE-NEW, always start a new chat session for the buffer.
+Startup context (buffer, region, and/or user instructions) is controlled by
+`ai-chat-startup-context-strategy'."
+  (interactive "P")
+  (ai-chat-open-for-current-buffer force-new))
+
+;;;###autoload
+(defun ai-chat-send-selection-to-chat ()
+  "Send the active region (or prompt to use the entire buffer) to the bound chat as context.
+
+The data is sent according to `ai-chat-send-enrichment-as' (additional-context,
+file-context, or selection)."
+  (interactive)
+  (ai-chat-send-region-to-bound-chat))
+
+;;;###autoload
+(defun ai-chat-send-file-to-chat ()
+  "Send the entire current buffer to the bound chat as context.
+
+The data is sent according to `ai-chat-send-enrichment-as' (additional-context
+or file-context)."
+  (interactive)
+  (ai-chat-send-buffer-to-bound-chat))
+
+;;;###autoload
+(defun ai-chat-choose-session ()
+  "Choose and open one of the chat sessions bound to the current buffer."
+  (interactive)
+  (ai-chat-choose-session-for-current-buffer))
 
 ;; Command management aliases (prefix: ai-command-)
 (defun ai-command-edit-instructions ()
