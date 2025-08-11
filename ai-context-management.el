@@ -33,6 +33,7 @@
 (require 'ai-command-management)
 (require 'ai-structs)
 (require 'ai-user-input)
+(require 'ai-logging)
 
 (defcustom ai-context-management--project-context-mode 'disabled
   "Project context inclusion mode for AI execution context.
@@ -149,7 +150,7 @@ Returns a flattened list of all context elements provided by registered provider
                     (when (and item (not (null item)))
                       (push item results))))))
           (error
-           (message "Error calling context provider %s: %s" provider err)))))
+           (ai-logging--message 'error "context-management" "Error calling context provider %s: %s" provider err)))))
     ;; Return results in correct order
     (reverse results)))
 
@@ -396,13 +397,13 @@ INPUT is a string representing the context or information to be remembered globa
            (read-string "Enter instruction: "))))
   (let ((struct (ai-common--make-typed-struct input 'global-memory-item 'user-input)))
     (setq ai-context-management--global-memo-context (append ai-context-management--global-memo-context `(,struct)))
-    (message "AI memory context added")))
+    (ai-logging--message 'info "context-management" "AI memory context added")))
 
 (defun ai-context-management--clear-global-memory ()
   "Clear the global memory context."
   (interactive)
   (setq ai-context-management--global-memo-context nil)
-  (message "AI buffer context cleared"))
+  (ai-logging--message 'info "context-management" "AI buffer context cleared"))
 
 (defun ai-context-management--get-global-memory ()
   "Return the current global memory context."
@@ -418,13 +419,13 @@ INPUT can be entered by the user or taken from the active region."
 
   (with-current-buffer (current-buffer)
     (let ((struct (ai-common--make-typed-struct input 'buffer-bound-prompt 'user-input)))
-      (message "AI buffer bound context added")
+      (ai-logging--message 'info "context-management" "AI buffer bound context added")
       (setq-local ai-context-management--buffer-bound-prompts (append ai-context-management--buffer-bound-prompts `(,struct))))))
 
 (defun ai-context-management--clear-buffer-bound-prompts ()
   "Clear all buffer-specific instructions."
   (with-current-buffer (current-buffer)
-    (message "AI buffer context cleared")
+    (ai-logging--message 'info "context-management" "AI buffer context cleared")
     (setq-local ai-context-management--buffer-bound-prompts nil)))
 
 (defun ai-context-management--get-buffer-bound-prompts ()
@@ -456,7 +457,7 @@ INPUT can be entered by the user or taken from the active region."
 (defun ai-context-management--clear-context-pool ()
   "Clear the temporary context pool."
   (setq ai-context-management--context-pool nil)
-  (message "Clear context pool"))
+  (ai-logging--message 'info "context-management" "Clear context pool"))
 
 (defun ai-context-management--get-context-pool ()
   "Return the current context pool."
@@ -488,7 +489,7 @@ Returns a string representation of the item for user selection."
 (defun ai-context-management--remove-from-context-pool ()
   "Remove selected item from context pool via minibuffer selection."
   (if (null ai-context-management--context-pool)
-      (message "Context pool is empty")
+      (ai-logging--message 'info "context-management" "Context pool is empty")
     (let* ((items-with-display (mapcar (lambda (item)
                                          (cons (ai-context-management--format-context-pool-item-for-selection item) item))
                                        ai-context-management--context-pool))
@@ -499,7 +500,7 @@ Returns a string representation of the item for user selection."
       (when selected-item
         (setq ai-context-management--context-pool
               (cl-remove selected-item ai-context-management--context-pool :test #'equal))
-        (message "Removed item from context pool: %s"
+        (ai-logging--message 'info "context-management" "Removed item from context pool: %s"
                  (ai-context-management--format-context-pool-item-for-selection selected-item))))))
 
 (defun ai-context-management--capture-region-snippet ()
@@ -516,13 +517,61 @@ Returns a string representation of the item for user selection."
   "Adds the entire file content to the context pool."
   (let ((file-context (ai-common--make-file-context-from-buffer)))
     (ai-context-management--add-to-context-pool file-context)
-    (message "File content added to context pool.")))
+    (ai-logging--message 'info "context-management" "File content added to context pool.")))
 
 (defun ai-context-management--get-user-input-struct ()
   "Create a plist structure based on user input via minibuffer."
   (let ((text (read-string "Enter instruction or context for AI: ")))
     (ai-common--make-typed-struct text 'user-input 'user-input
                                   :render-ignore-fields '(:source))))
+
+(defun ai-context-management--get-all-extended-context ()
+  "Get all extended context including context pool, global memory, etc.
+Returns a list of context elements."
+  (let ((contexts '()))
+
+    ;; Context pool
+    (when-let ((context-pool (ai-context-management--get-context-pool)))
+      (if (listp context-pool)
+          (setq contexts (append contexts context-pool))
+        (push context-pool contexts)))
+
+    ;; Global memory
+    (when-let ((global-memory (ai-context-management--get-global-memory)))
+      (if (listp global-memory)
+          (setq contexts (append contexts global-memory))
+        (push global-memory contexts)))
+
+    ;; Buffer-bound prompts
+    (when-let ((buffer-bound-prompts (ai-context-management--get-buffer-bound-prompts)))
+      (if (listp buffer-bound-prompts)
+          (setq contexts (append contexts buffer-bound-prompts))
+        (push buffer-bound-prompts contexts)))
+
+    ;; Project context
+    (when-let ((project-context (ai-context-management--get-project-context)))
+      (push project-context contexts))
+
+    ;; Memory context
+    (when-let ((memory-context (ai-context-management--get-memory-context)))
+      (push memory-context contexts))
+
+    ;; Global system prompts
+    (when-let ((global-system-prompts (ai-context-management--get-global-system-prompts)))
+      (if (listp global-system-prompts)
+          (setq contexts (append contexts global-system-prompts))
+        (push global-system-prompts contexts)))
+
+    contexts))
+
+(defun ai-context-management--has-extended-context-p ()
+  "Return t if any extended context is available."
+  (or (ai-context-management--get-context-pool)
+      (ai-context-management--get-global-memory)
+      (ai-context-management--get-buffer-bound-prompts)
+      (ai-context-management--get-project-context)
+      (ai-context-management--get-memory-context)
+      (ai-context-management--get-global-system-prompts)))
 
 (cl-defun ai-context-management--assemble-completion-context (&key preceding-context-size following-context-size)
   "Return a list of context elements for <completion>.
@@ -796,7 +845,7 @@ Allows user to select between different project context inclusion modes."
 
     (setq ai-context-management--project-context-mode selected-mode)
     (customize-save-variable 'ai-context-management--project-context-mode selected-mode)
-    (message "Project context mode changed to: %s (%s)"
+    (ai-logging--message 'info "context-management" "Project context mode changed to: %s (%s)"
              selected-name
              (cdr (assoc selected-mode mode-descriptions)))))
 
