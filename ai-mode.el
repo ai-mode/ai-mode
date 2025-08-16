@@ -107,6 +107,7 @@
 ;; - C-c i c s - Send selection/region to the bound chat as context
 ;; - C-c i c f - Send entire buffer to the bound chat as context
 ;; - C-c i c o - Choose and open a chat session bound to the current buffer
+;; - C-c i c e - Open extended chat with enriched context from all available sources
 ;; - C-c i p c - Execute AI coordinator (smart completion)
 ;;
 ;; Command Management (prefix C-c i m):
@@ -200,6 +201,7 @@
     (define-key keymap (kbd "c s") 'ai-chat-send-selection-to-chat)
     (define-key keymap (kbd "c f") 'ai-chat-send-file-to-chat)
     (define-key keymap (kbd "c o") 'ai-chat-choose-session)
+    (define-key keymap (kbd "c e") 'ai-open-extended-chat)
     (define-key keymap (kbd "p c") 'ai-perform-coordinator)
     (define-key keymap (kbd "r") 'ai-perform)
     (define-key keymap (kbd "s") 'ai-show)
@@ -395,6 +397,21 @@ or file-context)."
   "Choose and open one of the chat sessions bound to the current buffer."
   (interactive)
   (ai-chat-choose-session-for-current-buffer))
+
+;;;###autoload
+(defun ai-open-extended-chat ()
+  "Open chat for current buffer with extended context including all available context sources.
+This creates a new chat session and enriches it with comprehensive context from:
+- Project context (files, summaries)
+- Memory files (global, local, team)
+- Buffer-specific context
+- Context pool items
+- Global system prompts and buffer-bound prompts
+
+The extended context is automatically added to the chat history to provide
+rich background information for the conversation."
+  (interactive)
+  (ai-core-open-extended-chat))
 
 ;; Command management aliases (prefix: ai-command-)
 (defun ai-command-edit-instructions ()

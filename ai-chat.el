@@ -248,6 +248,13 @@
   :type '(choice (const additional-context) (const file-context) (const selection))
   :group 'ai-chat)
 
+(defcustom ai-chat-default-behavior-for-buffer 'create-new
+  "Default behavior when opening chat for buffer."
+  :type '(choice (const :tag "Always create new session" create-new)
+                 (const :tag "Reuse existing sessions" reuse-existing)
+                 (const :tag "Ask user each time" ask-user))
+  :group 'ai-chat)
+
 ;;; Variables
 
 (defvar ai-chat-buffer-name "*ai-chat*"
@@ -493,6 +500,13 @@ If called from a chat buffer, return the current buffer to support multi-chat se
 
 ;;; Buffer-bound chat helpers
 
+(defun ai-chat--cleanup-dead-sessions (sessions)
+  "Remove sessions with dead buffers from SESSIONS list."
+  (cl-remove-if-not (lambda (session)
+                      (let ((buf (plist-get session :chat-buffer)))
+                        (and buf (buffer-live-p buf))))
+                    sessions))
+
 (defun ai-chat--display-name-for-buffer (source-buffer)
   "Compute display name for SOURCE-BUFFER."
   (with-current-buffer source-buffer
@@ -517,7 +531,7 @@ If UNIQUE-SUFFIX is non-nil, append as '#UNIQUE-SUFFIX'."
 (defun ai-chat--sessions-for-source (source-buffer)
   "Return the session list for SOURCE-BUFFER from `ai-chat--buffer->sessions`."
   (let* ((key (ai-chat--source-id-for-buffer source-buffer)))
-    (gethash key ai-chat--buffer->sessions)))
+    (ai-chat--cleanup-dead-sessions (gethash key ai-chat--buffer->sessions))))
 
 (defun ai-chat--list-sessions-for-buffer (source-buffer)
   "Return a list of session metadata for SOURCE-BUFFER."
@@ -526,12 +540,15 @@ If UNIQUE-SUFFIX is non-nil, append as '#UNIQUE-SUFFIX'."
 (defun ai-chat--register-session (source-buffer chat-buffer)
   "Register CHAT-BUFFER as a session for SOURCE-BUFFER."
   (let* ((key (ai-chat--source-id-for-buffer source-buffer))
-         (list (or (gethash key ai-chat--buffer->sessions) '()))
+         (list (ai-chat--cleanup-dead-sessions
+                (or (gethash key ai-chat--buffer->sessions) '())))
          (entry (list :chat-buffer chat-buffer
                       :session-id (with-current-buffer chat-buffer ai-chat-current-session-id)
                       :created-at (with-current-buffer chat-buffer ai-chat-current-session-start-time)
                       :title (with-current-buffer chat-buffer (or ai-chat--display-name (buffer-name chat-buffer))))))
-    (puthash key (append list (list entry)) ai-chat--buffer->sessions)))
+    ;; Проверить, не зарегистрирован ли уже этот буфер
+    (unless (cl-find chat-buffer list :key (lambda (entry) (plist-get entry :chat-buffer)) :test #'eq)
+      (puthash key (append list (list entry)) ai-chat--buffer->sessions))))
 
 (defun ai-chat--choose-session-for-key (source-buffer)
   "Prompt user to choose a session for SOURCE-BUFFER and return its chat buffer."
@@ -665,44 +682,65 @@ This includes context pool, global memory, buffer-bound prompts, and project con
     (with-current-buffer chat-buffer
       (setq-local ai-chat--initial-context-applied t))))
 
-(cl-defun ai-chat--find-or-create-session-for-buffer (source-buffer &key force-new initial-strategy)
+(defun ai-chat--create-new-session-for-buffer (source-buffer &optional strategy)
+  "Always create a new chat session for SOURCE-BUFFER."
+  (let* ((sessions (ai-chat--list-sessions-for-buffer source-buffer))
+         (count (length sessions))
+         (suffix (when (> count 0) (1+ count)))
+         (chat-name (ai-chat--compute-chat-buffer-name source-buffer suffix))
+         (chat-buffer (get-buffer-create chat-name)))
+
+    (with-current-buffer chat-buffer
+      (setq-local ai-chat--busy nil)
+      (set-buffer-multibyte t)
+      (setq-local ai-chat-buffer-history '())
+      (ai-chat-inferior-mode)
+      (setq-local ai-chat--bound-source-buffer source-buffer)
+      (setq-local ai-chat--bound-source-file (with-current-buffer source-buffer buffer-file-name))
+      (setq-local ai-chat--display-name (ai-chat--display-name-for-buffer source-buffer)))
+
+    (ai-chat--register-session source-buffer chat-buffer)
+
+    (let ((final-strategy (or strategy
+                              (if (eq ai-chat-startup-context-strategy 'ask)
+                                  (ai-chat--read-startup-context-strategy)
+                                ai-chat-startup-context-strategy))))
+      (ai-chat--apply-startup-context chat-buffer source-buffer final-strategy))
+
+    chat-buffer))
+
+(cl-defun ai-chat--find-or-create-session-for-buffer (source-buffer &key force-new initial-strategy prefer-new)
   "Find existing or create new chat session bound to SOURCE-BUFFER.
 When FORCE-NEW is non-nil, always create a new session.
+When PREFER-NEW is non-nil, create new session unless user explicitly chooses existing.
 INITIAL-STRATEGY controls startup context application."
   (if (not ai-chat-per-buffer-enabled)
-      ;; Fallback to global chat
-      (progn
-        (ai-chat)
-        (ai-chat--buffer))
-    (let* ((sessions (ai-chat--list-sessions-for-buffer source-buffer))
-           (can-reuse (and (not force-new) sessions))
-           (selected-buffer (and can-reuse
-                                 (if (and (not ai-chat-allow-multiple-sessions-per-buffer)
-                                          (= (length sessions) 1))
-                                     (plist-get (car sessions) :chat-buffer)
-                                   (ai-chat--choose-session-for-key source-buffer)))))
-      (if (and selected-buffer (buffer-live-p selected-buffer))
-          selected-buffer
-        ;; Create new session
-        (let* ((count (length sessions))
-               (suffix (when (and ai-chat-allow-multiple-sessions-per-buffer (> count 0)) (1+ count)))
-               (chat-name (ai-chat--compute-chat-buffer-name source-buffer suffix))
-               (chat-buffer (get-buffer-create chat-name)))
-          (with-current-buffer chat-buffer
-            (setq-local ai-chat--busy nil)
-            (set-buffer-multibyte t)
-            (setq-local ai-chat-buffer-history (or ai-chat-buffer-history '()))
-            (ai-chat-inferior-mode)
-            (setq-local ai-chat--bound-source-buffer source-buffer)
-            (setq-local ai-chat--bound-source-file (with-current-buffer source-buffer buffer-file-name))
-            (setq-local ai-chat--display-name (ai-chat--display-name-for-buffer source-buffer)))
-          (ai-chat--register-session source-buffer chat-buffer)
-          (let* ((strategy (or initial-strategy
-                               (if (eq ai-chat-startup-context-strategy 'ask)
-                                   (ai-chat--read-startup-context-strategy)
-                                 ai-chat-startup-context-strategy))))
-            (ai-chat--apply-startup-context chat-buffer source-buffer strategy))
-          chat-buffer)))))
+      (progn (ai-chat) (ai-chat--buffer))
+    (let* ((sessions (ai-chat--cleanup-dead-sessions
+                      (ai-chat--list-sessions-for-buffer source-buffer)))
+           (should-create-new (cond
+                               (force-new t)
+                               ((null sessions) t)
+                               ((eq ai-chat-default-behavior-for-buffer 'create-new) t)
+                               ((eq ai-chat-default-behavior-for-buffer 'reuse-existing) nil)
+                               ((eq ai-chat-default-behavior-for-buffer 'ask-user)
+                                (if ai-chat-allow-multiple-sessions-per-buffer
+                                    (y-or-n-p "Create new chat session? (n to choose existing) ")
+                                  nil))
+                               (prefer-new
+                                (if ai-chat-allow-multiple-sessions-per-buffer
+                                    (y-or-n-p "Create new chat session? (n to choose existing) ")
+                                  nil))
+                               (t t))))
+
+      (if should-create-new
+          (ai-chat--create-new-session-for-buffer source-buffer initial-strategy)
+        ;; Пользователь хочет использовать существующую сессию
+        (let ((selected-buffer (if (= (length sessions) 1)
+                                   (plist-get (car sessions) :chat-buffer)
+                                 (ai-chat--choose-session-for-key source-buffer))))
+          (or selected-buffer
+              (ai-chat--create-new-session-for-buffer source-buffer initial-strategy)))))))
 
 ;;; Context providers registry
 
@@ -1633,6 +1671,14 @@ With prefix argument FORCE-NEW, create a new session."
             (ai-chat--add-entry-to-history struct)
             (ai-chat--restore-chat-display))
           (message "Buffer sent to chat: %s" (buffer-name chat)))))))
+
+;;;###autoload
+(defun ai-chat-new-session-for-buffer ()
+  "Always create a new chat session for the current buffer."
+  (interactive)
+  (let ((chat (ai-chat--create-new-session-for-buffer (current-buffer))))
+    (when chat
+      (pop-to-buffer-same-window chat))))
 
 ;;; Major mode
 
