@@ -14,6 +14,7 @@
 - [Usage & Commands](#usage--commands)
   - [Code Completion](#code-completion)
   - [Interactive AI Chat](#interactive-ai-chat)
+  - [Buffer-Bound Chat Sessions](#buffer-bound-chat-sessions)
   - [Code Manipulation](#code-manipulation)
   - [System & Session Context Management](#system--session-context-management)
   - [Execution Control](#execution-control)
@@ -34,14 +35,14 @@ AI mode for Emacs is a comprehensive package that integrates powerful artificial
 
 ### Key Features
 
--   **Interactive AI Chat**: Directly engage with AI models for real-time problem-solving, code review, and general assistance within Emacs, with session management and auto-save capabilities.
+-   **Interactive AI Chat with Buffer Binding**: Directly engage with AI models for real-time problem-solving, code review, and general assistance. Create dedicated chat sessions bound to specific buffers with rich context integration and smart startup strategies.
 -   **Intelligent Code Completion**: Receive interactive, multi-candidate code suggestions and completions. It supports real-time previews, navigation through candidates, dynamic context adjustment, and integration of user instructions.
 -   **Code Modification & Refactoring**: Streamline development by leveraging AI to intelligently modify, improve, and refactor existing code.
 -   **Code Analysis & Documentation**: Generate comprehensive explanations, documentation, and insightful analysis for code blocks and functions, enhancing readability and maintainability.
 -   **Automated Bug Detection & Fixing**: Utilize AI to detect common issues and suggest fixes directly within your buffer.
 -   **Multi-Backend Support**: Seamlessly integrate with various AI providers, including OpenAI, Anthropic, Hugging Face, and Google Generative AI, for diverse model access.
 -   **Customizable Commands**: Tailor AI operations to your specific development needs by defining custom commands and integrating them seamlessly into your Emacs setup.
--   **Flexible Context Management**: Manage global, buffer-local, and temporary context pools, ensuring the AI receives precise and relevant information, including project-wide context via indexing.
+-   **Advanced Context Management**: Manage global, buffer-local, and temporary context pools, with extended context capabilities including project-wide indexing, memory files, and comprehensive context enrichment.
 -   **Real-time Previews & Progress Indicators**: Get instant visual feedback for completions and track the progress of ongoing AI requests.
 -   **Structured Request Auditing**: Detailed logging of AI requests, contexts, and responses for debugging, performance analysis, and security auditing.
 
@@ -237,6 +238,50 @@ The `ai-chat` package provides a full-featured interactive chat interface with A
 | `C-c C-a` | `ai-chat-toggle-auto-save` | Toggle automatic saving of chat sessions. |
 | `C-c C-c` | `ai-chat-interrupt` | Interrupt the current AI request. |
 
+### Buffer-Bound Chat Sessions
+
+AI Mode supports advanced buffer-bound chat sessions that create dedicated chat buffers tied to specific source files. This feature enables context-aware conversations with rich startup context and seamless integration between your code and AI discussions.
+
+**Key Features:**
+
+- **Per-Buffer Chat Sessions**: Each buffer can have one or more dedicated chat sessions
+- **Multiple Session Support**: Create multiple parallel chat sessions for a single source buffer
+- **Rich Startup Context**: Configurable context strategies including buffer content, regions, extended context, and user prompts
+- **Context Enrichment**: Send buffer content or selections to bound chats as additional context
+- **Persistent Sessions**: Sessions are tracked and can be resumed later
+
+**Buffer-Bound Chat Commands:**
+
+| Command | Keybinding | Description |
+|---|---|---|
+| `ai-chat-for-buffer` | `C-c i c b` | Open or create a chat bound to the current buffer. With prefix argument, always create new session. |
+| `ai-chat-send-selection-to-chat` | `C-c i c s` | Send the active region (or prompt for entire buffer) to the bound chat as context. |
+| `ai-chat-send-file-to-chat` | `C-c i c f` | Send the entire current buffer to the bound chat as context. |
+| `ai-chat-choose-session` | `C-c i c o` | Choose and open one of the existing chat sessions bound to the current buffer. |
+
+**Startup Context Strategies:**
+
+The `ai-chat-startup-context-strategy` variable controls what context is automatically added when creating new buffer-bound chat sessions:
+
+- `none` - No automatic context
+- `ask` - Prompt user to choose strategy (default)
+- `buffer` - Add entire buffer content
+- `region` - Add selected region (fallback to buffer if no selection)
+- `user-prompt` - Add user-provided instructions
+- `buffer+prompt` - Combine buffer content with user prompt
+- `extended` - Add comprehensive context (context pool, memory, prompts, project context)
+- `extended+buffer` - Extended context plus buffer content
+- `extended+region` - Extended context plus region
+- `extended+prompt` - Extended context plus user prompt
+- `full-context` - All available context (buffer + extended + user prompt)
+
+**Session Management:**
+
+Buffer-bound sessions are automatically tracked and can be:
+- Reused across Emacs sessions
+- Managed independently per source buffer
+- Configured for different default behaviors (create new, reuse existing, or ask user)
+
 ### Code Manipulation
 
 These commands apply AI operations to selected regions or the entire buffer, modifying, improving, or generating code. When invoked, you might be prompted to select a specific *command* (e.g., "modify", "generate code", "fix", "improve", "optimize", "doc", "explain", "simplify", "spellcheck", "elaborate") from `ai-command-management-commands-config-map`.
@@ -257,6 +302,7 @@ These commands apply AI operations to selected regions or the entire buffer, mod
 | `ai-perform-coordinator` | Decides whether to start a new "replace" operation based on a chosen command type or continue an existing one (e.g., for iterative modification or code generation in place). |
 | `ai-show` | Execute the chosen AI operation and display the AI's response in a special read-only buffer (e.g., `*AI response*`). Filters for command types configured for `show` result action. |
 | `ai-execute` | Execute the chosen AI operation and display the AI's response in a buffer, then ask for user permission to evaluate the generated Emacs Lisp code. Filters for command types configured for `eval` result action. |
+| `ai-core-open-extended-chat` | Open chat for current buffer with comprehensive extended context including project files, memory, prompts, and context pool items. |
 
 ### System & Session Context Management
 
@@ -483,6 +529,13 @@ AI Mode provides several important customizable variables to tailor its behavior
 | `ai-chat-progress-indicator-style` | Style of progress indicator to use for AI chat requests (`spinner`, `dots`, `message`). | `spinner` |
 | `ai-chat-change-backend-prompt` | Prompt for selecting the query backend in AI chat. | `"Select query backend: "` |
 | `ai-chat-language-mapping` | Maps external language names to Emacs mode names for syntax highlighting in chat code blocks. | `(("elisp" . "emacs-lisp") ...)` |
+| **Buffer-Bound Chat Settings** | | |
+| `ai-chat-per-buffer-enabled` | Enable buffer-bound chat sessions. When disabled, use a single global chat buffer. | `t` |
+| `ai-chat-allow-multiple-sessions-per-buffer` | Allow multiple parallel chat sessions for a single source buffer. | `t` |
+| `ai-chat-bound-buffer-name-format` | Format string for buffer-bound chat buffer name. `%s` is replaced with display name. | `"*ai-chat:%s*"` |
+| `ai-chat-startup-context-strategy` | Strategy for startup context when creating buffer-bound chat sessions. | `ask` |
+| `ai-chat-send-enrichment-as` | Type of struct to use when enriching bound chat from source buffer. | `additional-context` |
+| `ai-chat-default-behavior-for-buffer` | Default behavior when opening chat for buffer (create-new, reuse-existing, ask-user). | `create-new` |
 | **Logging & Debugging Settings** | | |
 | `ai-telemetry-enabled` | Enable telemetry collection for AI mode. | `t` |
 | `ai-telemetry-write-log-buffer` | If non-nil, enables logging of AI requests and responses to `*AI-request-log*` buffer. | `nil` |
@@ -507,19 +560,19 @@ The `ai-mode` package is composed of several `.el` files, each responsible for a
 |---|---|
 | `Eask` | Manages package metadata, dependencies, and source files for `ai-mode` building and installation. |
 | `ai.el` | The core package file. It defines the main `ai` group and provides the foundational namespace for the entire AI mode system. |
-| `ai-chat.el` | Implements the interactive AI chat interface using `comint-mode`, handling dialogues, session history, and AI response display. |
+| `ai-chat.el` | Implements the interactive AI chat interface with buffer-bound sessions, startup context strategies, session management, and rich context integration. |
 | `ai-command-management.el` | Defines, parses, loads, and dispatches AI commands. Manages instruction file loading, caching, and modifier parsing. |
 | `ai-common.el` | Contains core AI primitives and general data structures like `typed-struct`. Provides basic operations on these structures, such as creation and update. |
 | `ai-completions.el` | Implements AI-powered code completion, managing suggestion requests, session management, and applying completions. |
-| `ai-context-management.el` | Centralizes the collection, structuring, and storage of context for AI requests, including buffer-specific context, region snippets, and assembly of full execution contexts. |
-| `ai-core.el` | Serves as the central orchestrator and primary location for fundamental AI-mode logic, coordinating calls between different modules. |
+| `ai-context-management.el` | Centralizes the collection, structuring, and storage of context for AI requests, including extended context capabilities and comprehensive context assembly functions. |
+| `ai-core.el` | Serves as the central orchestrator and primary location for fundamental AI-mode logic, coordinating calls between different modules. Includes extended chat functionality. |
 | `ai-debug.el` | Provides visual tools for debugging and introspecting AI states, including prompt composition, execution context, and model configuration. |
 | `ai-execution.el` | Manages AI request execution and asynchronous interaction with AI backends, handling success and failure callbacks. |
 | `ai-logging.el` | Provides logging utilities for AI mode, including message logging, multi-level verbose control, and structured request/response logging. |
 | `ai-mode-adapter-api.el` | Provides a standardized, type-safe API for `ai-mode` to interact with external AI backends, handling message preparation and content extraction. |
 | `ai-mode-indexing.el` | Manages the project indexing system for AI, encompassing file summary generation, persistence, and versioning. |
 | `ai-mode-line.el` | Provides mode line utilities and indicators for AI mode, including progress tracking, status displays, and integration with doom-modeline. |
-| `ai-mode.el` | Defines the `ai-mode` minor mode, manages the overall UI interaction flow, feature integration, and top-level settings. |
+| `ai-mode.el` | Defines the `ai-mode` minor mode with enhanced keybindings for buffer-bound chat, manages the overall UI interaction flow, feature integration, and top-level settings. |
 | `ai-model-management.el` | Responsible for configuring, selecting, and managing available AI models and their providers. |
 | `ai-network.el` | Manages network communication and connectivity for AI mode, including HTTP request handling, connection pooling, retry logic, timeout management, and network-related error handling for AI service interactions. |
 | `ai-progress.el` | Manages progress tracking business logic for long-running AI operations, including progress state management, cancellation support, and data structures for tracking AI request progress. |
