@@ -178,6 +178,7 @@
 (require 'ai-mode-indexing)
 (require 'ai-response-processors)
 (require 'ai-core)
+(require 'ai-prompt-management-debug)
 
 (defvar url-http-end-of-headers)
 
