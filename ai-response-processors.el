@@ -60,10 +60,10 @@
 
 If TRIM is non-nil, trims the content passed to CALLBACK."
   (let ((buffer (current-buffer)))
-    (lambda (messages &optional usage-stats) ;; Added &optional usage-stats
+    (lambda (context messages &optional usage-stats)
       (let ((content (ai-response-processors--extract-content-from-messages messages)))
         (with-current-buffer buffer
-          (funcall callback (if trim (string-trim-left content) content)))))))
+          (funcall callback context (if trim (string-trim-left content) content)))))))
 
 (cl-defun ai-response-processors--replace-region-or-insert-in-current-buffer (&optional (trim t) insert-mode)
   "Create a function to replace the active region or insert into the current buffer.
@@ -81,7 +81,7 @@ If TRIM is non-nil, trims the content passed to the function."
          (end (cond (region-active (region-end))
                    (insert-mode nil)
                    (t (point-max)))))
-    (lambda (messages &optional usage-stats) ;; Added &optional usage-stats
+    (lambda (context messages &optional usage-stats)
       (let* ((raw-content (ai-response-processors--extract-content-from-messages messages))
             (content (if trim (string-trim-left raw-content) raw-content)))
         (when (string-empty-p content)
@@ -100,7 +100,7 @@ If TRIM is non-nil, trims the content passed to the function."
 
 (defun ai-response-processors--create-insert-at-point-callback (target-buffer cursor-position)
   "Create a callback that inserts AI response at CURSOR-POSITION in TARGET-BUFFER."
-  (lambda (messages &optional usage-stats) ;; Added &optional usage-stats
+  (lambda (context messages &optional usage-stats)
     (when (buffer-live-p target-buffer)
       (let ((content (ai-response-processors--extract-content-from-messages messages)))
         (when (and content (not (string-empty-p content)))
@@ -115,10 +115,10 @@ If TRIM is non-nil, trims the content passed to the function."
 TAG is a marker for placing content passed to the CALLBACK function.
 If TRIM is non-nil, trims content passed to the CALLBACK."
   (let ((buffer (current-buffer)))
-    (lambda (messages &optional usage-stats) ;; Added &optional usage-stats
+    (lambda (context messages &optional usage-stats)
       (let ((content (ai-response-processors--extract-content-from-messages messages)))
         (with-current-buffer buffer
-          (funcall callback tag (if trim (string-trim-left content) content)))))))
+          (funcall callback context tag (if trim (string-trim-left content) content)))))))
 
 (defun ai-response-processors--show-explain-help-buffer (text)
   "Display TEXT in the explanation buffer."
@@ -128,7 +128,7 @@ If TRIM is non-nil, trims content passed to the CALLBACK."
       (princ text)
       (switch-to-buffer (ai-response-processors--get-explaination-help-buffer)))))
 
-(defun ai-response-processors--show-response-buffer (messages &optional usage-stats) ;; Added &optional usage-stats
+(defun ai-response-processors--show-response-buffer (context messages &optional usage-stats)
   "Display MESSAGES content in the response buffer."
   (let ((content (ai-response-processors--extract-content-from-messages messages))
         (buffer (ai-response-processors--get-response-buffer)))
@@ -140,7 +140,7 @@ If TRIM is non-nil, trims content passed to the CALLBACK."
           (when (fboundp 'markdown-mode)
             (markdown-mode)))))))
 
-(defun ai-response-processors--show-and-eval-response (messages &optional usage-stats) ;; Added &optional usage-stats
+(defun ai-response-processors--show-and-eval-response (context messages &optional usage-stats)
   "Show MESSAGES in a buffer and ask user for permission to evaluate the Emacs Lisp code."
   (let* ((content (ai-response-processors--extract-content-from-messages messages))
          (buffer-name "*AI Generated Code*")
@@ -216,7 +216,7 @@ If TRIM is non-nil, trims content passed to the CALLBACK."
 
 (defun ai-response-processors--create-patch-apply-callback (original-buffer)
   "Create a callback that applies patch content to ORIGINAL-BUFFER."
-  (lambda (messages &optional usage-stats) ;; Added &optional usage-stats
+  (lambda (context messages &optional usage-stats)
     (let ((response-content (ai-response-processors--extract-content-from-messages messages)))
       (if response-content
           (with-current-buffer original-buffer
@@ -224,20 +224,21 @@ If TRIM is non-nil, trims content passed to the CALLBACK."
                 (ai-response-processors--apply-patch-to-buffer response-content)
               (error
                (message "Failed to apply patch: %s" (error-message-string err))
-               (ai-response-processors--show-response-buffer messages usage-stats)))) ;; Pass usage-stats here too
+               (ai-response-processors--show-response-buffer context messages usage-stats))))
         (message "No patch content received from AI")))))
 
 
 
 (defun ai-response-processors--create-smart-replace-callback (target-buffer)
   "Create a callback for smart replacement based on `ai-execution--replace-action-use-patch`.
-Returns a callback that takes MESSAGES and USAGE-STATS and applies the content
+Returns a callback that takes CONTEXT, MESSAGES and USAGE-STATS and applies the content
 to TARGET-BUFFER, either by patching or by direct replacement/insertion."
   (if (bound-and-true-p ai-execution--replace-action-use-patch)
       (ai-response-processors--create-patch-apply-callback target-buffer)
-    (lambda (messages &optional usage-stats)
+    (lambda (context messages &optional usage-stats)
       (with-current-buffer target-buffer
         (funcall (ai-response-processors--replace-region-or-insert-in-current-buffer)
+                 context
                  messages
                  usage-stats)))))
 

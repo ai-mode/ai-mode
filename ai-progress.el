@@ -237,35 +237,6 @@ TARGET-BUFFER is the buffer where progress should be stopped."
 
           (force-mode-line-update))))))
 
-(defun ai-progress-wrap-callback (callback &optional target-buffer)
-  "Wrap CALLBACK to stop single request progress in TARGET-BUFFER when called.
-Returns the original callback if it's a function, or a simple progress stopper if callback is nil."
-  (let ((buffer (or target-buffer (current-buffer))))
-    (if callback
-        (lambda (&rest args)
-          (when (and (ai-progress-is-single-request-p)
-                     (eq buffer ai-progress--single-target-buffer))
-            (ai-progress-stop-single-request buffer))
-          (apply callback args))
-      (lambda (&rest args)
-        (when (and (ai-progress-is-single-request-p)
-                   (eq buffer ai-progress--single-target-buffer))
-          (ai-progress-stop-single-request buffer))))))
-
-(defun ai-progress-wrap-batch-callback (callback &optional target-buffer)
-  "Wrap CALLBACK to stop batch operation progress in TARGET-BUFFER when called.
-Returns the original callback if it's a function, or a simple progress stopper if callback is nil."
-  (let ((buffer (or target-buffer (current-buffer))))
-    (if callback
-        (lambda (&rest args)
-          (when (and (ai-progress-is-batch-operation-p)
-                     (eq buffer ai-progress--batch-target-buffer))
-            (ai-progress-stop-batch-operation buffer))
-          (apply callback args))
-      (lambda (&rest args)
-        (when (and (ai-progress-is-batch-operation-p)
-                   (eq buffer ai-progress--batch-target-buffer))
-          (ai-progress-stop-batch-operation buffer))))))
 
 (defun ai-progress-get-display-info ()
   "Get current progress information for display purposes.

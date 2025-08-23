@@ -883,13 +883,15 @@ Returns a flattened list of all context elements provided by registered provider
                                   (setq ai-chat--progress-counter (1+ ai-chat--progress-counter))
                                   (ai-chat-mode-update-mode-line-info)))))))))
 
-(defun ai-chat--progress-wrap-callback (original-callback &optional buffer)
-  "Wrap ORIGINAL-CALLBACK to stop progress indicator when called in specified BUFFER."
+(defun ai-chat--progress-wrap-callback (original-callback context &optional buffer)
+  "Wrap ORIGINAL-CALLBACK to stop progress indicator when called in specified BUFFER.
+CONTEXT is the original execution context passed as first parameter."
   (let ((target-buffer (or buffer (current-buffer))))
     (lambda (&rest args)
       (ai-chat--progress-stop target-buffer)
       (when original-callback
-        (apply original-callback args)))))
+        ;; Pass context as first parameter, then remaining arguments
+        (apply original-callback context args)))))
 
 ;;; Font lock functions
 
@@ -1260,8 +1262,9 @@ MESSAGE-TYPE specifies the type of message and is optional."
 
 ;;; Request handling
 
-(defun ai-chat--request-fail-callback (request-data error-message)
-  "Handle request failures and display ERROR-MESSAGE."
+(defun ai-chat--request-fail-callback (context error-message)
+  "Handle request failures and display ERROR-MESSAGE.
+CONTEXT is the original execution context passed as first parameter."
   (let ((content (ai-chat--get-text-content-from-struct error-message))
         (model (ai-chat--get-current-model))
         (chat-buffer (current-buffer)))
@@ -1273,8 +1276,9 @@ MESSAGE-TYPE specifies the type of message and is optional."
     (setq ai-chat--busy nil)))
 
 
-(defun ai-chat--request-success-callback (messages &optional usage-stats)
-  "Handle successful requests by processing MESSAGES with optional USAGE-STATS."
+(defun ai-chat--request-success-callback (context messages &optional usage-stats)
+  "Handle successful requests by processing MESSAGES with optional USAGE-STATS.
+CONTEXT is the original execution context passed as first parameter."
   (condition-case-unless-debug processing-error
       (progn
         (setq ai-chat--busy nil)
@@ -1423,18 +1427,20 @@ TARGET-BUFFER specifies which chat buffer to write to."
 
                      (wrapped-success-callback
                       (ai-chat--progress-wrap-callback
-                       (lambda (messages &optional usage-stats)
+                       (lambda (context messages &optional usage-stats)
                          (with-current-buffer chat-buffer ; Use correct buffer
                            (ai-request-audit-complete-request audit-request-id messages usage-stats)
-                           (ai-chat--request-success-callback messages usage-stats)))
+                           (ai-chat--request-success-callback context messages usage-stats)))
+                       context
                        chat-buffer))
 
                      (wrapped-fail-callback
                       (ai-chat--progress-wrap-callback
-                       (lambda (request-data error-message)
+                       (lambda (context error-message)
                          (with-current-buffer chat-buffer ; Use correct buffer
                            (ai-request-audit-fail-request audit-request-id error-message)
-                           (ai-chat--request-fail-callback request-data error-message)))
+                           (ai-chat--request-fail-callback context error-message)))
+                       context
                        chat-buffer)))
 
                 ;; Log the interaction
