@@ -437,27 +437,30 @@ AI Mode provides a suite of visual debugging and introspection tools to help you
 
 ### Debugging Commands
 
-These commands, primarily accessed via the `C-c i d` (for `ai-debug-visual`) and `C-c i D` (for `ai-debug-show-sources`) prefixes, open dedicated buffers that use `magit-section-mode` for an interactive, collapsible display of information.
+These commands, primarily accessed via the `C-c i d` prefix, open dedicated buffers that use `magit-section-mode` for an interactive, collapsible display of information.
 
 | Command | Keybinding (default) | Description |
 |---|---|---|
 | `ai-debug-visual` | `C-c i d` | Displays a comprehensive debug view of the *current AI execution context*, including model configuration, buffer context, completion parameters, and the messages being sent to the AI. This is the main entry point for debugging active AI operations. |
-| `ai-debug-show-sources` | `C-c i D` | Displays all *available AI context sources*, such as global system prompts, global memory, buffer-bound prompts, and the temporary context pool. Useful for understanding how different parts of the context are assembled. |
-| `ai-debug-show-file-commands` | `C-c i f` | Displays all *loaded file-based commands* from default, global, and local sources, including their modifiers and content. |
-| `ai-debug-show-system-prompts` | `C-c i s` | Displays all *loaded system prompts* from default, global, and local sources, with their content. |
+| `ai-debug-show-completions` | `C-c i C-c` | Displays current AI completions debug information, including session state, candidates, context settings, command structure, and buffer state for debugging completion behavior. |
 | `ai-debug-show-raw-structures-interactive` | `C-c i R` | Displays all *typed structures in raw sequential format* as they are prepared for the AI model. Useful for understanding the exact order and structure of context elements. |
 | `ai-debug-completion-limited-context` | `C-c i C-d l` | Shows the context specifically for code completion with *limited preceding and following context sizes*. Useful for debugging how completion handles truncated views of your code. |
 | `ai-debug-completion-full-context` | `C-c i C-d f` | Shows the context specifically for code completion using the *entire file content as context*. Useful for debugging full-buffer completion strategies. |
+| `ai-prompt-management-debug-show-cache-status` | `M-x ai-prompt-management-debug-show-cache-status` | Shows the AI prompt management cache debug information, including file-based commands, system prompts, cache statistics, and project information. |
 
 ### Debug Buffer Interaction
 
-Once a debug buffer (e.g., `*AI Debug Context*`, `*AI Context Sources*`) is open, you can interact with it using `magit-section-mode` keybindings:
+Once a debug buffer (e.g., `*AI Debug Context*`, `*AI Completions Debug*`) is open, you can interact with it using `magit-section-mode` keybindings:
 
 | Binding | Command | Description |
 |---|---|---|
 | `TAB` | `magit-section-toggle` | Expand or collapse the section at point. |
 | `C-c t` | `ai-debug-toggle-truncation` | Toggle content truncation within the debug buffer. When enabled, long strings and lists are shortened to improve performance and readability; disable it to see full content. |
 | `C-r` | `ai-debug-refresh-buffer` | Refresh the content of the current debug buffer with the latest AI context information. |
+| `q` | `quit-window` | (In prompt cache debug buffer) Quit the debug window. |
+| `g` | `ai-prompt-management-debug-refresh` | (In prompt cache debug buffer) Refresh the debug buffer. |
+| `u` | `ai-prompt-management-debug-force-update-cache` | (In prompt cache debug buffer) Force update all caches. |
+| `c` | `ai-prompt-management-debug-clear-cache` | (In prompt cache debug buffer) Clear selected cache. |
 
 ## Understanding AI Context
 
@@ -566,7 +569,7 @@ The `ai-mode` package is composed of several `.el` files, each responsible for a
 | `ai-completions.el` | Implements AI-powered code completion, managing suggestion requests, session management, and applying completions. |
 | `ai-context-management.el` | Centralizes the collection, structuring, and storage of context for AI requests, including extended context capabilities and comprehensive context assembly functions. |
 | `ai-core.el` | Serves as the central orchestrator and primary location for fundamental AI-mode logic, coordinating calls between different modules. Includes extended chat functionality. |
-| `ai-debug.el` | Provides visual tools for debugging and introspecting AI states, including prompt composition, execution context, and model configuration. |
+| `ai-debug.el` | Provides visual tools for debugging and introspecting AI states, including prompt composition, execution context, model configuration, and completion session debugging. |
 | `ai-execution.el` | Manages AI request execution and asynchronous interaction with AI backends, handling success and failure callbacks. |
 | `ai-logging.el` | Provides logging utilities for AI mode, including message logging, multi-level verbose control, and structured request/response logging. |
 | `ai-mode-adapter-api.el` | Provides a standardized, type-safe API for `ai-mode` to interact with external AI backends, handling message preparation and content extraction. |
@@ -578,6 +581,7 @@ The `ai-mode` package is composed of several `.el` files, each responsible for a
 | `ai-progress.el` | Manages progress tracking business logic for long-running AI operations, including progress state management, cancellation support, and data structures for tracking AI request progress. |
 | `ai-project.el` | Contains project management utilities for AI mode, including project root detection, file filtering by ignore patterns, and creating project-related data structures. |
 | `ai-prompt-management.el` | Manages the creation, assembly, rendering, and caching of prompts and instructions for AI models. |
+| `ai-prompt-management-debug.el` | Provides debug utilities for the AI prompt management system, including cache inspection, statistics, and interactive debugging tools. |
 | `ai-request-audit.el` | Provides a structured request auditing system for AI mode, including structured storage of request/response data, unique request identification and tracking, and project-based audit organization. |
 | `ai-response-processors.el` | Contains functions for processing and handling responses from AI models, including text extraction, formatting, display, and callback creation for various response insertion and replacement strategies. |
 | `ai-structs.el` | Contains formal definitions of all common data structures (e.g., `typed-struct` and its derived types) used throughout AI-mode. This file is primarily for data structure definitions. |

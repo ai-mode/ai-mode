@@ -26,18 +26,17 @@
 ;;
 ;; AI Debug provides comprehensive debugging and introspection capabilities
 ;; for AI Mode operations. This package offers visual debugging tools that
-;; help users understand and troubleshoot AI context, prompts, and execution
-;; flow within Emacs.
+;; help users understand and troubleshoot AI context, prompts, execution
+;; flow, and completion processes within Emacs.
 ;;
 ;; Key Features:
 ;; - Visual context inspection with magit-style expandable sections
 ;; - Real-time AI context and prompt debugging
 ;; - Buffer and selection context analysis
+;; - AI completion session state debugging
 ;; - Model configuration and parameter display
 ;; - Context source tracking and visualization
 ;; - Project context with expandable file sections
-;; - File-based command inspection and debugging
-;; - System prompts inspection and debugging
 ;; - Raw typed structures view in sequential order
 ;; - Performance-optimized content truncation
 ;; - Interactive debugging commands with keyboard shortcuts
@@ -49,18 +48,16 @@
 ;; - Message structure and prompt composition
 ;; - Context sources including global prompts, memory, and buffer-bound data
 ;; - Project files with individual file sections
-;; - File-based commands with source location tracking
-;; - System prompts with source location tracking
 ;; - Raw typed structures in their original sequence
 ;; - Selection and cursor positioning information
+;; - AI completion session state and candidates
+;; - Completion context and strategy information
 ;;
 ;; Usage:
 ;; Enable AI mode and use the following commands:
 ;; - `ai-debug-visual': Main debug interface showing current context
-;; - `ai-debug-show-sources': Display all available context sources
-;; - `ai-debug-show-file-commands': Display all loaded file-based commands
-;; - `ai-debug-show-system-prompts': Display all loaded system prompts
 ;; - `ai-debug-show-raw-structures': Display typed structures in original sequence
+;; - `ai-debug-show-completions': Display AI completion session state
 ;; - `ai-debug-completion-limited-context': Debug completion with limited context
 ;; - `ai-debug-completion-full-context': Debug completion with full buffer context
 ;;
@@ -84,6 +81,7 @@
 (require 'ai-prompt-management)
 (require 'ai-model-management)
 (require 'ai-mode-adapter-api)
+(require 'ai-structs)
 (require 'ai-completions)
 
 (defgroup ai-debug nil
@@ -95,17 +93,11 @@
 (defvar ai-debug-buffer-name "*AI Debug Context*"
   "Buffer name for displaying AI debug context.")
 
-(defvar ai-debug-sources-buffer-name "*AI Context Sources*"
-  "Buffer name for displaying AI context sources.")
-
-(defvar ai-debug-file-commands-buffer-name "*AI File Commands*"
-  "Buffer name for displaying AI file-based commands.")
-
-(defvar ai-debug-system-prompts-buffer-name "*AI System Prompts*"
-  "Buffer name for displaying AI system prompts.")
-
 (defvar ai-debug-raw-structures-buffer-name "*AI Raw Structures*"
   "Buffer name for displaying AI typed structures in raw format.")
+
+(defvar ai-debug-completions-buffer-name "*AI Completions Debug*"
+  "Buffer name for displaying AI completions debug information.")
 
 (defcustom ai-debug-truncate-content t
   "Whether to truncate long content in debug buffers for performance.
@@ -164,6 +156,16 @@ When nil, full content is shown which may cause performance issues."
   "Face for command location indicators."
   :group 'ai-debug)
 
+(defface ai-debug-completion-active
+  '((t :inherit success :weight bold))
+  "Face for active completion session indicators."
+  :group 'ai-debug)
+
+(defface ai-debug-completion-inactive
+  '((t :inherit shadow))
+  "Face for inactive completion session indicators."
+  :group 'ai-debug)
+
 ;; Buffer-local variables for refresh functionality
 (defvar-local ai-debug--refresh-function nil
   "Function to call when refreshing the current debug buffer.")
@@ -186,51 +188,6 @@ Initializes the buffer with magit-section-mode and appropriate keybindings."
       (local-set-key (kbd "C-r") 'ai-debug-refresh-buffer))
     buffer))
 
-(defun ai-debug--create-sources-buffer ()
-  "Create and return the AI context sources buffer.
-Initializes the buffer with magit-section-mode and appropriate keybindings."
-  (let ((buffer (get-buffer-create ai-debug-sources-buffer-name)))
-    (with-current-buffer buffer
-      (setq buffer-read-only nil)
-      (erase-buffer)
-      (magit-section-mode)
-      (setq header-line-format (format "AI Context Sources - TAB to expand/collapse, truncation: %s (C-c t to toggle, C-r to refresh)"
-                                       (if ai-debug-truncate-content "ON" "OFF")))
-      ;; Add local keymap for debug buffer operations
-      (local-set-key (kbd "C-c t") 'ai-debug-toggle-truncation)
-      (local-set-key (kbd "C-r") 'ai-debug-refresh-buffer))
-    buffer))
-
-(defun ai-debug--create-file-commands-buffer ()
-  "Create and return the AI file commands buffer.
-Initializes the buffer with magit-section-mode and appropriate keybindings."
-  (let ((buffer (get-buffer-create ai-debug-file-commands-buffer-name)))
-    (with-current-buffer buffer
-      (setq buffer-read-only nil)
-      (erase-buffer)
-      (magit-section-mode)
-      (setq header-line-format (format "AI File Commands - TAB to expand/collapse, truncation: %s (C-c t to toggle, C-r to refresh)"
-                                       (if ai-debug-truncate-content "ON" "OFF")))
-      ;; Add local keymap for debug buffer operations
-      (local-set-key (kbd "C-c t") 'ai-debug-toggle-truncation)
-      (local-set-key (kbd "C-r") 'ai-debug-refresh-buffer))
-    buffer))
-
-(defun ai-debug--create-system-prompts-buffer ()
-  "Create and return the AI system prompts buffer.
-Initializes the buffer with magit-section-mode and appropriate keybindings."
-  (let ((buffer (get-buffer-create ai-debug-system-prompts-buffer-name)))
-    (with-current-buffer buffer
-      (setq buffer-read-only nil)
-      (erase-buffer)
-      (magit-section-mode)
-      (setq header-line-format (format "AI System Prompts - TAB to expand/collapse, truncation: %s (C-c t to toggle, C-r to refresh)"
-                                       (if ai-debug-truncate-content "ON" "OFF")))
-      ;; Add local keymap for debug buffer operations
-      (local-set-key (kbd "C-c t") 'ai-debug-toggle-truncation)
-      (local-set-key (kbd "C-r") 'ai-debug-refresh-buffer))
-    buffer))
-
 (defun ai-debug--create-raw-structures-buffer ()
   "Create and return the AI raw structures buffer.
 Initializes the buffer with magit-section-mode and appropriate keybindings."
@@ -240,6 +197,21 @@ Initializes the buffer with magit-section-mode and appropriate keybindings."
       (erase-buffer)
       (magit-section-mode)
       (setq header-line-format (format "AI Raw Structures - TAB to expand/collapse, truncation: %s (C-c t to toggle, C-r to refresh)"
+                                       (if ai-debug-truncate-content "ON" "OFF")))
+      ;; Add local keymap for debug buffer operations
+      (local-set-key (kbd "C-c t") 'ai-debug-toggle-truncation)
+      (local-set-key (kbd "C-r") 'ai-debug-refresh-buffer))
+    buffer))
+
+(defun ai-debug--create-completions-buffer ()
+  "Create and return the AI completions debug buffer.
+Initializes the buffer with magit-section-mode and appropriate keybindings."
+  (let ((buffer (get-buffer-create ai-debug-completions-buffer-name)))
+    (with-current-buffer buffer
+      (setq buffer-read-only nil)
+      (erase-buffer)
+      (magit-section-mode)
+      (setq header-line-format (format "AI Completions Debug - TAB to expand/collapse, truncation: %s (C-c t to toggle, C-r to refresh)"
                                        (if ai-debug-truncate-content "ON" "OFF")))
       ;; Add local keymap for debug buffer operations
       (local-set-key (kbd "C-c t") 'ai-debug-toggle-truncation)
@@ -269,24 +241,6 @@ Calls the appropriate refresh function based on the current buffer type."
       (ai-debug-show-context))
     (message "AI debug context refreshed"))
 
-   ;; Sources debug buffer
-   ((string= (buffer-name) ai-debug-sources-buffer-name)
-    (message "Refreshing AI context sources...")
-    (ai-debug-show-sources)
-    (message "AI context sources refreshed"))
-
-   ;; File commands debug buffer
-   ((string= (buffer-name) ai-debug-file-commands-buffer-name)
-    (message "Refreshing AI file commands...")
-    (ai-debug-show-file-commands)
-    (message "AI file commands refreshed"))
-
-   ;; System prompts debug buffer
-   ((string= (buffer-name) ai-debug-system-prompts-buffer-name)
-    (message "Refreshing AI system prompts...")
-    (ai-debug-show-system-prompts)
-    (message "AI system prompts refreshed"))
-
    ;; Raw structures debug buffer
    ((string= (buffer-name) ai-debug-raw-structures-buffer-name)
     (message "Refreshing AI raw structures...")
@@ -294,6 +248,12 @@ Calls the appropriate refresh function based on the current buffer type."
         (apply ai-debug--refresh-function ai-debug--refresh-args)
       (ai-debug-show-raw-structures))
     (message "AI raw structures refreshed"))
+
+   ;; Completions debug buffer
+   ((string= (buffer-name) ai-debug-completions-buffer-name)
+    (message "Refreshing AI completions debug...")
+    (ai-debug-show-completions)
+    (message "AI completions debug refreshed"))
 
    ;; Unknown buffer
    (t
@@ -768,64 +728,6 @@ with filename in the header and absolute path in metadata."
     (error
      (insert (propertize (format "[Error displaying project file: %s]\n\n" (error-message-string err)) 'face 'ai-debug-empty-source)))))
 
-(defun ai-debug--insert-source-section (source-name source-data description)
-  "Insert a section for SOURCE-NAME with SOURCE-DATA and DESCRIPTION.
-Creates a collapsible section showing context source information
-with comprehensive statistics and safe content handling."
-  (condition-case-unless-debug err
-    (let* ((is-empty (ai-debug--is-empty-source source-data))
-           (total-count (condition-case-unless-debug nil
-                          (cond
-                           ((null source-data) 0)
-                           ((and (listp source-data) (not (null source-data)) (keywordp (car source-data))) 1)
-                           ((listp source-data) (length source-data))
-                           (t 1))
-                          (error 0)))
-           (non-empty-count (ai-debug--count-non-empty-items source-data))
-           (count-info (if (> total-count 0)
-                           (format " [%d/%d items]" non-empty-count total-count)
-                         " [empty]")))
-
-      (magit-insert-section (ai-source-section source-name is-empty t) ; Pass 't' as hidden flag
-        (magit-insert-heading
-          (propertize (format "%s%s" source-name count-info) 'face 'ai-debug-context-header)
-          (when description
-            (concat " " (propertize (format "- %s" description) 'face 'ai-debug-context-metadata))))
-
-        (cond
-         ;; Empty or nil data
-         (is-empty
-          (insert (propertize "  (empty)\n\n" 'face 'ai-debug-empty-source)))
-
-         ;; Special handling for Project Context (which contains nested file lists/structs)
-         ((string-match-p "Project Context" source-name)
-          (ai-debug--insert-project-context-category (list source-data))) ; Pass source-data as a list to match category fn signature
-
-         ;; If source-data is a list of typed structs (e.g., summaries, memory items, buffer-bound prompts)
-         ((and (listp source-data) (not (null source-data))
-               (listp (car source-data)) (not (null (car source-data))) (keywordp (car (car source-data))))
-          (let ((item-count (min (length source-data) (if ai-debug-truncate-content 10 100))))
-            (when ai-debug-truncate-content
-              (insert (propertize (format "  [showing %d of %d items]\n" item-count (length source-data)) 'face 'ai-debug-context-metadata)))
-            (dotimes (i item-count)
-              (let ((item (nth i source-data)))
-                (ai-debug--insert-typed-struct item 1 source-name))) ; Pass source-name for parent context
-            (when (and ai-debug-truncate-content (> (length source-data) item-count))
-              (insert (propertize (format "  [%d more items not shown%s]\n\n"
-                                         (- (length source-data) item-count)
-                                         (if ai-debug-truncate-content " - toggle truncation with C-c t" ""))
-                                 'face 'ai-debug-context-metadata)))))
-
-         ;; If source-data is a single typed struct (not a list of structs)
-         ((and (listp source-data) (not (null source-data)) (keywordp (car source-data)))
-          (ai-debug--insert-typed-struct source-data 1 source-name)) ; Pass source-name for parent context
-
-         ;; Other data types (e.g. simple strings)
-         (t
-          (insert (propertize (format "  %s\n" content) 'face 'default))))))
-    (error
-     (insert (propertize (format "[Error displaying source %s: %s]\n\n" source-name (error-message-string err)) 'face 'ai-debug-empty-source)))))
-
 (defun ai-debug--insert-ignore-patterns-section ()
   "Insert file ignore patterns section with subsections for each source.
 Shows patterns from global hardcoded, global files, project .gitignore, and project .ai-ignore,
@@ -1260,274 +1162,230 @@ Creates organized categories for better navigation and understanding."
     (unless (eq (oref section type) 'ai-debug-root)
       (magit-section-hide section))))
 
-(defun ai-debug--collect-file-commands ()
-  "Collect all loaded file-based commands from all instruction sources.
-Returns a plist with command data grouped by location."
-  (let ((default-commands '())
-        (global-commands '())
-        (local-commands '()))
+;; ============================================================================
+;; AI Completions Debug Functions
+;; ============================================================================
 
-    ;; Collect from default instructions (if available)
-    (when (and (boundp 'ai-prompt-management--default-instructions-cache)
-               (hash-table-p ai-prompt-management--default-instructions-cache))
-      (maphash (lambda (command-name content)
-                 (push `(:name ,command-name
-                         :content ,content
-                         :location "Default (Package)"
-                         :directory ,(ai-prompt-management--get-default-instructions-directory))
-                       default-commands))
-               ai-prompt-management--default-instructions-cache))
+(defun ai-debug--collect-completions-state ()
+  "Collect current AI completions state from the current buffer.
+Returns a plist with completion session information."
+  (let ((active (when (boundp 'ai-completions--active)
+                  ai-completions--active))
+        (candidates (when (boundp 'ai-completions--candidates)
+                      ai-completions--candidates))
+        (current-candidate (when (boundp 'ai-completions--current-candidate)
+                             ai-completions--current-candidate))
+        (complete-at-point (when (boundp 'ai-completions--complete-at-point)
+                             ai-completions--complete-at-point))
+        (preview-at-point (when (boundp 'ai-completions--preview-at-point)
+                            ai-completions--preview-at-point))
+        (strategy (when (boundp 'ai-completions--strategy)
+                    ai-completions--strategy))
+        (current-command-struct (when (boundp 'ai-completions--current-command-struct)
+                                  ai-completions--current-command-struct))
+        (preceding-context-size (when (boundp 'ai-completions--current-precending-context-size)
+                                  ai-completions--current-precending-context-size))
+        (following-context-size (when (boundp 'ai-completions--current-forwarding-context-size)
+                                  ai-completions--current-forwarding-context-size))
+        (use-full-context (when (boundp 'ai-completions--use-full-context)
+                            ai-completions--use-full-context))
+        (buffer-clone (when (boundp 'ai-completions--current-buffer-clone)
+                        ai-completions--current-buffer-clone)))
 
-    ;; Collect from global instructions (if available)
-    (when (and (boundp 'ai-prompt-management--global-instructions-cache)
-               (hash-table-p ai-prompt-management--global-instructions-cache))
-      (maphash (lambda (command-name content)
-                 (push `(:name ,command-name
-                         :content ,content
-                         :location "Global (~/.ai)"
-                         :directory ,(ai-prompt-management--get-global-instructions-directory))
-                       global-commands))
-               ai-prompt-management--global-instructions-cache))
+    `(:active ,active
+      :candidates ,candidates
+      :current-candidate ,current-candidate
+      :complete-at-point ,complete-at-point
+      :preview-at-point ,preview-at-point
+      :strategy ,strategy
+      :current-command-struct ,current-command-struct
+      :preceding-context-size ,preceding-context-size
+      :following-context-size ,following-context-size
+      :use-full-context ,use-full-context
+      :buffer-clone ,buffer-clone)))
 
-    ;; Collect from local instructions (if available)
-    (when (and (boundp 'ai-prompt-management--local-instructions-cache)
-               (hash-table-p ai-prompt-management--local-instructions-cache))
-      (maphash (lambda (command-name content)
-                 (push `(:name ,command-name
-                         :content ,content
-                         :location "Local (Project)"
-                         :directory ,(ai-prompt-management--get-local-instructions-directory))
-                       local-commands))
-               ai-prompt-management--local-instructions-cache))
+(defun ai-debug--insert-completion-session-state (state)
+  "Insert completion session state information from STATE plist."
+  (magit-insert-section (ai-completion-session nil t)
+    (magit-insert-heading
+      (propertize (format "Completion Session State (%s)"
+                         (if (plist-get state :active) "ACTIVE" "INACTIVE"))
+                 'face (if (plist-get state :active)
+                           'ai-debug-completion-active
+                         'ai-debug-completion-inactive)))
 
-    `(:default-commands ,(reverse default-commands)
-      :global-commands ,(reverse global-commands)
-      :local-commands ,(reverse local-commands))))
+    ;; Session status
+    (let ((active (plist-get state :active))
+          (strategy (plist-get state :strategy))
+          (complete-at-point (plist-get state :complete-at-point))
+          (preview-at-point (plist-get state :preview-at-point))
+          (use-full-context (plist-get state :use-full-context)))
 
-(defun ai-debug--collect-system-prompts ()
-  "Collect all loaded system prompts from all sources.
-Returns a plist with system prompt data grouped by location."
-  (let ((default-prompts '())
-        (global-prompts '())
-        (local-prompts '()))
+      (insert (format "%-25s: %s\n" "Session Active"
+                     (propertize (if active "YES" "NO")
+                                'face (if active 'ai-debug-completion-active 'ai-debug-completion-inactive))))
+      (when strategy
+        (insert (format "%-25s: %s\n" "Strategy" (ai-debug--format-display-value strategy nil))))
+      (when complete-at-point
+        (insert (format "%-25s: %d\n" "Complete At Point" complete-at-point)))
+      (when preview-at-point
+        (insert (format "%-25s: %d\n" "Preview At Point" preview-at-point)))
+      (insert (format "%-25s: %s\n" "Use Full Context"
+                     (ai-debug--format-display-value use-full-context nil))))
 
-    ;; Collect from default system prompts (if available)
-    (when (and (boundp 'ai-prompt-management--default-system-prompts-cache)
-               (hash-table-p ai-prompt-management--default-system-prompts-cache))
-      (maphash (lambda (prompt-name content)
-                 (push `(:name ,prompt-name
-                         :content ,content
-                         :location "Default (Package)"
-                         :directory ,(ai-prompt-management--get-default-system-prompts-directory))
-                       default-prompts))
-               ai-prompt-management--default-system-prompts-cache))
+    (insert "\n")))
 
-    ;; Collect from global system prompts (if available)
-    (when (and (boundp 'ai-prompt-management--global-system-prompts-cache)
-               (hash-table-p ai-prompt-management--global-system-prompts-cache))
-      (maphash (lambda (prompt-name content)
-                 (push `(:name ,prompt-name
-                         :content ,content
-                         :location "Global (~/.ai/system)"
-                         :directory ,(ai-prompt-management--get-global-system-prompts-directory))
-                       global-prompts))
-               ai-prompt-management--global-system-prompts-cache))
+(defun ai-debug--insert-completion-context-settings (state)
+  "Insert completion context settings from STATE plist."
+  (magit-insert-section (ai-completion-context nil t)
+    (magit-insert-heading
+      (propertize "Context Settings" 'face 'ai-debug-context-type))
 
-    ;; Collect from local system prompts (if available)
-    (when (and (boundp 'ai-prompt-management--local-system-prompts-cache)
-               (hash-table-p ai-prompt-management--local-system-prompts-cache))
-      (maphash (lambda (prompt-name content)
-                 (push `(:name ,prompt-name
-                         :content ,content
-                         :location "Local (Project)"
-                         :directory ,(ai-prompt-management--get-local-system-prompts-directory))
-                       local-prompts))
-               ai-prompt-management--local-system-prompts-cache))
+    (let ((preceding-size (plist-get state :preceding-context-size))
+          (following-size (plist-get state :following-context-size))
+          (use-full-context (plist-get state :use-full-context)))
 
-    `(:default-prompts ,(reverse default-prompts)
-      :global-prompts ,(reverse global-prompts)
-      :local-prompts ,(reverse local-prompts))))
+      (if use-full-context
+          (insert (propertize "Using full buffer context (no size limits)\n" 'face 'ai-debug-context-metadata))
+        (progn
+          (insert (format "%-25s: %s\n" "Preceding Context Size"
+                         (if preceding-size (number-to-string preceding-size) "default")))
+          (insert (format "%-25s: %s\n" "Following Context Size"
+                         (if following-size (number-to-string following-size) "default")))))
 
-(defun ai-debug--extract-modifier-indicators (command-name)
-  "Extract modifier indicators from COMMAND-NAME for display.
-Returns a list of shortened modifier indicators."
-  (condition-case-unless-debug nil
-    (when (and (fboundp 'ai-command-management--parse-command-modifiers) (string-match-p "__" command-name))
-      (let* ((parsed (ai-command-management--parse-command-modifiers command-name))
-             (modifier-config (cdr parsed))
-             (indicators '()))
+      ;; Show global context settings for reference
+      (insert (propertize "\nGlobal Context Settings (for reference):\n" 'face 'ai-debug-context-metadata))
+      (when (boundp 'ai-context-management--current-precending-context-size)
+        (insert (format "%-25s: %d\n" "Global Preceding Size"
+                       ai-context-management--current-precending-context-size)))
+      (when (boundp 'ai-context-management--current-forwarding-context-size)
+        (insert (format "%-25s: %d\n" "Global Following Size"
+                       ai-context-management--current-forwarding-context-size))))
 
-        ;; Add modifier indicators
-        (when (plist-get modifier-config :user-input)
-          (push "U" indicators))  ; User input required
-        (when (plist-get modifier-config :needs-buffer-context)
-          (push "B" indicators))  ; Buffer context needed
-        (when (plist-get modifier-config :needs-project-context)
-          (push "P" indicators))  ; Project context needed
+    (insert "\n")))
 
-        ;; Add result action indicator
-        (when-let ((result-action (plist-get modifier-config :result-action)))
-          (let ((action-indicator (cond
-                                  ((eq result-action 'show) "S")
-                                  ((eq result-action 'eval) "E")
-                                  ((eq result-action 'replace) "R")
-                                  ((eq result-action 'insert-at-point) "I")
-                                  ((eq result-action 'complete) "C")
-                                  (t "?"))))
-            (push action-indicator indicators)))
+(defun ai-debug--insert-completion-candidates (state)
+  "Insert completion candidates information from STATE plist."
+  (let ((candidates (plist-get state :candidates))
+        (current-candidate (plist-get state :current-candidate)))
 
-        ;; Add context size indicators
-        (when (plist-member modifier-config :preceding-context-size)
-          (let ((preceding (plist-get modifier-config :preceding-context-size))
-                (following (plist-get modifier-config :following-context-size)))
-            (cond
-             ((and (null preceding) (null following))
-              (push "F" indicators))  ; Full context
-             ((and (numberp preceding) (< preceding 10))
-              (push "s" indicators))  ; Small context
-             ((and (numberp preceding) (> preceding 15))
-              (push "L" indicators))  ; Large context
-             (t nil))))
-
-        indicators))
-    (error nil)))
-
-(defun ai-debug--insert-file-command-item (command-info)
-  "Insert a single file command COMMAND-INFO as an expandable section."
-  (let* ((name (plist-get command-info :name))
-         (content (plist-get command-info :content))
-         (location (plist-get command-info :location))
-         (directory (plist-get command-info :directory))
-         (file-path (when directory
-                      (ai-prompt-management--get-file-path-for-name name directory nil)))
-         (modifier-indicators (ai-debug--extract-modifier-indicators name))
-         (metadata-parts '()))
-
-    ;; Build metadata parts
-    (when file-path
-      (push (format "file: %s" file-path) metadata-parts))
-    (when modifier-indicators
-      (push (format "mods: %s" (string-join modifier-indicators "")) metadata-parts))
-
-    (magit-insert-section (ai-file-command name t) ; Pass 't' as hidden flag
+    (magit-insert-section (ai-completion-candidates nil t)
       (magit-insert-heading
-        (propertize name 'face 'ai-debug-context-type)
-        (when metadata-parts
-          (concat " " (propertize (format "(%s)" (mapconcat #'identity metadata-parts " | "))
-                                 'face 'ai-debug-context-metadata))))
+        (propertize (format "Completion Candidates (%d total, current: %d)"
+                           (if candidates (length candidates) 0)
+                           (if (and current-candidate candidates) (1+ current-candidate) 0))
+                   'face 'ai-debug-context-type))
 
-      ;; Full content (truncated if necessary)
-      (when (and content (> (length content) 0))
-        (ai-debug--safe-insert-content content ai-debug-max-recursion-depth 0))
+      (if (and candidates (> (length candidates) 0))
+          (let ((max-candidates (if ai-debug-truncate-content 3 10)))
+            (dotimes (i (min (length candidates) max-candidates))
+              (let* ((candidate (nth i candidates))
+                     (content (ai-common--get-text-content-from-struct candidate))
+                     (is-current (and current-candidate (= i current-candidate)))
+                     (truncated-content (if (and content (> (length content) 100))
+                                            (concat (substring content 0 100) "...")
+                                          content)))
+
+                (magit-insert-section (ai-completion-candidate i t)
+                  (magit-insert-heading
+                    (propertize (format "Candidate %d%s" (1+ i) (if is-current " [CURRENT]" ""))
+                               'face (if is-current 'ai-debug-completion-active 'ai-debug-context-type)))
+
+                  (when content
+                    (insert (propertize (format "Content (%d chars):\n" (length content))
+                                       'face 'ai-debug-context-metadata))
+                    (ai-debug--safe-insert-content truncated-content ai-debug-max-recursion-depth 0))
+                  (insert "\n"))))
+
+            (when (> (length candidates) max-candidates)
+              (insert (propertize (format "  [%d more candidates not shown - toggle truncation with C-c t]\n\n"
+                                         (- (length candidates) max-candidates))
+                                 'face 'ai-debug-context-metadata))))
+        (insert (propertize "  No candidates available\n\n" 'face 'ai-debug-empty-source))))))
+
+(defun ai-debug--insert-completion-command-struct (state)
+  "Insert current command struct information from STATE plist."
+  (let ((command-struct (plist-get state :current-command-struct)))
+
+    (magit-insert-section (ai-completion-command nil t)
+      (magit-insert-heading
+        (propertize "Current Command Structure" 'face 'ai-debug-context-type))
+
+      (if (and command-struct (ai-command-p command-struct))
+          (let ((name (ai-structs--get-command-name command-struct))
+                (canonical-name (ai-structs--get-command-canonical-name command-struct))
+                (source (ai-structs--get-command-source command-struct))
+                (location (ai-structs--get-command-location command-struct))
+                (result-action (ai-structs--get-result-action command-struct))
+                (needs-user-input (ai-structs--command-needs-user-input-p command-struct))
+                (needs-buffer-context (ai-structs--command-needs-buffer-context-p command-struct))
+                (needs-project-context (ai-structs--command-needs-project-context-p command-struct))
+                (file-path (ai-structs--get-command-file-path command-struct)))
+
+            (insert (format "%-25s: %s\n" "Name" name))
+            (insert (format "%-25s: %s\n" "Canonical Name" canonical-name))
+            (insert (format "%-25s: %s\n" "Source" source))
+            (insert (format "%-25s: %s\n" "Location" location))
+            (insert (format "%-25s: %s\n" "Result Action" result-action))
+            (insert (format "%-25s: %s\n" "Needs User Input" needs-user-input))
+            (insert (format "%-25s: %s\n" "Needs Buffer Context" needs-buffer-context))
+            (insert (format "%-25s: %s\n" "Needs Project Context" needs-project-context))
+            (when file-path
+              (insert (format "%-25s: %s\n" "File Path" file-path))))
+        (insert (propertize "  No command structure available\n" 'face 'ai-debug-empty-source)))
 
       (insert "\n"))))
 
-(defun ai-debug--insert-system-prompt-item (prompt-info)
-  "Insert a single system prompt PROMPT-INFO as an expandable section."
-  (let* ((name (plist-get prompt-info :name))
-         (content (plist-get prompt-info :content))
-         (location (plist-get prompt-info :location))
-         (directory (plist-get prompt-info :directory))
-         (file-path (when directory
-                      (ai-prompt-management--get-file-path-for-name name directory t)))
-         (metadata-parts '()))
+(defun ai-debug--insert-completion-buffer-state (state)
+  "Insert buffer state information from STATE plist."
+  (let ((buffer-clone (plist-get state :buffer-clone)))
 
-    ;; Build metadata parts
-    (when file-path
-      (push (format "file: %s" file-path) metadata-parts))
-
-    (magit-insert-section (ai-system-prompt name t) ; Pass 't' as hidden flag
+    (magit-insert-section (ai-completion-buffer nil t)
       (magit-insert-heading
-        (propertize name 'face 'ai-debug-context-type)
-        (when metadata-parts
-          (concat " " (propertize (format "(%s)" (mapconcat #'identity metadata-parts " | "))
-                                 'face 'ai-debug-context-metadata))))
+        (propertize "Buffer State" 'face 'ai-debug-context-type))
 
-      ;; Full content (truncated if necessary)
-      (when (and content (> (length content) 0))
-        (ai-debug--safe-insert-content content ai-debug-max-recursion-depth 0))
+      (insert (format "%-25s: %s\n" "Current Buffer" (buffer-name)))
+      (insert (format "%-25s: %s\n" "Buffer Clone"
+                     (if (and buffer-clone (buffer-live-p buffer-clone))
+                         (buffer-name buffer-clone)
+                       "None")))
+      (insert (format "%-25s: %s\n" "Point" (point)))
+      (insert (format "%-25s: %s\n" "Region Active" (use-region-p)))
+      (when (use-region-p)
+        (insert (format "%-25s: %d - %d\n" "Region" (region-beginning) (region-end))))
 
       (insert "\n"))))
 
-(defun ai-debug--insert-file-commands-by-location (location-name commands)
-  "Insert file commands from LOCATION-NAME with COMMANDS list."
-  (when commands
-    (magit-insert-section (ai-file-commands-location location-name t) ; Pass 't' as hidden flag
-      (magit-insert-heading
-        (propertize (format "%s (%d commands)" location-name (length commands))
-                   'face 'ai-debug-category-header))
-
-      (dolist (command-info commands)
-        (ai-debug--insert-file-command-item command-info)))))
-
-(defun ai-debug--insert-system-prompts-by-location (location-name prompts)
-  "Insert system prompts from LOCATION-NAME with PROMPTS list."
-  (when prompts
-    (magit-insert-section (ai-system-prompts-location location-name t) ; Pass 't' as hidden flag
-      (magit-insert-heading
-        (propertize (format "%s (%d prompts)" location-name (length prompts))
-                   'face 'ai-debug-category-header))
-
-      (dolist (prompt-info prompts)
-        (ai-debug--insert-system-prompt-item prompt-info)))))
-
-(defun ai-debug-show-file-commands ()
-  "Display all loaded file-based commands in a visual magit-like interface.
-Shows commands from default, global, and local instruction sources with
-expandable sections for detailed inspection."
+(defun ai-debug-show-completions ()
+  "Display AI completions debug information in a visual interface.
+Shows current completion session state, candidates, context settings,
+and command structure for debugging completion behavior."
   (interactive)
   (condition-case-unless-debug err
-    (let ((buffer (ai-debug--create-file-commands-buffer)))
+    (let ((buffer (ai-debug--create-completions-buffer)))
       (with-current-buffer buffer
         (setq buffer-read-only nil)
 
-        ;; Set up refresh capability for file commands buffer
-        (setq-local ai-debug--refresh-function 'ai-debug-show-file-commands)
+        ;; Set up refresh capability for completions buffer
+        (setq-local ai-debug--refresh-function 'ai-debug-show-completions)
         (setq-local ai-debug--refresh-args nil)
 
-        ;; Ensure caches are updated
-        (when (fboundp 'ai-prompt-management--ensure-cache-updated)
-          (condition-case-unless-debug nil
-            (progn
-              (ai-prompt-management--ensure-cache-updated
-               (ai-prompt-management--get-default-instructions-directory)
-               ai-prompt-management--default-instructions-cache "default" nil)
-              (ai-prompt-management--ensure-cache-updated
-               (ai-prompt-management--get-global-instructions-directory)
-               ai-prompt-management--global-instructions-cache "global" nil)
-              (when-let ((local-dir (ai-prompt-management--get-local-instructions-directory)))
-                (ai-prompt-management--ensure-cache-updated
-                 local-dir ai-prompt-management--local-instructions-cache "local" nil)))
-            (error nil)))
-
-        ;; Collect file commands
-        (let* ((commands-data (ai-debug--collect-file-commands))
-               (default-commands (plist-get commands-data :default-commands))
-               (global-commands (plist-get commands-data :global-commands))
-               (local-commands (plist-get commands-data :local-commands))
-               (total-commands (+ (length default-commands)
-                                 (length global-commands)
-                                 (length local-commands))))
+        ;; Collect completions state from the original buffer
+        (let ((state (with-current-buffer (or (get-buffer "*ai-completions-debug-source*")
+                                              (current-buffer))
+                       (ai-debug--collect-completions-state))))
 
           ;; Insert main header
-          (magit-insert-section (ai-file-commands-root)
+          (magit-insert-section (ai-completions-root)
             (magit-insert-heading
-              (propertize (format "AI File-Based Commands (%d total)" total-commands)
-                         'face 'ai-debug-category-header))
+              (propertize "AI Completions Debug" 'face 'ai-debug-category-header))
 
-            ;; Insert commands by location with priority order
-            (ai-debug--insert-file-commands-by-location "Local (Project)" local-commands)
-            (ai-debug--insert-file-commands-by-location "Global (~/.ai)" global-commands)
-            (ai-debug--insert-file-commands-by-location "Default (Package)" default-commands)
-
-            ;; Show message if no commands found
-            (when (= total-commands 0)
-              (insert (propertize "No file-based commands found.\n" 'face 'ai-debug-empty-source))
-              (insert (propertize "File commands are loaded from:\n" 'face 'ai-debug-context-metadata))
-              (insert (propertize (format "- Default: %s\n" (ai-prompt-management--get-default-instructions-directory)) 'face 'ai-debug-context-metadata))
-              (insert (propertize (format "- Global: %s\n" (ai-prompt-management--get-global-instructions-directory)) 'face 'ai-debug-context-metadata))
-              (when-let ((local-dir (ai-prompt-management--get-local-instructions-directory)))
-                (insert (propertize (format "- Local: %s\n" local-dir) 'face 'ai-debug-context-metadata))))))
+            ;; Insert different sections of completion debug info
+            (ai-debug--insert-completion-session-state state)
+            (ai-debug--insert-completion-context-settings state)
+            (ai-debug--insert-completion-candidates state)
+            (ai-debug--insert-completion-command-struct state)
+            (ai-debug--insert-completion-buffer-state state)))
 
         ;; Set up buffer display
         (setq buffer-read-only t)
@@ -1539,83 +1397,46 @@ expandable sections for detailed inspection."
 
       (pop-to-buffer buffer))
     (error
-     (message "Error in ai-debug-show-file-commands: %s" (error-message-string err)))))
+     (message "Error in ai-debug-show-completions: %s" (error-message-string err)))))
 
-(defun ai-debug-show-system-prompts ()
-  "Display all loaded system prompts in a visual magit-like interface.
-Shows system prompts from default, global, and local sources with
-expandable sections for detailed inspection."
+(defun ai-debug-completions-from-buffer (&optional source-buffer)
+  "Debug completions state from a specific SOURCE-BUFFER.
+If SOURCE-BUFFER is not provided, uses current buffer."
   (interactive)
-  (condition-case-unless-debug err
-    (let ((buffer (ai-debug--create-system-prompts-buffer)))
-      (with-current-buffer buffer
-        (setq buffer-read-only nil)
-
-        ;; Set up refresh capability for system prompts buffer
-        (setq-local ai-debug--refresh-function 'ai-debug-show-system-prompts)
-        (setq-local ai-debug--refresh-args nil)
-
-        ;; Ensure caches are updated
-        (when (fboundp 'ai-prompt-management--ensure-cache-updated)
-          (condition-case-unless-debug nil
-            (progn
-              (ai-prompt-management--ensure-cache-updated
-               (ai-prompt-management--get-default-system-prompts-directory)
-               ai-prompt-management--default-system-prompts-cache "default-system" t)
-              (ai-prompt-management--ensure-cache-updated
-               (ai-prompt-management--get-global-system-prompts-directory)
-               ai-prompt-management--global-system-prompts-cache "global-system" t)
-              (when-let ((local-dir (ai-prompt-management--get-local-system-prompts-directory)))
-                (ai-prompt-management--ensure-cache-updated
-                 local-dir ai-prompt-management--local-system-prompts-cache "local-system" t)))
-            (error nil)))
-
-        ;; Collect system prompts
-        (let* ((prompts-data (ai-debug--collect-system-prompts))
-               (default-prompts (plist-get prompts-data :default-prompts))
-               (global-prompts (plist-get prompts-data :global-prompts))
-               (local-prompts (plist-get prompts-data :local-prompts))
-               (total-prompts (+ (length default-prompts)
-                                (length global-prompts)
-                                (length local-prompts))))
-
-          ;; Insert main header
-          (magit-insert-section (ai-system-prompts-root)
-            (magit-insert-heading
-              (propertize (format "AI System Prompts (%d total)" total-prompts)
-                         'face 'ai-debug-category-header))
-
-            ;; Insert prompts by location with priority order
-            (ai-debug--insert-system-prompts-by-location "Local (Project)" local-prompts)
-            (ai-debug--insert-system-prompts-by-location "Global (~/.ai/system)" global-prompts)
-            (ai-debug--insert-system-prompts-by-location "Default (Package)" default-prompts)
-
-            ;; Show message if no prompts found
-            (when (= total-prompts 0)
-              (insert (propertize "No system prompts found.\n" 'face 'ai-debug-empty-source))
-              (insert (propertize "System prompts are loaded from:\n" 'face 'ai-debug-context-metadata))
-              (insert (propertize (format "- Default: %s\n" (ai-prompt-management--get-default-system-prompts-directory)) 'face 'ai-debug-context-metadata))
-              (insert (propertize (format "- Global: %s\n" (ai-prompt-management--get-global-system-prompts-directory)) 'face 'ai-debug-context-metadata))
-              (when-let ((local-dir (ai-prompt-management--get-local-system-prompts-directory)))
-                (insert (propertize (format "- Local: %s\n" local-dir) 'face 'ai-debug-context-metadata))))))
-
-        ;; Set up buffer display
-        (setq buffer-read-only t)
-        (goto-char (point-min))
-        ;; Collapse all sections by default
-        (condition-case-unless-debug nil
-          (ai-debug--collapse-all-sections-recursive)
-          (error nil)))
-
-      (pop-to-buffer buffer))
-    (error
-     (message "Error in ai-debug-show-system-prompts: %s" (error-message-string err)))))
+  (let ((source (or source-buffer (current-buffer))))
+    (with-current-buffer source
+      ;; Create a temporary buffer marker for state collection
+      (let ((debug-source-buffer (get-buffer-create "*ai-completions-debug-source*")))
+        (with-current-buffer debug-source-buffer
+          ;; Copy relevant completion variables from source buffer
+          (when (boundp 'ai-completions--active)
+            (setq-local ai-completions--active
+                        (with-current-buffer source ai-completions--active)))
+          (when (boundp 'ai-completions--candidates)
+            (setq-local ai-completions--candidates
+                        (with-current-buffer source ai-completions--candidates)))
+          (when (boundp 'ai-completions--current-candidate)
+            (setq-local ai-completions--current-candidate
+                        (with-current-buffer source ai-completions--current-candidate)))
+          ;; Copy other completion state variables...
+          )
+        ;; Now show the debug interface
+        (ai-debug-show-completions)))))
 
 (defun ai-debug-show-raw-structures (context)
   "Display typed structures from CONTEXT in raw sequential format.
 Shows all typed structures in the order they appear in the context
 with detailed type information and nested structure support."
-  (interactive)
+  (interactive
+   (list (when (bound-and-true-p ai-mode)
+           (let* ((command-struct (when (fboundp 'ai-command-management--get-unrestricted-command)
+                                    (ai-command-management--get-unrestricted-command)))
+                  (context (when (fboundp 'ai-context-management--get-executions-context-for-command)
+                             (ai-context-management--get-executions-context-for-command
+                              command-struct
+                              :model (when (fboundp 'ai-model-management-get-current)
+                                       (ai-model-management-get-current))))))
+             context))))
   (condition-case-unless-debug err
     (let ((buffer (ai-debug--create-raw-structures-buffer))
           (raw-messages (condition-case-unless-debug nil (plist-get context :messages) (error nil)))
@@ -1708,34 +1529,32 @@ The interface provides expandable sections for detailed inspection."
               ;; File Ignore Patterns Category
               (ai-debug--insert-ignore-patterns-section)
 
-              ;; Buffer Context Category
-              (magit-insert-section (ai-buffer-info nil t) ; Pass 't' as hidden flag
-                (magit-insert-heading
-                  (propertize "Buffer Context" 'face 'ai-debug-category-header))
-                (let ((buffer-keys '(:buffer-name :buffer-language :buffer :file-path :project-root :file-name)))
-                  (dolist (key buffer-keys)
-                    (when-let ((value (condition-case-unless-debug nil (plist-get context key) (error nil))))
-                      (let ((key-str (substring (symbol-name key) 1))
-                            (value-str (ai-debug--format-display-value value nil))) ; Use helper
-                        (insert (format "%-15s: %s\n" key-str value-str))))))
-                (insert "\n"))
-
-              ;; Completion Context Category
-              (magit-insert-section (ai-completion-info nil t) ; Pass 't' as hidden flag
-                (magit-insert-heading
-                  (propertize "Completion Context" 'face 'ai-debug-category-header))
-                (let ((completion-keys '(:cursor-point :cursor-offset :region-content
-                                                       :preceding-context-beginning :preceding-context-end
-                                                       :preceding-context-content :preceding-context-size
-                                                       :following-context-beginning :following-context-end
-                                                       :following-context-content :following-context-size
-                                                       :cursor-line-number :cursor-column-number)))
-                  (dolist (key completion-keys)
-                    (when-let ((value (condition-case-unless-debug nil (plist-get context key) (error nil))))
-                      (let ((key-str (substring (symbol-name key) 1))
-                            (value-str (ai-debug--format-display-value value t))) ; Use helper with truncation
-                        (insert (format "%-25s: %s\n" key-str value-str))))))
-                (insert "\n"))
+              ;; Buffer Context Category - using buffer-state from context
+              (when-let ((buffer-state (plist-get context :buffer-state)))
+                (magit-insert-section (ai-buffer-info nil t) ; Pass 't' as hidden flag
+                  (magit-insert-heading
+                    (propertize "Buffer Context" 'face 'ai-debug-category-header))
+                  ;; Extract buffer information from buffer-state
+                  (let ((buffer-name (ai-buffer-state-buf-name buffer-state))
+                        (file-name (ai-buffer-state-buf-filename buffer-state))
+                        (major-mode (ai-buffer-state-buf-major-mode buffer-state))
+                        (current-point (ai-buffer-state-cur-point buffer-state))
+                        (current-line (ai-buffer-state-cur-line buffer-state))
+                        (current-column (ai-buffer-state-cur-column buffer-state))
+                        (region-active (ai-buffer-state-reg-active buffer-state))
+                        (region-content (ai-buffer-state-reg-content buffer-state)))
+                    ;; Display buffer information
+                    (insert (format "%-15s: %s\n" "buffer-name" (ai-debug--format-display-value buffer-name nil)))
+                    (when file-name
+                      (insert (format "%-15s: %s\n" "file-name" (ai-debug--format-display-value file-name nil))))
+                    (insert (format "%-15s: %s\n" "major-mode" (ai-debug--format-display-value major-mode nil)))
+                    (insert (format "%-15s: %s\n" "cursor-point" (ai-debug--format-display-value current-point nil)))
+                    (insert (format "%-15s: %s\n" "cursor-line" (ai-debug--format-display-value current-line nil)))
+                    (insert (format "%-15s: %s\n" "cursor-column" (ai-debug--format-display-value current-column nil)))
+                    (insert (format "%-15s: %s\n" "region-active" (ai-debug--format-display-value region-active nil)))
+                    (when region-content
+                      (insert (format "%-15s: %s\n" "region-content" (ai-debug--format-display-value region-content t)))))
+                  (insert "\n")))
 
               ;; Messages Category (organized by type)
               (when messages
@@ -1756,193 +1575,6 @@ The interface provides expandable sections for detailed inspection."
       (error
        (message "Error in ai-debug-show-context-debug: %s" (error-message-string err)))))
 
-;; Helper function to get descriptive name for project context mode
-(defun ai-debug--get-project-context-mode-display-name (mode)
-  "Return a human-readable string for the project context MODE."
-  (cdr (assoc mode '((disabled . "Disabled")
-                      (full-project . "Full Files")
-                      (project-ai-summary . "Summary Index")))))
-
-;; Helper functions for collecting context sources
-(defun ai-debug--collect-context-sources ()
-  "Collect all context sources safely with comprehensive error handling.
-Returns a plist with all context source data and their counts."
-  (let* ((global-system-prompts (condition-case-unless-debug nil
-                                    (ai-context-management--get-global-system-prompts)
-                                  (error nil)))
-         (global-memory (condition-case-unless-debug nil
-                            (ai-context-management--get-global-memory)
-                          (error nil)))
-         (buffer-bound-prompts (condition-case-unless-debug nil
-                                   (ai-context-management--get-buffer-bound-prompts)
-                                 (error nil)))
-         (context-pool (condition-case-unless-debug nil
-                           (ai-context-management--get-context-pool)
-                         (error nil)))
-         (project-context (condition-case-unless-debug nil
-                              (when (and (fboundp 'ai-context-management--get-full-project-context)
-                                         (fboundp 'ai-project--get-project-root)
-                                         (ai-project--get-project-root))
-                                (ai-context-management--get-full-project-context))
-                            (error nil)))
-         (project-root (condition-case-unless-debug nil
-                           (ai-project--get-project-root)
-                         (error nil)))
-         (project-summary-index (condition-case-unless-debug nil
-                                    (when (and (boundp 'ai-context-management--project-files-summary-index) project-root)
-                                      (gethash project-root ai-context-management--project-files-summary-index))
-                                  (error nil)))
-         (current-buffer-context (condition-case-unless-debug nil
-                                     (unless (use-region-p)
-                                       (when (fboundp 'ai-context-management--get-current-buffer-context)
-                                         (ai-context-management--get-current-buffer-context)))
-                                   (error nil)))
-         (current-selection (condition-case-unless-debug nil
-                                (when (use-region-p)
-                                  (ai-common--make-snippet-from-region 'selection))
-                              (error nil))))
-
-    `(:global-system-prompts ,global-system-prompts
-      :global-memory ,global-memory
-      :buffer-bound-prompts ,buffer-bound-prompts
-      :context-pool ,context-pool
-      :project-context ,project-context
-      :project-summary-index ,project-summary-index
-      :current-buffer-context ,current-buffer-context
-      :current-selection ,current-selection)))
-
-(defun ai-debug--calculate-source-counts (sources)
-  "Calculate various counts for context SOURCES.
-Returns a plist with total, non-empty, and file counts."
-  (let* ((all-sources (list (plist-get sources :global-system-prompts)
-                           (plist-get sources :global-memory)
-                           (plist-get sources :buffer-bound-prompts)
-                           (plist-get sources :context-pool)
-                           (plist-get sources :project-context)
-                           (plist-get sources :project-summary-index)
-                           (plist-get sources :current-buffer-context)
-                           (plist-get sources :current-selection)))
-         (total-sources (length (cl-remove-if #'null all-sources)))
-         (non-empty-sources (length (cl-remove-if #'ai-debug--is-empty-source all-sources)))
-         (project-context (plist-get sources :project-context))
-         (project-files-count (if (and project-context (plist-get project-context :content))
-                                  (condition-case-unless-debug nil
-                                    (let ((content (plist-get project-context :content)))
-                                      (when (and content (listp content))
-                                        (let ((files-list-item (nth 0 content)))
-                                          (when (and files-list-item (plist-get files-list-item :count))
-                                            (plist-get files-list-item :count)))))
-                                    (error 0))
-                                0))
-         (project-summary-index (plist-get sources :project-summary-index))
-         (project-summary-count (if (and project-summary-index (listp project-summary-index))
-                                    (length project-summary-index)
-                                  0)))
-
-    `(:total-sources ,total-sources
-      :non-empty-sources ,non-empty-sources
-      :project-files-count ,project-files-count
-      :project-summary-count ,project-summary-count)))
-
-(defun ai-debug--insert-all-source-sections (sources counts)
-  "Insert all source sections with SOURCES data and COUNTS information."
-  (let* ((project-files-count (plist-get counts :project-files-count))
-         (project-summary-count (plist-get counts :project-summary-count))
-         (project-context-mode-display (ai-debug--get-project-context-mode-display-name ai-context-management--project-context-mode)))
-
-    ;; Insert each source section with error protection
-    (ai-debug--insert-source-section
-     "Global System Prompts"
-     (plist-get sources :global-system-prompts)
-     "System-wide instructions that define AI behavior")
-
-    (ai-debug--insert-source-section
-     "Global Memory"
-     (plist-get sources :global-memory)
-     "Persistent context that spans across all buffers")
-
-    (ai-debug--insert-source-section
-     "Buffer-bound Prompts"
-     (plist-get sources :buffer-bound-prompts)
-     "Instructions specific to current buffer")
-
-    (ai-debug--insert-source-section
-     "Context Pool"
-     (plist-get sources :context-pool)
-     "Temporary context for current interaction session")
-
-    (ai-debug--insert-source-section
-     (format "Project Context (%s, %d files)" project-context-mode-display project-files-count)
-     (plist-get sources :project-context)
-     "Filtered project files and structure")
-
-    (ai-debug--insert-source-section
-     (format "Project AI Summary Index (%d files)" project-summary-count)
-     (plist-get sources :project-summary-index)
-     "AI-generated summaries of project files")
-
-    (when (plist-get sources :current-buffer-context)
-      (ai-debug--insert-source-section
-       "Current Buffer Content"
-       (plist-get sources :current-buffer-context)
-       "Full content of current buffer"))
-
-    (when (plist-get sources :current-selection)
-      (ai-debug--insert-source-section
-       "Current Selection"
-       (plist-get sources :current-selection)
-       "Currently selected text region"))))
-
-(defun ai-debug--setup-sources-buffer-display (buffer)
-  "Set up the sources BUFFER for display with proper section handling."
-  (with-current-buffer buffer
-    (setq buffer-read-only t)
-    (goto-char (point-min))
-    ;; Use the new recursive collapse function
-    (condition-case-unless-debug nil
-        (ai-debug--collapse-all-sections-recursive)
-      (error nil))
-    ;; Hide empty sections with comprehensive error protection
-    (condition-case-unless-debug nil
-        (ai-debug--hide-empty-sections)
-      (error nil))))
-
-(defun ai-debug-show-sources ()
-  "Display all AI context sources in a visual magit-like interface.
-Shows global prompts, memory, buffer-bound prompts, context pool,
-project context, and current buffer/selection information in expandable sections."
-  (interactive)
-  (condition-case-unless-debug err
-    (let ((buffer (ai-debug--create-sources-buffer)))
-      (with-current-buffer buffer
-        (setq buffer-read-only nil)
-
-        ;; Set up refresh capability for sources buffer
-        (setq-local ai-debug--refresh-function 'ai-debug-show-sources)
-        (setq-local ai-debug--refresh-args nil)
-
-        ;; Collect context sources and calculate counts
-        (let* ((sources (ai-debug--collect-context-sources))
-               (counts (ai-debug--calculate-source-counts sources)))
-
-          ;; Insert main header with counts
-          (magit-insert-section (ai-sources-root)
-            (magit-insert-heading
-              (propertize (format "AI Context Sources [%d/%d active]"
-                                 (plist-get counts :non-empty-sources)
-                                 (plist-get counts :total-sources))
-                         'face 'ai-debug-category-header))
-
-            ;; Insert all source sections
-            (ai-debug--insert-all-source-sections sources counts)))
-
-        ;; Set up buffer display
-        (ai-debug--setup-sources-buffer-display buffer))
-
-      (pop-to-buffer buffer))
-    (error
-     (message "Error in ai-debug-show-sources: %s" (error-message-string err)))))
-
 (defun ai-debug-show-context ()
   "Show debug context for the current AI operation.
 Interactive command that displays the current AI context in a debug buffer.
@@ -1951,18 +1583,16 @@ and message structure for troubleshooting AI operations."
   (interactive)
   (condition-case-unless-debug err
     (when (bound-and-true-p ai-mode)
-      (let* ((query-type (condition-case-unless-debug nil
-                           (or (when (fboundp 'ai-command-management--get-command-unrestricted)
-                                 (ai-command-management--get-command-unrestricted))
-                               "explain")
-                           (error "explain")))
+      (let* ((command-struct (condition-case-unless-debug nil
+                               (when (fboundp 'ai-command-management--get-unrestricted-command)
+                                 (ai-command-management--get-unrestricted-command))
+                               (error nil)))
              (context (condition-case-unless-debug nil
-                          (when (fboundp 'ai-context-management--get-executions-context-for-command)
-                            (ai-context-management--get-executions-context-for-command
-                             query-type
-                             :model (when (fboundp 'ai-model-management-get-current)
-                                      (ai-model-management-get-current))))
-
+                        (when (fboundp 'ai-context-management--get-executions-context-for-command)
+                          (ai-context-management--get-executions-context-for-command
+                           command-struct
+                           :model (when (fboundp 'ai-model-management-get-current)
+                                    (ai-model-management-get-current))))
                         (error nil))))
         (if context
             (ai-debug-show-context-debug context)
@@ -1977,17 +1607,16 @@ Useful for understanding the exact order and structure of AI context elements."
   (interactive)
   (condition-case-unless-debug err
     (when (bound-and-true-p ai-mode)
-      (let* ((query-type (condition-case-unless-debug nil
-                           (or (when (fboundp 'ai-command-management--get-command-unrestricted)
-                                 (ai-command-management--get-command-unrestricted))
-                               "explain")
-                           (error "explain")))
+      (let* ((command-struct (condition-case-unless-debug nil
+                               (when (fboundp 'ai-command-management--get-unrestricted-command)
+                                 (ai-command-management--get-unrestricted-command))
+                               (error nil)))
              (context (condition-case-unless-debug nil
-                          (when (fboundp 'ai-context-management--get-executions-context-for-command)
-                            (ai-context-management--get-executions-context-for-command
-                             query-type
-                             :model (when (fboundp 'ai-model-management-get-current)
-                                      (ai-model-management-get-current))))
+                        (when (fboundp 'ai-context-management--get-executions-context-for-command)
+                          (ai-context-management--get-executions-context-for-command
+                           command-struct
+                           :model (when (fboundp 'ai-model-management-get-current)
+                                    (ai-model-management-get-current))))
                         (error nil))))
         (if context
             (ai-debug-show-raw-structures context)
@@ -2002,21 +1631,16 @@ Useful for debugging completion performance and context truncation issues."
   (interactive)
   (condition-case-unless-debug err
     (when (bound-and-true-p ai-mode)
-      (let* ((context (condition-case-unless-debug nil
-                          (when (and (fboundp 'ai-context-management--get-execution-context)
-                                     (fboundp 'ai-command-management--get-command-config-by-type)
-                                     (fboundp 'ai-model-management-get-current))
-                            (ai-context-management--get-execution-context
-                             (current-buffer)
-                             (ai-command-management--get-command-config-by-type "complete")
-                             "complete"
-                             :preceding-context-size (if (boundp 'ai-completions--current-precending-context-size)
-                                                         ai-completions--current-precending-context-size
-                                                       20)
-                             :following-context-size (if (boundp 'ai-completions--current-forwarding-context-size)
-                                                        ai-completions--current-forwarding-context-size
-                                                      20)
-                             :model (ai-model-management-get-current)))
+      (let* ((command-struct (condition-case-unless-debug nil
+                               (when (fboundp 'ai-command-management--get-command-from-registry)
+                                 (ai-command-management--get-command-from-registry "complete"))
+                               (error nil)))
+             (context (condition-case-unless-debug nil
+                        (when (and (fboundp 'ai-context-management--get-executions-context-for-command)
+                                   (fboundp 'ai-model-management-get-current))
+                          (ai-context-management--get-executions-context-for-command
+                           command-struct
+                           :model (ai-model-management-get-current)))
                         (error nil))))
         (if context
             (ai-debug-show-context-debug context)
@@ -2031,18 +1655,24 @@ Useful for debugging issues with full-buffer completion strategies."
   (interactive)
   (condition-case-unless-debug err
     (when (bound-and-true-p ai-mode)
-      (let* ((context (condition-case-unless-debug nil
-                          (when (and (fboundp 'ai-context-management--get-execution-context)
-                                     (fboundp 'ai-command-management--get-command-config-by-type)
-                                     (fboundp 'ai-model-management-get-current))
-                            (ai-context-management--get-execution-context
-                             (current-buffer)
-                             (ai-command-management--get-command-config-by-type "complete")
-
-                             "complete"
-                             :preceding-context-size nil
-                             :following-context-size nil
-                             :model (ai-model-management-get-current)))
+      (let* ((command-struct (condition-case-unless-debug nil
+                               (when (fboundp 'ai-command-management--get-command-from-registry)
+                                 ;; Create a command struct with full context settings
+                                 (let ((base-command (ai-command-management--get-command-from-registry "complete")))
+                                   (when base-command
+                                     ;; Modify the behavior to use full context
+                                     (let ((modified-behavior (copy-tree (ai-structs--get-command-behavior base-command))))
+                                       (setf (ai-command-behavior-preceding-context-size modified-behavior) nil)
+                                       (setf (ai-command-behavior-following-context-size modified-behavior) nil)
+                                       (setf (ai-command-behavior base-command) modified-behavior)
+                                       base-command))))
+                               (error nil)))
+             (context (condition-case-unless-debug nil
+                        (when (and (fboundp 'ai-context-management--get-executions-context-for-command)
+                                   (fboundp 'ai-model-management-get-current))
+                          (ai-context-management--get-executions-context-for-command
+                           command-struct
+                           :model (ai-model-management-get-current)))
                         (error nil))))
         (if context
             (ai-debug-show-context-debug context)
@@ -2060,10 +1690,8 @@ Provides a comprehensive view of AI context, configuration, and data flow."
 ;; Add debug commands to ai-command-map when ai-mode is loaded
 (with-eval-after-load 'ai-mode
   (define-key ai-command-map (kbd "d") 'ai-debug-visual)
-  (define-key ai-command-map (kbd "D") 'ai-debug-show-sources)
-  (define-key ai-command-map (kbd "f") 'ai-debug-show-file-commands)
-  (define-key ai-command-map (kbd "s") 'ai-debug-show-system-prompts)
   (define-key ai-command-map (kbd "R") 'ai-debug-show-raw-structures-interactive)
+  (define-key ai-command-map (kbd "C-c") 'ai-debug-show-completions)
   (define-key ai-command-map (kbd "C-d l") 'ai-debug-completion-limited-context)
   (define-key ai-command-map (kbd "C-d f") 'ai-debug-completion-full-context))
 
