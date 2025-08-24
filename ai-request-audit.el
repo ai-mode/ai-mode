@@ -62,6 +62,18 @@ When enabled, oldest records are deleted to maintain the specified limit."
 (defun ai-request-audit--serialize-data-for-json (data)
   "Convert DATA to JSON-serializable format, handling ai-command structs and other complex data."
   (cond
+   ;; Handle ai-execution-context struct
+   ((ai-execution-context-p data)
+    `((request-id . ,(ai-structs--get-execution-context-request-id data))
+      (timestamp . ,(ai-execution-context-timestamp data))
+      (ai-command . ,(ai-request-audit--serialize-data-for-json (ai-structs--get-execution-context-ai-command data)))
+      (model . ,(ai-request-audit--serialize-data-for-json (ai-structs--get-execution-context-model data)))
+      (messages . ,(ai-request-audit--serialize-data-for-json (ai-structs--get-execution-context-messages data)))
+      (buffer-state . ,(ai-request-audit--serialize-data-for-json (ai-structs--get-execution-context-buffer-state data)))
+      (preceding-context-size . ,(ai-execution-context-preceding-context-size data))
+      (following-context-size . ,(ai-execution-context-following-context-size data))
+      (source-buffer-name . ,(ai-execution-context-source-buffer-name data))
+      (source-file-path . ,(ai-execution-context-source-file-path data))))
    ;; Handle ai-command struct
    ((ai-command-p data)
     `((name . ,(ai-structs--get-command-name data))
@@ -184,16 +196,21 @@ When enabled, oldest records are deleted to maintain the specified limit."
 (defun ai-request-audit--create-request-metadata (request-id command model)
   "Create metadata structure for REQUEST-ID with COMMAND and MODEL."
   (ai-logging--message 'debug "request-audit" "Creating request metadata for %s" request-id)
-  `((request-id . ,request-id)
-    (timestamp . ,(format-time-string "%Y-%m-%dT%H:%M:%S"))
-    (command . ,(format "%s" command))
-    (model-name . ,(map-elt model :name))
-    (model-provider . ,(map-elt model :provider))
-    (status . "in-progress")
-    (start-time . ,(float-time))
-    (end-time . nil)
-    (execution-time . nil)
-    (error-message . nil)))
+  (let* ((command-name-str
+          (cond
+           ((stringp command) command)
+           ((ai-command-p command) (ai-structs--get-command-name command))
+           (t (format "%s" command))))) ; Fallback for anything else
+    `((request-id . ,request-id)
+      (timestamp . ,(format-time-string "%Y-%m-%dT%H:%M:%S"))
+      (command . ,command-name-str)
+      (model-name . ,(map-elt model :name))
+      (model-provider . ,(map-elt model :provider))
+      (status . "in-progress")
+      (start-time . ,(float-time))
+      (end-time . nil)
+      (execution-time . nil)
+      (error-message . nil))))
 
 (defun ai-request-audit--update-request-status (project-root request-id status &optional error-message)
   "Update the status of REQUEST-ID in PROJECT-ROOT to STATUS with optional ERROR-MESSAGE."
@@ -246,12 +263,22 @@ DATA should be in alist format for consistent JSON encoding."
     (ai-logging--message 'debug "request-audit" "Text data saved successfully to %s" file-path)))
 
 (defun ai-request-audit--save-context (project-root request-id context)
-  "Save CONTEXT data for REQUEST-ID in PROJECT-ROOT."
+  "Save CONTEXT data for REQUEST-ID in PROJECT-ROOT.
+CONTEXT can be either an ai-execution-context struct or a plist."
   (ai-logging--message 'debug "request-audit" "Saving context for request %s" request-id)
   (ai-request-audit--ensure-request-directory project-root request-id)
   (let* ((request-dir (ai-request-audit--get-request-directory project-root request-id))
          (context-file (expand-file-name "context.json" request-dir)))
-    (ai-request-audit--save-json-file context-file (ai-common--plist-to-alist context))))
+    (cond
+     ;; Handle ai-execution-context struct
+     ((ai-execution-context-p context)
+      (ai-request-audit--save-json-file context-file context))
+     ;; Handle plist format (backward compatibility)
+     ((and (listp context) (keywordp (car context)))
+      (ai-request-audit--save-json-file context-file (ai-common--plist-to-alist context)))
+     ;; Handle other formats
+     (t
+      (ai-request-audit--save-json-file context-file context)))))
 
 (defun ai-request-audit--save-request (project-root request-id request-data)
   "Save REQUEST-DATA for REQUEST-ID in PROJECT-ROOT as plain text."
@@ -376,14 +403,32 @@ Returns the cleaned up index."
     ;; Save updated index
     (ai-request-audit--save-updated-index project-root index)))
 
+(defun ai-request-audit--extract-command-from-context (context)
+  "Extract command name from CONTEXT (either ai-execution-context struct or plist)."
+  (cond
+   ;; Handle ai-execution-context struct
+   ((ai-execution-context-p context)
+    (when-let ((ai-command (ai-structs--get-execution-context-ai-command context)))
+      (ai-structs--get-command-name ai-command)))
+   ;; Handle plist format (backward compatibility)
+   ((and (listp context) (keywordp (car context)))
+    (when-let ((command-config (plist-get context :command-config)))
+      (or (plist-get command-config :command)
+          (plist-get command-config :action))))
+   ;; Default case
+   (t (format "%s" context))))
+
 (defun ai-request-audit-start-request (request-id command model context)
   "Start auditing a new request with REQUEST-ID, COMMAND, MODEL, and CONTEXT.
-REQUEST-ID should be a unique identifier for the request."
+REQUEST-ID should be a unique identifier for the request.
+CONTEXT can be either an ai-execution-context struct or a plist for backward compatibility."
   (when ai-request-audit-enabled
     (ai-logging--message 'debug "request-audit" "Starting audit for request %s" request-id)
     (when-let ((project-root (ai-project--get-project-root)))
       (ai-request-audit--ensure-audit-directory project-root)
-      (let* ((metadata (ai-request-audit--create-request-metadata request-id command model)))
+      ;; Extract actual command name from context if command is nil
+      (let* ((actual-command (or command (ai-request-audit--extract-command-from-context context)))
+             (metadata (ai-request-audit--create-request-metadata request-id actual-command model)))
 
         ;; Ensure request directory exists
         (ai-request-audit--ensure-request-directory project-root request-id)
@@ -391,6 +436,17 @@ REQUEST-ID should be a unique identifier for the request."
         ;; Save initial metadata
         (ai-request-audit--save-context project-root request-id context)
         (ai-request-audit--save-model-config project-root request-id model)
+
+        ;; Save command config if available in context
+        (when-let ((command-config (cond
+                                   ;; From ai-execution-context
+                                   ((ai-execution-context-p context)
+                                    (ai-execution-context-command-config context))
+                                   ;; From plist (backward compatibility)
+                                   ((and (listp context) (keywordp (car context)))
+                                    (plist-get context :command-config))
+                                   (t nil))))
+          (ai-request-audit--save-command-config project-root request-id command-config))
 
         ;; Save metadata file
         (let* ((request-dir (ai-request-audit--get-request-directory project-root request-id))

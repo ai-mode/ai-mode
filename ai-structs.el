@@ -99,6 +99,47 @@
   reg-end-marker           ; Marker at region end (if region active)
   )
 
+(cl-defstruct ai-response-buffer-context
+  ;; Execution context reference
+  execution-context        ; The original execution context (ai-execution-context struct)
+
+  ;; Response data
+  response-content         ; The AI response content
+  usage-stats              ; Usage statistics if available
+  timestamp                ; When the response was created
+  )
+
+(cl-defstruct ai-execution-context
+  ;; Core identification
+  request-id             ; Unique identifier for this execution context
+  timestamp              ; When the context was created
+
+  ;; Command and model information
+  ai-command             ; The ai-command struct used for this execution
+  model                  ; Model information used for the request
+  command-config         ; Command configuration (plist for backward compatibility)
+
+  ;; Context data
+  messages               ; List of prepared messages for AI model
+  buffer-state           ; Buffer state snapshot at time of context creation
+  full-context           ; Combined context data (completion, buffer, model contexts)
+
+  ;; Execution configuration
+  preceding-context-size ; Preceding context size used
+  following-context-size ; Following context size used
+  external-contexts      ; External contexts provided
+
+  ;; Source buffer information
+  source-buffer          ; Original buffer where context was created
+  source-buffer-name     ; Buffer name (for identification if buffer becomes invalid)
+  source-file-path       ; File path of source buffer (if any)
+
+  ;; Status and metadata
+  created-at             ; Creation timestamp
+  last-used-at           ; Last usage timestamp
+  usage-count            ; Number of times this context has been used
+  )
+
 ;; Helper functions for working with ai-command structs
 
 (defun ai-structs--get-command-name (ai-command)
@@ -302,6 +343,152 @@ Returns a plist with current position data or nil if state is invalid."
       (set-marker marker nil))
     (when-let ((marker (ai-buffer-state-reg-end-marker buffer-state)))
       (set-marker marker nil))))
+
+;; Helper functions for response buffer context
+
+(defun ai-structs--create-response-buffer-context (execution-context response-content usage-stats)
+  "Create an ai-response-buffer-context struct with provided parameters.
+EXECUTION-CONTEXT is the original execution context (ai-execution-context struct).
+RESPONSE-CONTENT is the AI response content.
+USAGE-STATS are usage statistics if available."
+  (make-ai-response-buffer-context
+   :execution-context execution-context
+   :response-content response-content
+   :usage-stats usage-stats
+   :timestamp (current-time)))
+
+(defvar-local ai-structs--buffer-response-context nil
+  "Buffer-local variable storing response buffer context.")
+
+(defun ai-structs--get-response-buffer-context (&optional buffer)
+  "Get response buffer context from BUFFER's local variables.
+If BUFFER is nil, use current buffer."
+  (with-current-buffer (or buffer (current-buffer))
+    ai-structs--buffer-response-context))
+
+(defun ai-structs--set-response-buffer-context (context &optional buffer)
+  "Set response buffer CONTEXT in BUFFER's local variables.
+If BUFFER is nil, use current buffer."
+  (with-current-buffer (or buffer (current-buffer))
+    (setq-local ai-structs--buffer-response-context context)))
+
+(defun ai-structs--response-buffer-context-p (buffer)
+  "Check if BUFFER has response buffer context."
+  (not (null (ai-structs--get-response-buffer-context buffer))))
+
+(defun ai-structs--clear-response-buffer-context (&optional buffer)
+  "Clear response buffer context from BUFFER.
+If BUFFER is nil, use current buffer."
+  (with-current-buffer (or buffer (current-buffer))
+    (setq-local ai-structs--buffer-response-context nil)))
+
+(defun ai-structs--get-response-original-buffer (context)
+  "Get original buffer from response buffer CONTEXT.
+Returns the buffer object or nil if buffer is no longer valid."
+  (when (and context (ai-response-buffer-context-p context))
+    (when-let ((exec-context (ai-response-buffer-context-execution-context context)))
+      (ai-structs--get-execution-context-source-buffer exec-context))))
+
+(defun ai-structs--get-response-request-id (context)
+  "Get request ID from response buffer CONTEXT."
+  (when (and context (ai-response-buffer-context-p context))
+    (when-let ((exec-context (ai-response-buffer-context-execution-context context)))
+      (ai-execution-context-request-id exec-context))))
+
+(defun ai-structs--get-response-timestamp (context)
+  "Get timestamp from response buffer CONTEXT."
+  (when (and context (ai-response-buffer-context-p context))
+    (ai-response-buffer-context-timestamp context)))
+
+(defun ai-structs--get-response-model-info (context)
+  "Get model information from response buffer CONTEXT."
+  (when (and context (ai-response-buffer-context-p context))
+    (when-let ((exec-context (ai-response-buffer-context-execution-context context)))
+      (ai-execution-context-model exec-context))))
+
+(defun ai-structs--get-response-execution-context (context)
+  "Get execution context from response buffer CONTEXT."
+  (when (and context (ai-response-buffer-context-p context))
+    (ai-response-buffer-context-execution-context context)))
+
+;; Helper functions for execution context
+
+(defun ai-structs--create-execution-context (request-id ai-command model messages buffer-state full-context &optional external-contexts preceding-context-size following-context-size)
+  "Create an ai-execution-context struct with provided parameters.
+REQUEST-ID is the unique identifier for this execution.
+AI-COMMAND is the ai-command struct used.
+MODEL is the model information.
+MESSAGES are the prepared messages for AI.
+BUFFER-STATE is the buffer state snapshot.
+FULL-CONTEXT is the combined context data.
+EXTERNAL-CONTEXTS are any external contexts provided.
+PRECEDING-CONTEXT-SIZE and FOLLOWING-CONTEXT-SIZE are context sizing used."
+  (let ((current-time (current-time))
+        (source-buffer (current-buffer)))
+    (make-ai-execution-context
+     :request-id request-id
+     :timestamp current-time
+     :ai-command ai-command
+     :model model
+     :command-config (ai-structs--get-command-config ai-command)
+     :messages messages
+     :buffer-state buffer-state
+     :full-context full-context
+     :preceding-context-size preceding-context-size
+     :following-context-size following-context-size
+     :external-contexts external-contexts
+     :source-buffer source-buffer
+     :source-buffer-name (buffer-name source-buffer)
+     :source-file-path (buffer-file-name source-buffer)
+     :created-at current-time
+     :last-used-at current-time
+     :usage-count 0)))
+
+(defun ai-structs--execution-context-valid-p (execution-context)
+  "Check if EXECUTION-CONTEXT is still valid (source buffer exists and accessible)."
+  (and execution-context
+       (ai-execution-context-p execution-context)
+       (buffer-live-p (ai-execution-context-source-buffer execution-context))))
+
+(defun ai-structs--update-execution-context-usage (execution-context)
+  "Update usage statistics for EXECUTION-CONTEXT."
+  (when (and execution-context (ai-execution-context-p execution-context))
+    (setf (ai-execution-context-last-used-at execution-context) (current-time))
+    (setf (ai-execution-context-usage-count execution-context)
+          (1+ (ai-execution-context-usage-count execution-context)))))
+
+(defun ai-structs--get-execution-context-request-id (execution-context)
+  "Get request ID from EXECUTION-CONTEXT."
+  (when (and execution-context (ai-execution-context-p execution-context))
+    (ai-execution-context-request-id execution-context)))
+
+(defun ai-structs--get-execution-context-messages (execution-context)
+  "Get messages from EXECUTION-CONTEXT."
+  (when (and execution-context (ai-execution-context-p execution-context))
+    (ai-execution-context-messages execution-context)))
+
+(defun ai-structs--get-execution-context-model (execution-context)
+  "Get model information from EXECUTION-CONTEXT."
+  (when (and execution-context (ai-execution-context-p execution-context))
+    (ai-execution-context-model execution-context)))
+
+(defun ai-structs--get-execution-context-ai-command (execution-context)
+  "Get ai-command struct from EXECUTION-CONTEXT."
+  (when (and execution-context (ai-execution-context-p execution-context))
+    (ai-execution-context-ai-command execution-context)))
+
+(defun ai-structs--get-execution-context-buffer-state (execution-context)
+  "Get buffer state from EXECUTION-CONTEXT."
+  (when (and execution-context (ai-execution-context-p execution-context))
+    (ai-execution-context-buffer-state execution-context)))
+
+(defun ai-structs--get-execution-context-source-buffer (execution-context)
+  "Get source buffer from EXECUTION-CONTEXT.
+Returns the buffer object or nil if buffer is no longer valid."
+  (when (and execution-context (ai-execution-context-p execution-context))
+    (let ((buffer (ai-execution-context-source-buffer execution-context)))
+      (when (buffer-live-p buffer)
+        buffer))))
 
 
 (provide 'ai-structs)

@@ -361,54 +361,24 @@ STRATEGY may alter the completion behavior."
            :model execution-model
            :external-contexts external-contexts))
 
-         (execution-backend (map-elt execution-model :execution-backend))
-         (request-id (plist-get execution-context :request-id))
-         (command-name (ai-structs--get-command-canonical-name command-struct))
-
-         ;; Start audit if enabled
-         (audit-request-id (ai-request-audit-start-request
-                            request-id
-                            command-name
-                            execution-model
-                            execution-context))
-
-         (success-callback (lambda (candidates &optional usage-stats)
+         (success-callback (lambda (context candidates &optional usage-stats)
                              (with-current-buffer buffer
                                (ai-logging--message 'info  "completion" "Received %d candidates" (length candidates))
-                               (ai-request-audit-complete-request audit-request-id candidates usage-stats)
                                (ai-completions--add-candidates candidates)
                                (ai-completions--show-candidate))))
-         (fail-callback (lambda (request-data response-error)
+         (fail-callback (lambda (context response-error)
                           (with-current-buffer buffer
                             (ai-logging--message 'error  "completion" "Request failed: %s"
                                                         (ai-common--get-text-content-from-struct response-error))
-                            (ai-request-audit-fail-request audit-request-id response-error)
                             ;; Use ai-telemetry--log-and-error for structured error logging
                             (ai-telemetry--log-and-error (format "AI completion: Response error: %s"
                                                                 (ai-common--get-text-content-from-struct response-error)))))))
 
-    (when (not execution-backend)
-      (error (message "Model execution backend not defined"))
-      (ai-completions--abort))
-
-    (ai-logging--message 'info  "completion" "Executing backend for command \"%s\" with model \"%s\""
-                                (ai-utils-escape-format-specifiers command-name) (map-elt execution-model :name))
-
-    ;; Write context to prompt buffer for debugging/auditing
-    (ai-telemetry-write-context-to-prompt-buffer (plist-get execution-context :messages))
-
-    ;; Start progress indicator
-    (ai-progress-start-single-request (format "Completing with %s" (map-elt execution-model :name)) buffer)
-
-    (funcall execution-backend
-             execution-context
-             execution-model
-             :request-id audit-request-id
-             :success-callback (ai-execution--progress-wrap-callback success-callback buffer)
-             :fail-callback (ai-execution--progress-wrap-callback fail-callback buffer)
-             :update-usage-callback (ai-usage-create-usage-statistics-callback)
-             :enable-caching (bound-and-true-p ai-execution--prompt-caching-enabled)
-             :extra-params execution-context)))
+    ;; Execute using ai-execution module with new callback signature
+    (ai-execution--execute-context execution-context
+                                   success-callback
+                                   :fail-callback fail-callback
+                                   :model execution-model)))
 
 (defun ai-completions--get-current-buffer-clone ()
   "Retrieve or create a clone of the current buffer."

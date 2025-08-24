@@ -36,6 +36,7 @@
 ;; - Syntax highlighting and language support in chat
 ;; - Extensive customization options for prompts and context handling
 ;; - Integrated telemetry, logging, and request auditing
+;; - Context-based chat creation from response buffers and other sources
 
 ;;; Code:
 
@@ -53,6 +54,8 @@
 (require 'ai-telemetry)
 (require 'ai-logging)
 (require 'ai-request-audit)
+(require 'ai-structs)
+(require 'markdown-mode)
 
 ;;; Group definition
 
@@ -482,21 +485,7 @@ If called from a chat buffer, return the current buffer to support multi-chat se
 
 (defun ai-chat--create-usage-statistics-callback ()
   "Create a callback function for displaying usage statistics in AI chat."
-  (if (fboundp 'ai-usage-create-usage-statistics-callback)
-      (ai-usage-create-usage-statistics-callback)
-    ;; Fallback implementation if ai-usage function is not available
-    (lambda (usage-stats)
-      (let* ((input-tokens (plist-get usage-stats :input-tokens))
-             (output-tokens (plist-get usage-stats :output-tokens))
-             (total-tokens (plist-get usage-stats :total-tokens))
-             (input-tokens-write-cache (plist-get usage-stats :input-tokens-write-cache))
-             (input-tokens-read-cache (plist-get usage-stats :input-tokens-read-cache))
-             (message-str (format "AI Chat Usage: Input=%s, Output=%s, Total=%s%s%s"
-                                  (or input-tokens "?")
-                                  (or output-tokens "?")
-                                  (or total-tokens "?")
-                                  (if input-tokens-write-cache (format ", Cache Write=%s" input-tokens-write-cache) "")
-                                  (if input-tokens-read-cache (format ", Cache Read=%s" input-tokens-read-cache) ""))))))))
+  (ai-usage-create-usage-statistics-callback))
 
 ;;; Buffer-bound chat helpers
 
@@ -546,7 +535,7 @@ If UNIQUE-SUFFIX is non-nil, append as '#UNIQUE-SUFFIX'."
                       :session-id (with-current-buffer chat-buffer ai-chat-current-session-id)
                       :created-at (with-current-buffer chat-buffer ai-chat-current-session-start-time)
                       :title (with-current-buffer chat-buffer (or ai-chat--display-name (buffer-name chat-buffer))))))
-    ;; Проверить, не зарегистрирован ли уже этот буфер
+    ;; Check if this buffer is not already registered
     (unless (cl-find chat-buffer list :key (lambda (entry) (plist-get entry :chat-buffer)) :test #'eq)
       (puthash key (append list (list entry)) ai-chat--buffer->sessions))))
 
@@ -709,11 +698,16 @@ This includes context pool, global memory, buffer-bound prompts, and project con
 
     chat-buffer))
 
-(cl-defun ai-chat--find-or-create-session-for-buffer (source-buffer &key force-new initial-strategy prefer-new)
+(cl-defun ai-chat--find-or-create-session-for-buffer (source-buffer &key force-new initial-strategy prefer-new context-source)
   "Find existing or create new chat session bound to SOURCE-BUFFER.
 When FORCE-NEW is non-nil, always create a new session.
 When PREFER-NEW is non-nil, create new session unless user explicitly chooses existing.
-INITIAL-STRATEGY controls startup context application."
+INITIAL-STRATEGY controls startup context application.
+CONTEXT-SOURCE can be:
+- nil: normal behavior
+- response-buffer-context struct: create chat from response context
+- execution-context struct: create chat from execution context
+- other context types: extensible for future context sources"
   (if (not ai-chat-per-buffer-enabled)
       (progn (ai-chat) (ai-chat--buffer))
     (let* ((sessions (ai-chat--cleanup-dead-sessions
@@ -731,16 +725,304 @@ INITIAL-STRATEGY controls startup context application."
                                 (if ai-chat-allow-multiple-sessions-per-buffer
                                     (y-or-n-p "Create new chat session? (n to choose existing) ")
                                   nil))
-                               (t t))))
+                               (t t)))
+           (chat-buffer (if should-create-new
+                            (ai-chat--create-new-session-for-buffer source-buffer initial-strategy)
+                          ;; User wants to use existing session
+                          (let ((selected-buffer (if (= (length sessions) 1)
+                                                     (plist-get (car sessions) :chat-buffer)
+                                                   (ai-chat--choose-session-for-key source-buffer))))
+                            (or selected-buffer
+                                (ai-chat--create-new-session-for-buffer source-buffer initial-strategy))))))
 
-      (if should-create-new
-          (ai-chat--create-new-session-for-buffer source-buffer initial-strategy)
-        ;; Пользователь хочет использовать существующую сессию
-        (let ((selected-buffer (if (= (length sessions) 1)
-                                   (plist-get (car sessions) :chat-buffer)
-                                 (ai-chat--choose-session-for-key source-buffer))))
-          (or selected-buffer
-              (ai-chat--create-new-session-for-buffer source-buffer initial-strategy)))))))
+
+      ;; Apply context source if provided
+      (when context-source
+        (ai-chat--integrate-context-source chat-buffer context-source))
+
+      chat-buffer)))
+
+;;; Context-based chat creation functions
+
+(defun ai-chat--integrate-context-source (chat-buffer context-source)
+  "Integrate CONTEXT-SOURCE into CHAT-BUFFER.
+Handles different types of context sources and integrates them appropriately."
+  (ai-logging--message 'debug "chat" "Integrating context source - buffer: %s, type: %s"
+                       (buffer-name chat-buffer)
+                       (cond
+                        ((and (listp context-source)
+                              (eq (plist-get context-source :type) 'response-buffer-context))
+                         'response-buffer-context)
+                        ((ai-execution-context-p context-source) 'execution-context)
+                        ((ai-response-buffer-context-p context-source) 'ai-response-buffer-context)
+                        ((and (listp context-source)
+                              (plist-get context-source :type))
+                         (format "generic-%s" (plist-get context-source :type)))
+                        ((listp context-source) 'context-list)
+                        (t 'unknown)))
+
+  (cond
+   ;; Response buffer context integration
+   ((and (listp context-source)
+         (eq (plist-get context-source :type) 'response-buffer-context))
+    (ai-logging--message 'debug "chat" "Processing response-buffer-context with keys: %s"
+                         (when (listp context-source) (mapcar (lambda (x) (when (keywordp x) x)) context-source)))
+    (ai-chat--integrate-response-buffer-context chat-buffer context-source))
+
+   ;; Execution context integration
+   ((ai-execution-context-p context-source)
+    (ai-logging--message 'debug "chat" "Processing execution-context - request-id: %s, model: %s"
+                         (ai-structs--get-execution-context-request-id context-source)
+                         (when-let ((model (ai-structs--get-execution-context-model context-source)))
+                           (map-elt model :name)))
+    (ai-chat--integrate-execution-context chat-buffer context-source))
+
+   ;; AI response buffer context integration
+   ((ai-response-buffer-context-p context-source)
+    (ai-logging--message 'debug "chat" "Processing ai-response-buffer-context - timestamp: %s"
+                         (ai-structs--get-response-timestamp context-source))
+    (ai-chat--integrate-ai-response-buffer-context chat-buffer context-source))
+
+   ;; Generic context integration
+   ((and (listp context-source)
+         (plist-get context-source :type))
+    (ai-logging--message 'debug "chat" "Processing generic context - type: %s, content-length: %s"
+                         (plist-get context-source :type)
+                         (when-let ((content (plist-get context-source :content)))
+                           (if (stringp content) (length content) "non-string")))
+    (with-current-buffer chat-buffer
+      (ai-chat--add-entry-to-history context-source)
+      (ai-chat--restore-chat-display)))
+
+   ;; List of contexts
+   ((listp context-source)
+    (ai-logging--message 'debug "chat" "Processing context list with %d items"
+                         (length context-source))
+    (with-current-buffer chat-buffer
+      (dolist (item context-source)
+        (ai-chat--add-entry-to-history item))
+      (ai-chat--restore-chat-display)))
+
+   (t
+    (ai-logging--message 'warn "chat" "Unknown context source type: %s" context-source))))
+
+(defun ai-chat--integrate-response-buffer-context (chat-buffer response-context)
+  "Integrate RESPONSE-CONTEXT into CHAT-BUFFER history.
+
+Adds both the original request and the AI response to the chat history
+to provide seamless continuation."
+  (with-current-buffer chat-buffer
+    ;; Extract original messages from context
+    (when-let ((original-messages (plist-get response-context :original-messages)))
+      (if (listp original-messages)
+          (dolist (msg original-messages)
+            (ai-chat--add-entry-to-history msg))
+        (ai-chat--add-entry-to-history original-messages)))
+
+    ;; Extract and add the original user input if available
+    (when-let ((original-input (plist-get response-context :original-input)))
+      (ai-chat--add-entry-to-history
+       (ai-common--make-typed-struct original-input 'user-input 'response-context)))
+
+    ;; Extract and add the AI response
+    (when-let ((ai-response (plist-get response-context :ai-response)))
+      (ai-chat--add-entry-to-history
+       (ai-common--make-typed-struct ai-response 'assistant-response 'response-context)))
+
+    ;; Extract and add any additional context
+    (when-let ((additional-context (plist-get response-context :additional-context)))
+      (if (listp additional-context)
+          (dolist (ctx additional-context)
+            (ai-chat--add-entry-to-history ctx))
+        (ai-chat--add-entry-to-history additional-context)))
+
+    ;; Restore chat display to show the integrated context
+    (ai-chat--restore-chat-display)))
+
+(defun ai-chat--extract-user-command-from-messages (messages)
+  "Extract user command or input from execution context MESSAGES.
+Returns the first user input message found, or nil if none exists."
+  (cl-find-if (lambda (msg)
+                (let ((type (ai-chat--get-struct-type msg)))
+                  (or (eq type 'user-input)
+                      (eq type 'config-command))))
+              messages))
+
+(defun ai-chat--integrate-execution-context (chat-buffer execution-context)
+  "Integrate EXECUTION-CONTEXT (plist format) into CHAT-BUFFER.
+
+Extracts all relevant context from the execution context and adds it to the chat history,
+including the original request messages and any available AI response."
+  (message "ai-chat--integrate-execution-context")
+
+  (with-current-buffer chat-buffer
+    ;; Get messages from execution context
+
+    (when-let ((messages (ai-structs--get-execution-context-messages execution-context)))
+      ;; Add all context messages to history, filtering out empty ones
+      (dolist (msg messages)
+        (unless (ai-context-management--empty-message-p msg)
+          (ai-chat--add-entry-to-history msg)))
+
+      ;; If there's a user command in the messages, extract and add it specifically
+      (when-let ((user-command (ai-chat--extract-user-command-from-messages messages)))
+        (let ((command-content (ai-chat--get-text-content-from-struct user-command)))
+          (when (and command-content (not (string-empty-p (string-trim command-content))))
+            (ai-chat--add-entry-to-history
+             (ai-common--make-typed-struct command-content 'user-input 'execution-context))))))
+
+    ;; Restore chat display to show the integrated context
+    (ai-chat--restore-chat-display)))
+
+(defun ai-chat--integrate-ai-response-buffer-context (chat-buffer ai-response-context)
+  "Integrate ai-response-buffer-context AI-RESPONSE-CONTEXT into CHAT-BUFFER.
+
+Extracts the original execution context and any AI response, adding both to the chat history."
+  (with-current-buffer chat-buffer
+    ;; Get the original execution context
+    (when-let ((execution-context (ai-response-buffer-context-execution-context ai-response-context)))
+      ;; First, integrate all the original execution context
+      (ai-chat--integrate-execution-context chat-buffer execution-context))
+
+    ;; Get the AI response content
+    (when-let ((response-content (ai-response-buffer-context-response-content ai-response-context)))
+      (unless (string-empty-p (string-trim response-content))
+        (ai-chat--add-entry-to-history
+         (ai-common--make-typed-struct response-content 'assistant-response 'ai-response-context))))
+
+    ;; Get usage statistics if available
+    (when-let ((usage-stats (ai-response-buffer-context-usage-stats ai-response-context)))
+      (let ((usage-info (format "Usage: %s" (prin1-to-string usage-stats))))
+        (ai-chat--add-entry-to-history
+         (ai-common--make-typed-struct usage-info 'additional-context 'usage-statistics))))
+
+    ;; Restore chat display to show the integrated context
+    (ai-chat--restore-chat-display)))
+
+(defun ai-chat-create-from-execution-context (execution-context)
+  "Create a new chat session from ai-execution-context EXECUTION-CONTEXT.
+
+The context includes the original request, all context messages, and execution metadata.
+This allows creating a chat session that continues from the original execution context."
+  (let* ((source-buffer (ai-structs--get-execution-context-source-buffer execution-context))
+         (fallback-buffer (current-buffer))
+         (actual-source-buffer (or source-buffer fallback-buffer))
+         (chat-buffer (ai-chat--find-or-create-session-for-buffer
+                      actual-source-buffer
+                      :force-new t
+                      :context-source execution-context)))
+    (when chat-buffer
+      (ai-logging--message 'info "chat" "Created chat session from execution context with request ID: %s"
+               (ai-structs--get-execution-context-request-id execution-context))
+      chat-buffer)))
+
+(defun ai-chat-create-from-response-buffer-context (response-buffer-context)
+  "Create a new chat session from RESPONSE-BUFFER-CONTEXT.
+
+The context includes the original request, response, and all relevant metadata.
+This allows continuing the conversation from where the response left off."
+  (let* ((source-buffer (or (plist-get response-buffer-context :source-buffer)
+                           (current-buffer)))
+         (chat-buffer (ai-chat--find-or-create-session-for-buffer
+                      source-buffer
+                      :force-new t
+                      :context-source response-buffer-context)))
+    (when chat-buffer
+      (ai-logging--message 'info "chat" "Created chat session from response buffer context")
+      chat-buffer)))
+
+(defun ai-chat-create-from-ai-response-buffer-context (ai-response-context)
+  "Create a new chat session from ai-response-buffer-context AI-RESPONSE-CONTEXT.
+
+Extracts both the original execution context and AI response to create a complete chat history."
+  (when-let ((execution-context (ai-response-buffer-context-execution-context ai-response-context)))
+    (let* ((source-buffer (ai-structs--get-execution-context-source-buffer execution-context))
+           (fallback-buffer (current-buffer))
+           (actual-source-buffer (or source-buffer fallback-buffer))
+           (chat-buffer (ai-chat--find-or-create-session-for-buffer
+                        actual-source-buffer
+                        :force-new t
+                        :initial-strategy 'none  ; Don't apply additional startup context
+                        :context-source ai-response-context)))
+      (when chat-buffer
+        (ai-logging--message 'info "chat" "Created chat session from AI response buffer context")
+        chat-buffer))))
+
+(defun ai-chat-create-from-buffer-context (buffer)
+  "Create a new chat session from context stored in BUFFER.
+
+This is a generic function that can work with any buffer that has
+stored AI context information."
+  (with-current-buffer buffer
+    ;; Try to get AI response buffer context first
+    (let ((context (ai-structs--get-response-buffer-context)))
+      (if context
+          (ai-chat-create-from-ai-response-buffer-context context)
+        ;; Fallback: create basic chat with buffer as source
+        (let ((chat-buffer (ai-chat--find-or-create-session-for-buffer buffer :force-new t)))
+          (ai-logging--message 'info "chat" "Created chat session from buffer context (no specific AI context found)")
+          chat-buffer)))))
+
+;;; Public API for context-based chat creation
+
+;;;###autoload
+(defun ai-chat-open-from-response-buffer ()
+  "Open chat from current buffer if it's an AI response buffer.
+
+Automatically detects AI response buffer context and creates
+a new chat session with that context."
+  (interactive)
+  (let ((context (ai-structs--get-response-buffer-context)))
+    (if context
+        (let ((chat-buffer (ai-chat-create-from-ai-response-buffer-context context)))
+          (when chat-buffer
+            (pop-to-buffer-same-window chat-buffer)
+            (message "Chat session created from response buffer context")))
+      (user-error "Current buffer is not an AI response buffer or has no context"))))
+
+;;;###autoload
+(defun ai-chat-open-with-context (context-source)
+  "Generic function to open chat with various context sources.
+
+CONTEXT-SOURCE can be any supported context type."
+  (interactive "P")
+  (let ((context (cond
+                 ;; If prefix argument, try current buffer as response buffer
+                 (context-source
+                  (ai-structs--get-response-buffer-context))
+                 ;; Otherwise, ask user for context type
+                 (t (ai-chat--read-context-source)))))
+    (if context
+        (let* ((source-buffer (or (plist-get context :source-buffer) (current-buffer)))
+               (chat-buffer (ai-chat--find-or-create-session-for-buffer
+                           source-buffer
+                           :force-new t
+                           :context-source context)))
+          (when chat-buffer
+            (pop-to-buffer-same-window chat-buffer)
+            (message "Chat session created with context")))
+      (user-error "No context source available"))))
+
+(defun ai-chat--read-context-source ()
+  "Interactively read context source from user."
+  (let* ((options '(("response-buffer" . response-buffer)
+                    ("current-buffer" . current-buffer)
+                    ("context-pool" . context-pool)
+                    ("region" . region)))
+         (choice (completing-read "Context source: " (mapcar #'car options) nil t))
+         (source-type (cdr (assoc choice options))))
+    (pcase source-type
+      ('response-buffer
+       (ai-structs--get-response-buffer-context))
+      ('current-buffer
+       (ai-common--make-file-context-from-buffer))
+      ('context-pool
+       (ai-context-management--get-context-pool))
+      ('region
+       (if (use-region-p)
+           (ai-common--make-snippet-from-region 'selection)
+         (user-error "No active region")))
+      (_ nil))))
 
 ;;; Context providers registry
 
@@ -803,9 +1085,8 @@ Returns a flattened list of all context elements provided by registered provider
   "Log chat interaction with INPUT-STRING and MODEL-NAME."
   (when ai-telemetry-enabled
     (ai-logging--message 'info  "chat" "User input to %s: %s" model-name (substring input-string 0 (min 100 (length input-string))))
-    (when (fboundp 'ai-telemetry-write-context-to-prompt-buffer)
-      (let ((context-messages (list (ai-chat--make-typed-struct input-string 'user-input))))
-        (ai-telemetry-write-context-to-prompt-buffer context-messages)))))
+    (let ((context-messages (list (ai-chat--make-typed-struct input-string 'user-input))))
+      (ai-telemetry-write-context-to-prompt-buffer context-messages))))
 
 (defun ai-chat--log-chat-response (messages model-name)
   "Log chat response MESSAGES from MODEL-NAME."
@@ -883,13 +1164,15 @@ Returns a flattened list of all context elements provided by registered provider
                                   (setq ai-chat--progress-counter (1+ ai-chat--progress-counter))
                                   (ai-chat-mode-update-mode-line-info)))))))))
 
-(defun ai-chat--progress-wrap-callback (original-callback &optional buffer)
-  "Wrap ORIGINAL-CALLBACK to stop progress indicator when called in specified BUFFER."
+(defun ai-chat--progress-wrap-callback (original-callback context &optional buffer)
+  "Wrap ORIGINAL-CALLBACK to stop progress indicator when called in specified BUFFER.
+CONTEXT is the original execution context passed as first parameter."
   (let ((target-buffer (or buffer (current-buffer))))
     (lambda (&rest args)
       (ai-chat--progress-stop target-buffer)
       (when original-callback
-        (apply original-callback args)))))
+        ;; Pass context as first parameter, then remaining arguments
+        (apply original-callback context args)))))
 
 ;;; Font lock functions
 
@@ -960,6 +1243,30 @@ SIZE is the number of historical messages to include. If SIZE is less than or eq
           (seq-subseq ai-chat-buffer-history (* -1 size))))
     (error (list))))
 
+
+(defun ai-chat--create-default-chat-command (action-type)
+  "Create default chat command struct for ACTION-TYPE."
+  (let* ((behavior (make-ai-command-behavior
+                    :user-input t    ; Chat always requires user input
+                    :action-type "chat"
+                    :result-action 'chat
+                    :needs-buffer-context nil
+                    :needs-project-context nil
+                    :needs-global-context nil
+                    :preceding-context-size nil
+                    :following-context-size nil))
+         (priority 500))            ; Lower priority for chat commands
+    (make-ai-command
+     :name action-type
+     :canonical-name action-type
+     :base-name action-type
+     :instructions nil
+     :behavior behavior
+     :source :chat
+     :location :dynamic
+     :file-path nil
+     :priority priority)))
+
 (cl-defun ai-chat--get-execution-context ()
   "Construct the execution context for the current chat interaction."
   (let* ((buffer (current-buffer))
@@ -968,13 +1275,17 @@ SIZE is the number of historical messages to include. If SIZE is less than or eq
          (model-context (ai-context-management--get-model-context model))
          (full-context (append buffer-context model-context))
          (request-id (ai-common--generate-request-id))
+         (buffer-state (ai-structs--create-buffer-state buffer))
+
+         ;; Create dynamic chat command
+         (chat-command (ai-chat--create-default-chat-command "chat"))
 
          ;; Create context data as alist
          (context-data `((buffer-context . ,buffer-context)
                          (full-context . ,full-context)))
 
          ;; Get contexts from providers
-         (provider-contexts (ai-chat--call-providers request-id buffer '(:action "chat") model context-data))
+         (provider-contexts (ai-chat--call-providers request-id buffer chat-command model context-data))
 
          ;; Filter empty messages
          (messages (ai-context-management--filter-non-empty-content provider-contexts)))
@@ -983,7 +1294,13 @@ SIZE is the number of historical messages to include. If SIZE is less than or eq
     (when ai-telemetry-enabled
       (ai-telemetry-write-context-to-prompt-buffer messages))
 
-    `(:messages ,messages :model-context ,model :request-id ,request-id :command-config (:action "chat"))))
+    (ai-structs--create-execution-context
+     request-id
+     chat-command
+     model
+     messages
+     buffer-state
+     full-context)))
 
 (defun ai-chat--add-entry-to-history (input &optional message-type)
   "Append INPUT to the AI chat buffer history.
@@ -993,6 +1310,9 @@ MESSAGE-TYPE specifies the type of message and is optional."
                         (plist-get input :type))
                    input
                  (ai-chat--make-typed-struct (ai-chat--clear-text-properties input) message-type))))
+    (ai-logging--message 'debug "chat" "Added message to history - type: %s, content length: %d"
+                        (or message-type (plist-get entry :type) "unknown")
+                        (if (plist-get entry :content) (length (plist-get entry :content)) 0))
     (setq-local ai-chat-buffer-history (append ai-chat-buffer-history `(,entry)))))
 
 ;;; Context providers
@@ -1260,8 +1580,9 @@ MESSAGE-TYPE specifies the type of message and is optional."
 
 ;;; Request handling
 
-(defun ai-chat--request-fail-callback (request-data error-message)
-  "Handle request failures and display ERROR-MESSAGE."
+(defun ai-chat--request-fail-callback (context error-message)
+  "Handle request failures and display ERROR-MESSAGE.
+CONTEXT is the original execution context passed as first parameter."
   (let ((content (ai-chat--get-text-content-from-struct error-message))
         (model (ai-chat--get-current-model))
         (chat-buffer (current-buffer)))
@@ -1273,8 +1594,9 @@ MESSAGE-TYPE specifies the type of message and is optional."
     (setq ai-chat--busy nil)))
 
 
-(defun ai-chat--request-success-callback (messages &optional usage-stats)
-  "Handle successful requests by processing MESSAGES with optional USAGE-STATS."
+(defun ai-chat--request-success-callback (context messages &optional usage-stats)
+  "Handle successful requests by processing MESSAGES with optional USAGE-STATS.
+CONTEXT is the original execution context passed as first parameter."
   (condition-case-unless-debug processing-error
       (progn
         (setq ai-chat--busy nil)
@@ -1407,34 +1729,33 @@ TARGET-BUFFER specifies which chat buffer to write to."
                      (execution-backend (map-elt execution-model :execution-backend))
                      (context (ai-chat--get-execution-context))
                      (current-buffer (current-buffer))
-                     (request-id (plist-get context :request-id))
-                     (command-config (plist-get context :command-config))
-                     (command-from-config (or (plist-get command-config :command)
-                                              (plist-get command-config :action)
-                                              "chat"))
+                     (request-id (ai-structs--get-execution-context-request-id context))
+                     (ai-command-struct (ai-structs--get-execution-context-ai-command context))
 
                      ;; Start audit if enabled
                      (audit-request-id (ai-request-audit-start-request
                                         request-id
-                                        command-from-config
+                                        ai-command-struct
                                         execution-model
                                         context))
                      (chat-buffer (current-buffer)) ; Remember current chat buffer
 
                      (wrapped-success-callback
                       (ai-chat--progress-wrap-callback
-                       (lambda (messages &optional usage-stats)
+                       (lambda (context messages &optional usage-stats)
                          (with-current-buffer chat-buffer ; Use correct buffer
                            (ai-request-audit-complete-request audit-request-id messages usage-stats)
-                           (ai-chat--request-success-callback messages usage-stats)))
+                           (ai-chat--request-success-callback context messages usage-stats)))
+                       context
                        chat-buffer))
 
                      (wrapped-fail-callback
                       (ai-chat--progress-wrap-callback
-                       (lambda (request-data error-message)
+                       (lambda (context error-message)
                          (with-current-buffer chat-buffer ; Use correct buffer
                            (ai-request-audit-fail-request audit-request-id error-message)
-                           (ai-chat--request-fail-callback request-data error-message)))
+                           (ai-chat--request-fail-callback context error-message)))
+                       context
                        chat-buffer)))
 
                 ;; Log the interaction

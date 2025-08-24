@@ -35,11 +35,31 @@
 (require 'ai-usage)
 (require 'ai-progress)
 (require 'ai-request-audit)
+(require 'ai-structs)
 
 
-(defun ai-execution--progress-wrap-callback (callback &optional target-buffer)
-  "Wrap CALLBACK to stop appropriate progress type in TARGET-BUFFER when called."
-  (ai-progress-wrap-callback callback target-buffer))
+(defun ai-execution--wrap-callback-with-progress-and-audit (callback context request-id callback-type &optional target-buffer)
+  "Wrap CALLBACK with progress stopping and audit handling.
+CONTEXT is the original execution context passed as first parameter.
+REQUEST-ID is the audit request identifier.
+CALLBACK-TYPE should be 'success' or 'fail'.
+TARGET-BUFFER is the buffer where progress should be stopped."
+  (lambda (messages &optional usage-stats)
+    ;; Stop progress first
+    (ai-progress-stop-single-request target-buffer)
+
+    ;; Handle audit
+    (cond
+     ((eq callback-type 'success)
+      (ai-request-audit-complete-request request-id messages usage-stats))
+     ((eq callback-type 'fail)
+      (ai-request-audit-fail-request request-id messages)))
+
+    ;; Call the original callback if provided
+    (when (functionp callback)
+      (if (eq callback-type 'success)
+          (funcall callback context messages usage-stats)
+        (funcall callback context messages)))))
 
 ;; Caching functionality moved from ai-mode.el
 (defcustom ai-execution--prompt-caching-enabled nil
@@ -71,53 +91,37 @@ replace the selected content."
   (message "Replace action patch mode %s"
            (if ai-execution--replace-action-use-patch "enabled" "disabled")))
 
-(defun ai-execution--wrap-callback-with-audit (callback request-id audit-type)
-  "Wrap CALLBACK to complete audit appropriately when called.
-REQUEST-ID is the audit request identifier.
-AUDIT-TYPE should be 'success' or 'fail'."
-  (lambda (&rest args)
-    (cond
-     ((eq audit-type 'success)
-      (let ((response (car args))
-            (usage-stats (cadr args)))
-        (ai-request-audit-complete-request request-id response usage-stats)))
-     ((eq audit-type 'fail)
-      (ai-request-audit-fail-request request-id (car args))))
-    (when (functionp callback)
-      (apply callback args))))
 
 (cl-defun ai-execution-perform-async-backend-query (context success-callback &key
                                                            (fail-callback nil)
                                                            (extra-params nil)
                                                            (model nil))
   "Execute CONTEXT by current backend asynchronously.
-After successful execution, call SUCCESS-CALLBACK. If execution fails, call FAIL-CALLBACK if provided.
+After successful execution, call SUCCESS-CALLBACK with context as first parameter.
+If execution fails, call FAIL-CALLBACK with context as first parameter.
 EXTRA-PARAMS is a list of additional parameters for backend configuration.
 MODEL can optionally specify a specific model to use."
   (let* ((execution-model (if model model (ai-model-management-get-current)))
          (execution-backend (map-elt execution-model :execution-backend))
          (current-buffer (current-buffer))
-         (request-id (plist-get context :request-id))
-         (command-config (plist-get context :command-config))
-         (command (plist-get command-config :command))
+         (request-id (ai-structs--get-execution-context-request-id context))
+         (ai-command-struct (ai-structs--get-execution-context-ai-command context))
 
          ;; Start audit if enabled
          (audit-request-id (ai-request-audit-start-request
                             request-id
-                            command
+                            ai-command-struct
                             execution-model
                             context))
 
-         ;; Wrap callbacks with audit completion
+         ;; Wrap callbacks with progress and audit handling
          (wrapped-success-callback
-          (ai-progress-wrap-callback
-           (ai-execution--wrap-callback-with-audit success-callback audit-request-id 'success)
-           current-buffer))
+          (ai-execution--wrap-callback-with-progress-and-audit
+           success-callback context audit-request-id 'success current-buffer))
 
          (wrapped-fail-callback
-          (ai-progress-wrap-callback
-           (ai-execution--wrap-callback-with-audit fail-callback audit-request-id 'fail)
-           current-buffer)))
+          (ai-execution--wrap-callback-with-progress-and-audit
+           fail-callback context audit-request-id 'fail current-buffer)))
 
     ;; Start single request progress indicator in current buffer
     (ai-progress-start-single-request (format "Processing with %s" (map-elt execution-model :name)) current-buffer)
@@ -131,39 +135,38 @@ MODEL can optionally specify a specific model to use."
              :update-usage-callback (ai-usage-create-usage-statistics-callback)
              :enable-caching ai-execution--prompt-caching-enabled)))
 
+
 (cl-defun ai-execution--execute-context (context success-callback &key (fail-callback nil) (model nil))
-  "Execute CONTEXT using SUCCESS-CALLBACK and optional FAIL-CALLBACK with an optional MODEL."
+  "Execute CONTEXT using SUCCESS-CALLBACK and optional FAIL-CALLBACK with an optional MODEL.
+SUCCESS-CALLBACK and FAIL-CALLBACK will receive context as first parameter."
   (ai-execution-perform-async-backend-query context success-callback :fail-callback fail-callback :model model))
 
 (cl-defun ai-execution--execute-command (command success-callback &key (fail-callback nil) (model nil))
   "Execute COMMAND by dispatching to the appropriate backend using SUCCESS-CALLBACK.
+SUCCESS-CALLBACK and FAIL-CALLBACK will receive context as first parameter.
 Optionally use FAIL-CALLBACK and specify a MODEL."
   (let* ((execution-model (if model model (ai-model-management-get-current)))
          (execution-backend (map-elt execution-model :execution-backend))
          (context (ai-context-management--get-executions-context-for-command command :model execution-model))
          (current-buffer (current-buffer))
-         (request-id (plist-get context :request-id))
-         (command-config (plist-get context :command-config))
-         (command-from-config (or (plist-get command-config :command)
-                                 (plist-get command-config :action)
-                                 command))
+         (request-id (ai-structs--get-execution-context-request-id context))
+         (ai-command-struct (ai-structs--get-execution-context-ai-command context))
 
          ;; Start audit if enabled
          (audit-request-id (ai-request-audit-start-request
                             request-id
-                            command-from-config
+                            ai-command-struct
                             execution-model
                             context))
 
-         ;; Wrap callbacks with audit completion
+         ;; Wrap callbacks with progress and audit handling
          (wrapped-success-callback
-          (ai-progress-wrap-callback
-           (ai-execution--wrap-callback-with-audit success-callback audit-request-id 'success)
-           current-buffer))
+          (ai-execution--wrap-callback-with-progress-and-audit
+           success-callback context audit-request-id 'success current-buffer))
+
          (wrapped-fail-callback
-          (ai-progress-wrap-callback
-           (ai-execution--wrap-callback-with-audit fail-callback audit-request-id 'fail)
-           current-buffer)))
+          (ai-execution--wrap-callback-with-progress-and-audit
+           fail-callback context audit-request-id 'fail current-buffer)))
 
     ;; Start single request progress indicator
     (ai-progress-start-single-request (format "Executing %s with %s" command-from-config (map-elt execution-model :name)) current-buffer)

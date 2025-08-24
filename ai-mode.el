@@ -179,6 +179,7 @@
 (require 'ai-response-processors)
 (require 'ai-core)
 (require 'ai-prompt-management-debug)
+(require 'ai-response-processors-debug)
 
 (defvar url-http-end-of-headers)
 

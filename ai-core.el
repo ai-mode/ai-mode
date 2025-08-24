@@ -82,13 +82,13 @@ Uses new command system with ai-command structures when available."
                    :model (ai-model-management-get-current))))
     (ai-core--execute-with-result-action context)))
 
+
 (defun ai-core--execute-with-result-action (context)
   "Execute CONTEXT with appropriate handler based on command's result action."
-  (let* ((command-config (plist-get context :command-config))
-         (command-struct (plist-get command-config :ai-command-struct))
+  (let* ((command-struct (ai-structs--get-execution-context-ai-command context))
          (result-action (ai-structs--get-result-action command-struct))
          (command-name (ai-structs--get-command-name command-struct))
-         (buffer-state (plist-get context :buffer-state))
+         (buffer-state (ai-structs--get-execution-context-buffer-state context))
          (current-buffer (when buffer-state (ai-buffer-state-buf-obj buffer-state)))
          (cursor-position (when buffer-state (ai-buffer-state-cur-point buffer-state))))
 
@@ -96,26 +96,27 @@ Uses new command system with ai-command structures when available."
      ((eq result-action 'show)
       ;; If the selected command is meant to be shown, delegate
       (ai-logging--message 'info "core" "Command '%s' is informational. Displaying in a new buffer." command-name)
-      (ai-execution--execute-context context 'ai-response-processors--show-response-buffer))
+      (ai-execution--execute-context context 'ai-response-processors--show-response-buffer :fail-callback 'ai-response-processors--create-error-message-callback))
 
      ((eq result-action 'eval)
       ;; Show response and ask for permission to evaluate
       (ai-logging--message 'info "core" "Command '%s' will generate code for evaluation." command-name)
-      (ai-execution--execute-context context 'ai-response-processors--show-and-eval-response))
+      (ai-execution--execute-context context 'ai-response-processors--show-and-eval-response :fail-callback 'ai-response-processors--create-error-message-callback))
 
      ((eq result-action 'insert-at-point)
       ;; Insert at the cursor position captured when the command was invoked
       (ai-logging--message 'info "core" "Command '%s' will insert response at cursor position." command-name)
-      (ai-execution--execute-context context (ai-response-processors--create-insert-at-point-callback current-buffer cursor-position)))
+      (ai-execution--execute-context context (ai-response-processors--create-insert-at-point-callback current-buffer cursor-position) :fail-callback 'ai-response-processors--create-error-message-callback))
 
      ((eq result-action 'replace)
       ;; Use smart replace callback that handles both patch and direct replacement
-      (ai-execution--execute-context context (ai-response-processors--create-smart-replace-callback current-buffer)))
+      (ai-execution--execute-context context (ai-response-processors--create-smart-replace-callback current-buffer) :fail-callback 'ai-response-processors--create-error-message-callback))
 
      (t
       ;; Fallback for unconfigured or new actions
       (ai-logging--message 'warn "core" "Unknown or unspecified result action for command '%s'. Defaulting to show." command-name)
-      (ai-execution--execute-context context 'ai-response-processors--show-response-buffer)))))
+      (ai-execution--execute-context context 'ai-response-processors--show-response-buffer :fail-callback 'ai-response-processors--create-error-message-callback)))))
+
 
 (defun ai-core-perform-coordinator ()
   "Decide whether to continue the previous process of supplementation or to start a new one.
