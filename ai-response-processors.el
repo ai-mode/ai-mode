@@ -28,6 +28,16 @@
 (require 'cl-lib)
 (require 'ai-utils) ; For dependencies that remain in ai-utils, e.g., `ai-utils--replace-or-insert`
 (require 'ai-common) ; For `ai-common--make-file-summary-struct`, `ai-common--get-text-content-from-struct`
+(require 'ai-structs) ; For ai-buffer-state functions and ai-response-buffer-context
+(require 'ai-logging) ; For logging functionality
+
+;; Configuration variables
+(defcustom ai-response-processors-create-unique-buffers t
+  "Whether to create unique response buffers for each request.
+When t, each AI response gets its own buffer with preserved context.
+When nil, reuse the same response buffer (legacy behavior)."
+  :type 'boolean
+  :group 'ai-response-processors)
 
 (defvar ai-response-processors--explanation-buffer-name "*AI explanation*"
   "Name of the buffer used for explanations.")
@@ -35,6 +45,24 @@
 (defvar ai-response-processors--response-buffer-name "*AI response*"
   "Name of the buffer used to display AI responses.")
 
+(defvar ai-response-processors--buffer-counter 0
+  "Counter for generating unique buffer names.")
+
+;; Keymap and minor mode for response buffers
+(defvar ai-response-processors-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-r") 'ai-response-processors-regenerate-response)
+    map)
+  "Keymap for AI response processor buffers.")
+
+(define-minor-mode ai-response-processors-mode
+  "Minor mode for AI response buffers with context."
+  :lighter " AI-Resp"
+  :keymap ai-response-processors-mode-map
+  (when ai-response-processors-mode
+    (setq buffer-read-only t)))
+
+;; Core helper functions
 (defun ai-response-processors--get-explaination-help-buffer ()
   "Return the buffer used for explanations."
   (get-buffer-create ai-response-processors--explanation-buffer-name))
@@ -42,6 +70,69 @@
 (defun ai-response-processors--get-response-buffer ()
   "Return the buffer used for displaying AI responses."
   (get-buffer-create ai-response-processors--response-buffer-name))
+
+(defun ai-response-processors--generate-unique-buffer-name (base-name)
+  "Generate a unique buffer name based on BASE-NAME with timestamp or counter."
+  (if ai-response-processors-create-unique-buffers
+      (let ((timestamp (format-time-string "%H:%M:%S"))
+            (counter (setq ai-response-processors--buffer-counter
+                          (1+ ai-response-processors--buffer-counter))))
+        (format "*AI response %s #%d*" timestamp counter))
+    base-name))
+
+(defun ai-response-processors--create-unique-response-buffer (execution-context messages usage-stats)
+  "Create a unique response buffer with preserved context information."
+  (let* ((content (ai-response-processors--extract-content-from-messages messages))
+         (buffer-name (ai-response-processors--generate-unique-buffer-name
+                      ai-response-processors--response-buffer-name))
+         (buffer (get-buffer-create buffer-name))
+         (response-context (ai-structs--create-response-buffer-context
+                            execution-context content usage-stats)))
+
+    (ai-logging--message 'debug "response-processors" "Created response buffer: %s, content length: %d"
+                        buffer-name (if content (length content) 0))
+
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert content)
+
+        ;; Enable markdown mode if available
+        (when (fboundp 'markdown-mode)
+          (markdown-mode))
+
+        ;; Store context using ai-response-buffer-context structure
+        (ai-structs--set-response-buffer-context response-context buffer)
+
+        ;; Enable response processor mode
+        (ai-response-processors-mode 1)))
+
+    buffer))
+
+(defun ai-response-processors--setup-legacy-response-buffer (messages)
+  "Setup legacy response buffer with content from MESSAGES."
+  (let ((buffer (ai-response-processors--get-response-buffer))
+        (content (ai-response-processors--extract-content-from-messages messages)))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert content)
+        (when (fboundp 'markdown-mode)
+          (markdown-mode))))
+    buffer))
+
+(defun ai-response-processors--display-response-buffer (buffer unique-mode-p)
+  "Display response BUFFER with appropriate method based on UNIQUE-MODE-P.
+For unique buffers, use pop-to-buffer. For legacy mode, use with-help-window."
+  (if unique-mode-p
+      (progn
+        (pop-to-buffer buffer)
+        (with-current-buffer buffer
+          (goto-char (point-min))))
+    (with-help-window buffer
+      (with-current-buffer buffer
+        (when (fboundp 'markdown-mode)
+          (markdown-mode))))))
 
 (cl-defun ai-response-processors--get-message (messages &optional (message-id 0))
   "Retrieve a message from MESSAGES by its MESSAGE-ID, defaulting to the first message."
@@ -53,17 +144,21 @@
 (defun ai-response-processors--extract-content-from-messages (messages)
   "Extract the content from MESSAGES."
   (let ((message-element (ai-response-processors--get-message messages)))
-    (ai-common--get-text-content-from-struct message-element)))
+    (let ((content (ai-common--get-text-content-from-struct message-element)))
+      ;; Debug logging
+      (ai-logging--message 'debug "response-processors" "Extracted content length: %d"
+                          (if content (length content) 0))
+      content)))
 
 (cl-defun ai-response-processors--with-current-buffer-callback (callback &optional (trim t))
   "Create a CALLBACK function that will operate in the context of the current buffer.
 
 If TRIM is non-nil, trims the content passed to CALLBACK."
   (let ((buffer (current-buffer)))
-    (lambda (context messages &optional usage-stats)
+    (lambda (execution-context messages &optional usage-stats)
       (let ((content (ai-response-processors--extract-content-from-messages messages)))
         (with-current-buffer buffer
-          (funcall callback context (if trim (string-trim-left content) content)))))))
+          (funcall callback execution-context (if trim (string-trim-left content) content)))))))
 
 (cl-defun ai-response-processors--replace-region-or-insert-in-current-buffer (&optional (trim t) insert-mode)
   "Create a function to replace the active region or insert into the current buffer.
@@ -81,7 +176,7 @@ If TRIM is non-nil, trims the content passed to the function."
          (end (cond (region-active (region-end))
                    (insert-mode nil)
                    (t (point-max)))))
-    (lambda (context messages &optional usage-stats)
+    (lambda (execution-context messages &optional usage-stats)
       (let* ((raw-content (ai-response-processors--extract-content-from-messages messages))
             (content (if trim (string-trim-left raw-content) raw-content)))
         (when (string-empty-p content)
@@ -100,7 +195,7 @@ If TRIM is non-nil, trims the content passed to the function."
 
 (defun ai-response-processors--create-insert-at-point-callback (target-buffer cursor-position)
   "Create a callback that inserts AI response at CURSOR-POSITION in TARGET-BUFFER."
-  (lambda (context messages &optional usage-stats)
+  (lambda (execution-context messages &optional usage-stats)
     (when (buffer-live-p target-buffer)
       (let ((content (ai-response-processors--extract-content-from-messages messages)))
         (when (and content (not (string-empty-p content)))
@@ -115,10 +210,10 @@ If TRIM is non-nil, trims the content passed to the function."
 TAG is a marker for placing content passed to the CALLBACK function.
 If TRIM is non-nil, trims content passed to the CALLBACK."
   (let ((buffer (current-buffer)))
-    (lambda (context messages &optional usage-stats)
+    (lambda (execution-context messages &optional usage-stats)
       (let ((content (ai-response-processors--extract-content-from-messages messages)))
         (with-current-buffer buffer
-          (funcall callback context tag (if trim (string-trim-left content) content)))))))
+          (funcall callback execution-context tag (if trim (string-trim-left content) content)))))))
 
 (defun ai-response-processors--show-explain-help-buffer (text)
   "Display TEXT in the explanation buffer."
@@ -128,19 +223,36 @@ If TRIM is non-nil, trims content passed to the CALLBACK."
       (princ text)
       (switch-to-buffer (ai-response-processors--get-explaination-help-buffer)))))
 
-(defun ai-response-processors--show-response-buffer (context messages &optional usage-stats)
-  "Display MESSAGES content in the response buffer."
-  (let ((content (ai-response-processors--extract-content-from-messages messages))
-        (buffer (ai-response-processors--get-response-buffer)))
-    (with-help-window buffer
-      (with-current-buffer buffer
-        (let ((beginning (point-min))
-              (end (point-max)))
-          (ai-utils--replace-or-insert content beginning end)
-          (when (fboundp 'markdown-mode)
-            (markdown-mode)))))))
+(defun ai-response-processors--show-response-buffer (execution-context messages &optional usage-stats)
+  "Display MESSAGES content in response buffer with context preservation.
 
-(defun ai-response-processors--show-and-eval-response (context messages &optional usage-stats)
+If `ai-response-processors-create-unique-buffers` is t, creates a new buffer
+for each response with preserved context. Otherwise uses existing behavior."
+  (ai-logging--message 'debug "response-processors"
+                      "Starting show-response-buffer: unique-buffers=%s, context-type=%s, messages-count=%d"
+                      ai-response-processors-create-unique-buffers
+                      (type-of execution-context)
+                      (if (listp messages) (length messages) 0))
+
+  (condition-case-unless-debug err
+      (let ((buffer (if ai-response-processors-create-unique-buffers
+                        (ai-response-processors--create-unique-response-buffer
+                         execution-context messages usage-stats)
+                      (ai-response-processors--setup-legacy-response-buffer messages))))
+
+        (ai-response-processors--display-response-buffer
+         buffer ai-response-processors-create-unique-buffers)
+
+        (ai-logging--message 'debug "response-processors"
+                            "Show-response-buffer completed: buffer=%s, content-preview=%s"
+                            (buffer-name buffer)
+                            (with-current-buffer buffer
+                              (substring (buffer-string) 0 (min 50 (buffer-size))))))
+    (error
+     (ai-logging--message 'error "response-processors" "Error in show-response-buffer: %s" err)
+     (signal (car err) (cdr err)))))
+
+(defun ai-response-processors--show-and-eval-response (execution-context messages &optional usage-stats)
   "Show MESSAGES in a buffer and ask user for permission to evaluate the Emacs Lisp code."
   (let* ((content (ai-response-processors--extract-content-from-messages messages))
          (buffer-name "*AI Generated Code*")
@@ -216,7 +328,7 @@ If TRIM is non-nil, trims content passed to the CALLBACK."
 
 (defun ai-response-processors--create-patch-apply-callback (original-buffer)
   "Create a callback that applies patch content to ORIGINAL-BUFFER."
-  (lambda (context messages &optional usage-stats)
+  (lambda (execution-context messages &optional usage-stats)
     (let ((response-content (ai-response-processors--extract-content-from-messages messages)))
       (if response-content
           (with-current-buffer original-buffer
@@ -224,24 +336,42 @@ If TRIM is non-nil, trims content passed to the CALLBACK."
                 (ai-response-processors--apply-patch-to-buffer response-content)
               (error
                (message "Failed to apply patch: %s" (error-message-string err))
-               (ai-response-processors--show-response-buffer context messages usage-stats))))
+               (ai-response-processors--show-response-buffer execution-context messages usage-stats))))
         (message "No patch content received from AI")))))
-
-
 
 (defun ai-response-processors--create-smart-replace-callback (target-buffer)
   "Create a callback for smart replacement based on `ai-execution--replace-action-use-patch`.
-Returns a callback that takes CONTEXT, MESSAGES and USAGE-STATS and applies the content
+Returns a callback that takes EXECUTION-CONTEXT, MESSAGES and USAGE-STATS and applies the content
 to TARGET-BUFFER, either by patching or by direct replacement/insertion."
   (if (bound-and-true-p ai-execution--replace-action-use-patch)
       (ai-response-processors--create-patch-apply-callback target-buffer)
-    (lambda (context messages &optional usage-stats)
+    (lambda (execution-context messages &optional usage-stats)
       (with-current-buffer target-buffer
         (funcall (ai-response-processors--replace-region-or-insert-in-current-buffer)
-                 context
+                 execution-context
                  messages
                  usage-stats)))))
 
+;; Public API functions
+
+;; Interactive functions for response buffers
+(defun ai-response-processors-regenerate-response ()
+  "Regenerate response using the same context."
+  (interactive)
+  (let ((response-context (ai-structs--get-response-buffer-context)))
+    (if response-context
+        (message "Response regeneration not yet implemented")
+      (message "No context available for regeneration"))))
+
+(defun ai-response-processors--create-error-message-callback (&optional error-prefix)
+  "Create a callback that prints error messages to *Messages* buffer.
+ERROR-PREFIX is an optional prefix to add before the error message."
+  (lambda (execution-context messages &optional usage-stats)
+    (let* ((content (ai-response-processors--extract-content-from-messages messages))
+           (prefix (or error-prefix "AI Error"))
+           (error-message (format "%s: %s" prefix content)))
+      (ai-logging--message 'error "response-processors" "%s" error-message)
+      (message "%s" error-message))))
 
 (provide 'ai-response-processors)
 

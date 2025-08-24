@@ -56,6 +56,7 @@
 
 (require 'ai-common)
 (require 'ai-network)
+(require 'ai-structs)
 (require 'cl-lib)
 
 (defun ai-mode-adapter-api-get-struct-type (struct)
@@ -263,6 +264,39 @@ REQUEST-ID is an optional unique identifier for the request."
 
 (defalias 'ai-mode-adapter-api-http-request 'ai-mode-adapter-api-async-request
   "HTTP request alias for `ai-mode-adapter-api-async-request`.")
+
+;; Public API functions for ai-execution-context
+
+(defun ai-mode-adapter-api-get-execution-context-request-id (execution-context)
+  "Get request ID from EXECUTION-CONTEXT.
+Returns the unique request identifier or nil if context is invalid."
+  (ai-structs--get-execution-context-request-id execution-context))
+
+(defun ai-mode-adapter-api-get-execution-context-messages (execution-context)
+  "Get messages list from EXECUTION-CONTEXT.
+Returns the prepared messages for AI model or nil if context is invalid."
+  (ai-structs--get-execution-context-messages execution-context))
+
+(defun ai-mode-adapter-api-get-execution-context-model (execution-context)
+  "Get model information from EXECUTION-CONTEXT.
+Returns the model configuration or nil if context is invalid."
+  (ai-structs--get-execution-context-model execution-context))
+
+(defun ai-mode-adapter-api-get-execution-context-command-config (execution-context)
+  "Get command configuration from EXECUTION-CONTEXT.
+Returns the command configuration plist or nil if context is invalid."
+  (when (ai-execution-context-p execution-context)
+    (ai-execution-context-command-config execution-context)))
+
+(defun ai-mode-adapter-api-get-execution-context-buffer-state (execution-context)
+  "Get buffer state from EXECUTION-CONTEXT.
+Returns the buffer state snapshot or nil if context is invalid."
+  (ai-structs--get-execution-context-buffer-state execution-context))
+
+(defun ai-mode-adapter-api-execution-context-p (execution-context)
+  "Check if EXECUTION-CONTEXT is a valid execution context.
+Returns t if the context is a valid ai-execution-context struct, nil otherwise."
+  (ai-execution-context-p execution-context))
 
 (provide 'ai-mode-adapter-api)
 

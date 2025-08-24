@@ -722,6 +722,7 @@ Returns the container name or nil if no specific container is needed."
    ((eq result-action 'eval)            "eval")
    ((eq result-action 'replace)         "modify")
    ((eq result-action 'insert-at-point) "complete")
+   ((eq result-action 'chat)            "chat")
    (t                                   nil)))
 
 (cl-defun ai-context-management--get-contextual-action-object (ai-command &key preceding-context-size following-context-size)
@@ -907,15 +908,19 @@ The function uses ai-command struct to determine configuration and behavior."
 
            (messages (ai-context-management--filter-non-empty-content provider-contexts))
 
-           (_ (ai-telemetry-write-context-to-prompt-buffer messages))
+           (_ (ai-telemetry-write-context-to-prompt-buffer messages)))
 
-           ;; Create config for backward compatibility with existing code
-           (config (when ai-command
-                    (plist-put (copy-sequence (ai-structs--get-command-config ai-command))
-                              :ai-command-struct ai-command)))
-
-           (result `(:messages ,messages :model-context ,model :request-id ,request-id :command-config ,config :buffer-state ,buffer-state)))
-      result)))
+      ;; Return ai-execution-context struct instead of plist
+      (ai-structs--create-execution-context
+       request-id
+       ai-command
+       model
+       messages
+       buffer-state
+       full-context
+       external-contexts
+       actual-preceding-size
+       actual-following-size))))
 
 (cl-defun ai-context-management--get-executions-context-for-command (command-struct &key (model nil) (external-contexts nil))
   "Get execution context for COMMAND-STRUCT with optional MODEL and EXTERNAL-CONTEXTS.

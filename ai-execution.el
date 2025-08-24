@@ -35,6 +35,7 @@
 (require 'ai-usage)
 (require 'ai-progress)
 (require 'ai-request-audit)
+(require 'ai-structs)
 
 
 (defun ai-execution--wrap-callback-with-progress-and-audit (callback context request-id callback-type &optional target-buffer)
@@ -90,6 +91,7 @@ replace the selected content."
   (message "Replace action patch mode %s"
            (if ai-execution--replace-action-use-patch "enabled" "disabled")))
 
+
 (cl-defun ai-execution-perform-async-backend-query (context success-callback &key
                                                            (fail-callback nil)
                                                            (extra-params nil)
@@ -102,14 +104,13 @@ MODEL can optionally specify a specific model to use."
   (let* ((execution-model (if model model (ai-model-management-get-current)))
          (execution-backend (map-elt execution-model :execution-backend))
          (current-buffer (current-buffer))
-         (request-id (plist-get context :request-id))
-         (command-config (plist-get context :command-config))
-         (command (plist-get command-config :command))
+         (request-id (ai-structs--get-execution-context-request-id context))
+         (ai-command-struct (ai-structs--get-execution-context-ai-command context))
 
          ;; Start audit if enabled
          (audit-request-id (ai-request-audit-start-request
                             request-id
-                            command
+                            ai-command-struct
                             execution-model
                             context))
 
@@ -134,6 +135,7 @@ MODEL can optionally specify a specific model to use."
              :update-usage-callback (ai-usage-create-usage-statistics-callback)
              :enable-caching ai-execution--prompt-caching-enabled)))
 
+
 (cl-defun ai-execution--execute-context (context success-callback &key (fail-callback nil) (model nil))
   "Execute CONTEXT using SUCCESS-CALLBACK and optional FAIL-CALLBACK with an optional MODEL.
 SUCCESS-CALLBACK and FAIL-CALLBACK will receive context as first parameter."
@@ -147,16 +149,13 @@ Optionally use FAIL-CALLBACK and specify a MODEL."
          (execution-backend (map-elt execution-model :execution-backend))
          (context (ai-context-management--get-executions-context-for-command command :model execution-model))
          (current-buffer (current-buffer))
-         (request-id (plist-get context :request-id))
-         (command-config (plist-get context :command-config))
-         (command-from-config (or (plist-get command-config :command)
-                                 (plist-get command-config :action)
-                                 command))
+         (request-id (ai-structs--get-execution-context-request-id context))
+         (ai-command-struct (ai-structs--get-execution-context-ai-command context))
 
          ;; Start audit if enabled
          (audit-request-id (ai-request-audit-start-request
                             request-id
-                            command-from-config
+                            ai-command-struct
                             execution-model
                             context))
 

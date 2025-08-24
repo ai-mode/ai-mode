@@ -15,6 +15,7 @@
   - [Code Completion](#code-completion)
   - [Interactive AI Chat](#interactive-ai-chat)
   - [Buffer-Bound Chat Sessions](#buffer-bound-chat-sessions)
+  - [Context-Based Chat Creation](#context-based-chat-creation)
   - [Code Manipulation](#code-manipulation)
   - [System & Session Context Management](#system--session-context-management)
   - [Execution Control](#execution-control)
@@ -35,7 +36,7 @@ AI mode for Emacs is a comprehensive package that integrates powerful artificial
 
 ### Key Features
 
--   **Interactive AI Chat with Buffer Binding**: Directly engage with AI models for real-time problem-solving, code review, and general assistance. Create dedicated chat sessions bound to specific buffers with rich context integration and smart startup strategies.
+-   **Interactive AI Chat with Buffer Binding**: Directly engage with AI models for real-time problem-solving, code review, and general assistance. Create dedicated chat sessions bound to specific buffers with rich context integration, smart startup strategies, and context-based chat creation from response buffers.
 -   **Intelligent Code Completion**: Receive interactive, multi-candidate code suggestions and completions. It supports real-time previews, navigation through candidates, dynamic context adjustment, and integration of user instructions.
 -   **Code Modification & Refactoring**: Streamline development by leveraging AI to intelligently modify, improve, and refactor existing code.
 -   **Code Analysis & Documentation**: Generate comprehensive explanations, documentation, and insightful analysis for code blocks and functions, enhancing readability and maintainability.
@@ -44,7 +45,7 @@ AI mode for Emacs is a comprehensive package that integrates powerful artificial
 -   **Customizable Commands**: Tailor AI operations to your specific development needs by defining custom commands and integrating them seamlessly into your Emacs setup.
 -   **Advanced Context Management**: Manage global, buffer-local, and temporary context pools, with extended context capabilities including project-wide indexing, memory files, and comprehensive context enrichment.
 -   **Real-time Previews & Progress Indicators**: Get instant visual feedback for completions and track the progress of ongoing AI requests.
--   **Structured Request Auditing**: Detailed logging of AI requests, contexts, and responses for debugging, performance analysis, and security auditing.
+-   **Structured Request Auditing**: Detailed logging of AI requests, contexts, and responses for debugging, performance analysis, and security auditing with improved callback system and error handling.
 
 Whether you're debugging complex code, exploring new technologies, or enhancing your documentation, AI mode provides the tools to accelerate your productivity and enhance your Emacs experience.
 
@@ -282,6 +283,36 @@ Buffer-bound sessions are automatically tracked and can be:
 - Managed independently per source buffer
 - Configured for different default behaviors (create new, reuse existing, or ask user)
 
+### Context-Based Chat Creation
+
+AI Mode supports creating chat sessions directly from AI response contexts, enabling seamless continuation of conversations from previous AI interactions.
+
+**Context-Based Chat Commands:**
+
+| Command | Description |
+|---|---|
+| `ai-chat-open-from-response-buffer` | Open a chat session from the current AI response buffer, automatically extracting and integrating the original context and AI response for seamless conversation continuation. |
+| `ai-chat-open-with-context` | Generic function to open chat with various context sources. With prefix argument, tries current buffer as response buffer; otherwise prompts for context type (response-buffer, current-buffer, context-pool, region). |
+
+**How It Works:**
+
+When you invoke `ai-chat-open-from-response-buffer` in an AI response buffer:
+
+1. The system extracts the original execution context (request, messages, context)
+2. The AI response content is also preserved
+3. A new chat session is created with both the original request and AI response in history
+4. You can immediately continue the conversation from where it left off
+
+**Supported Context Sources:**
+
+- **Response Buffer Context**: Extract context from AI response buffers
+- **Execution Context**: Create chats from AI execution contexts
+- **Current Buffer**: Use current buffer content as context
+- **Context Pool**: Use active context pool items
+- **Region**: Use selected text as context
+
+This feature provides seamless workflow continuity, allowing you to easily transition from viewing AI responses to having interactive discussions about the same content.
+
 ### Code Manipulation
 
 These commands apply AI operations to selected regions or the entire buffer, modifying, improving, or generating code. When invoked, you might be prompted to select a specific *command* (e.g., "modify", "generate code", "fix", "improve", "optimize", "doc", "explain", "simplify", "spellcheck", "elaborate") from `ai-command-management-commands-config-map`.
@@ -447,31 +478,32 @@ These commands, primarily accessed via the `C-c i d` prefix, open dedicated buff
 | `ai-debug-completion-limited-context` | `C-c i C-d l` | Shows the context specifically for code completion with *limited preceding and following context sizes*. Useful for debugging how completion handles truncated views of your code. |
 | `ai-debug-completion-full-context` | `C-c i C-d f` | Shows the context specifically for code completion using the *entire file content as context*. Useful for debugging full-buffer completion strategies. |
 | `ai-prompt-management-debug-show-cache-status` | `M-x ai-prompt-management-debug-show-cache-status` | Shows the AI prompt management cache debug information, including file-based commands, system prompts, cache statistics, and project information. |
+| `ai-response-processors-debug-show-buffers-status` | `M-x ai-response-processors-debug-show-buffers-status` | Shows debug information for all AI response buffers, including their context, original request messages, and preserved execution context for troubleshooting response buffer functionality. |
 
 ### Debug Buffer Interaction
 
-Once a debug buffer (e.g., `*AI Debug Context*`, `*AI Completions Debug*`) is open, you can interact with it using `magit-section-mode` keybindings:
+Once a debug buffer (e.g., `*AI Debug Context*`, `*AI Completions Debug*`, `*AI Response Processors Debug*`) is open, you can interact with it using `magit-section-mode` keybindings:
 
 | Binding | Command | Description |
 |---|---|---|
 | `TAB` | `magit-section-toggle` | Expand or collapse the section at point. |
 | `C-c t` | `ai-debug-toggle-truncation` | Toggle content truncation within the debug buffer. When enabled, long strings and lists are shortened to improve performance and readability; disable it to see full content. |
 | `C-r` | `ai-debug-refresh-buffer` | Refresh the content of the current debug buffer with the latest AI context information. |
-| `q` | `quit-window` | (In prompt cache debug buffer) Quit the debug window. |
-| `g` | `ai-prompt-management-debug-refresh` | (In prompt cache debug buffer) Refresh the debug buffer. |
+| `r` / `g` | `ai-response-processors-debug-refresh` | (In response processors debug buffer) Refresh the debug buffer content. |
+| `q` | `quit-window` | Quit the debug window. |
 | `u` | `ai-prompt-management-debug-force-update-cache` | (In prompt cache debug buffer) Force update all caches. |
 | `c` | `ai-prompt-management-debug-clear-cache` | (In prompt cache debug buffer) Clear selected cache. |
 
 ## Understanding AI Context
 
-When you interact with AI Mode, a comprehensive context is assembled and sent to the AI model. This context ensures the AI has all the necessary information to provide relevant and accurate responses. The context is built from various sources:
+When you interact with AI Mode, a comprehensive context is assembled and sent to the AI model. This context ensures the AI has all the necessary information to provide relevant and accurate responses. The context is built from various sources and is now managed using structured data types for better reliability and extensibility:
 
 *   **Code-Related Context**:
     *   **Active Region/File Content**: If a region is selected, its content is sent (enclosed in `<selection>` tags). Otherwise, the entire buffer content may be included (enclosed in `<file-context>` tags).
     *   **Preceding and Following Context**: Lines of code immediately before (`<preceding-context>`) and after (`<following-context>`) the cursor/region are included to provide surrounding code awareness.
     *   **File Metadata**: Information such as the current file's path, buffer name, and programming language (`<file-metadata>` within `<additional-context source="file-metadata">`).
 *   **Interaction-Related Context**:
-    *   **Model Information**: Details about the selected AI model (e.g., name, provider) (`<model>` within `:model-context` in the execution context).
+    *   **Model Information**: Details about the selected AI model (e.g., name, provider) stored in the execution context structure.
     *   **User Input**: Explicit prompts or questions you provide (`<user-input>` with `source="user-input"`).
     *   **Additional Context Pool**: Content manually added to the temporary context pool by you (e.g., using `ai-context-management--add-to-context-pool`). This is grouped by source (`<additional-context source="context-pool">`).
 *   **Instructional Context**:
@@ -485,7 +517,17 @@ When you interact with AI Mode, a comprehensive context is assembled and sent to
     *   **Full Project Files**: All filtered files in the current project (`<file-content>` within `<files>` within `<project-context>`). Enabled by `ai-context-management--project-context-mode` set to `full-project`.
     *   **Project AI Summary Index**: AI-generated summaries of project files from the cached index (`<file-summary>` within `<files>` within `<project-ai-summary>`). Enabled by `ai-context-management--project-context-mode` set to `project-ai-summary`.
 
-This layered approach ensures that AI has a deep understanding of your code, environment, and intentions for each interaction.
+**Execution Context Structure**:
+
+AI Mode now uses structured `ai-execution-context` objects to manage the complete context for AI requests. This provides:
+
+- **Request ID tracking**: Each request has a unique identifier for auditing and debugging
+- **Command preservation**: The original AI command structure is preserved throughout execution
+- **Buffer state snapshots**: Complete buffer state at the time of context creation
+- **Context metadata**: Timestamps, usage counts, and source buffer information
+- **Structured error handling**: Improved error tracking and debugging capabilities
+
+This layered approach with structured data types ensures that AI has a deep understanding of your code, environment, and intentions for each interaction while providing better maintainability and debugging capabilities.
 
 ## Customization Options
 
@@ -539,6 +581,8 @@ AI Mode provides several important customizable variables to tailor its behavior
 | `ai-chat-startup-context-strategy` | Strategy for startup context when creating buffer-bound chat sessions. | `ask` |
 | `ai-chat-send-enrichment-as` | Type of struct to use when enriching bound chat from source buffer. | `additional-context` |
 | `ai-chat-default-behavior-for-buffer` | Default behavior when opening chat for buffer (create-new, reuse-existing, ask-user). | `create-new` |
+| **Response Processor Settings** | | |
+| `ai-response-processors-create-unique-buffers` | Whether to create unique response buffers for each request with preserved context. When t, each AI response gets its own buffer with context. When nil, reuse the same response buffer (legacy behavior). | `t` |
 | **Logging & Debugging Settings** | | |
 | `ai-telemetry-enabled` | Enable telemetry collection for AI mode. | `t` |
 | `ai-telemetry-write-log-buffer` | If non-nil, enables logging of AI requests and responses to `*AI-request-log*` buffer. | `nil` |
@@ -563,16 +607,16 @@ The `ai-mode` package is composed of several `.el` files, each responsible for a
 |---|---|
 | `Eask` | Manages package metadata, dependencies, and source files for `ai-mode` building and installation. |
 | `ai.el` | The core package file. It defines the main `ai` group and provides the foundational namespace for the entire AI mode system. |
-| `ai-chat.el` | Implements the interactive AI chat interface with buffer-bound sessions, startup context strategies, session management, and rich context integration. |
+| `ai-chat.el` | Implements the interactive AI chat interface with buffer-bound sessions, startup context strategies, session management, context-based chat creation, and rich context integration. |
 | `ai-command-management.el` | Defines, parses, loads, and dispatches AI commands. Manages instruction file loading, caching, and modifier parsing. |
 | `ai-common.el` | Contains core AI primitives and general data structures like `typed-struct`. Provides basic operations on these structures, such as creation and update. |
 | `ai-completions.el` | Implements AI-powered code completion, managing suggestion requests, session management, and applying completions. |
-| `ai-context-management.el` | Centralizes the collection, structuring, and storage of context for AI requests, including extended context capabilities and comprehensive context assembly functions. |
-| `ai-core.el` | Serves as the central orchestrator and primary location for fundamental AI-mode logic, coordinating calls between different modules. Includes extended chat functionality. |
+| `ai-context-management.el` | Centralizes the collection, structuring, and storage of context for AI requests, including extended context capabilities and comprehensive context assembly functions using structured execution contexts. |
+| `ai-core.el` | Serves as the central orchestrator and primary location for fundamental AI-mode logic, coordinating calls between different modules with improved callback system. |
 | `ai-debug.el` | Provides visual tools for debugging and introspecting AI states, including prompt composition, execution context, model configuration, and completion session debugging. |
-| `ai-execution.el` | Manages AI request execution and asynchronous interaction with AI backends, handling success and failure callbacks. |
+| `ai-execution.el` | Manages AI request execution and asynchronous interaction with AI backends, handling success and failure callbacks with improved error handling. |
 | `ai-logging.el` | Provides logging utilities for AI mode, including message logging, multi-level verbose control, and structured request/response logging. |
-| `ai-mode-adapter-api.el` | Provides a standardized, type-safe API for `ai-mode` to interact with external AI backends, handling message preparation and content extraction. |
+| `ai-mode-adapter-api.el` | Provides a standardized, type-safe API for `ai-mode` to interact with external AI backends, handling message preparation and content extraction with execution context support. |
 | `ai-mode-indexing.el` | Manages the project indexing system for AI, encompassing file summary generation, persistence, and versioning. |
 | `ai-mode-line.el` | Provides mode line utilities and indicators for AI mode, including progress tracking, status displays, and integration with doom-modeline. |
 | `ai-mode.el` | Defines the `ai-mode` minor mode with enhanced keybindings for buffer-bound chat, manages the overall UI interaction flow, feature integration, and top-level settings. |
@@ -582,9 +626,10 @@ The `ai-mode` package is composed of several `.el` files, each responsible for a
 | `ai-project.el` | Contains project management utilities for AI mode, including project root detection, file filtering by ignore patterns, and creating project-related data structures. |
 | `ai-prompt-management.el` | Manages the creation, assembly, rendering, and caching of prompts and instructions for AI models. |
 | `ai-prompt-management-debug.el` | Provides debug utilities for the AI prompt management system, including cache inspection, statistics, and interactive debugging tools. |
-| `ai-request-audit.el` | Provides a structured request auditing system for AI mode, including structured storage of request/response data, unique request identification and tracking, and project-based audit organization. |
-| `ai-response-processors.el` | Contains functions for processing and handling responses from AI models, including text extraction, formatting, display, and callback creation for various response insertion and replacement strategies. |
-| `ai-structs.el` | Contains formal definitions of all common data structures (e.g., `typed-struct` and its derived types) used throughout AI-mode. This file is primarily for data structure definitions. |
+| `ai-request-audit.el` | Provides a structured request auditing system for AI mode with improved support for execution context structures, including structured storage of request/response data, unique request identification and tracking, and project-based audit organization. |
+| `ai-response-processors.el` | Contains functions for processing and handling responses from AI models, including text extraction, formatting, display, callback creation, and unique response buffer management with context preservation. |
+| `ai-response-processors-debug.el` | Provides debug interface for AI response processors using magit-section to visualize response buffer contexts, helping developers understand and debug the context preservation system. |
+| `ai-structs.el` | Contains formal definitions of all common data structures including `ai-execution-context`, `ai-response-buffer-context`, and other structured types used throughout AI-mode for improved data management and context preservation. |
 | `ai-telemetry.el` | Handles the collection and reporting of telemetry data for usage statistics and performance monitoring. |
 | `ai-usage.el` | Handles usage statistics and token counting for AI mode, including token usage tracking and reporting, and session statistics management. |
 | `ai-user-input.el` | Provides user input utilities for AI mode, including various methods for collecting multiline input from users. |

@@ -833,18 +833,6 @@ ELEMENT can be a typed struct, a symbol, or other data structure."
    ;; Handle other data structures
    (t (ai-common--plist-to-alist element))))
 
-(defun ai-common--convert-execution-context-to-alist (execution-context)
-  "Convert an execution context to an alist.
-EXECUTION-CONTEXT should be a plist with :messages, :model-context, etc."
-  (let ((messages (plist-get execution-context :messages))
-        (model-context (plist-get execution-context :model-context))
-        (request-id (plist-get execution-context :request-id))
-        (command-config (plist-get execution-context :command-config)))
-    `((messages . ,(when messages
-                     (mapcar #'ai-common--convert-typed-struct-to-alist messages)))
-      (model-context . ,(ai-common--plist-to-alist model-context))
-      ,@(when request-id `((request-id . ,request-id)))
-      ,@(when command-config `((command-config . ,(ai-common--plist-to-alist command-config)))))))
 
 (defun ai-common--plist-to-alist (plist)
   "Convert PLIST to an alist.
